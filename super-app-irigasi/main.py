@@ -12,11 +12,11 @@ st.markdown("""
 <style>
     .hero-box {
         background: linear-gradient(120deg, #0d47a1 0%, #1976d2 50%, #42a5f5 100%);
-        padding: 40px; 
+        padding: 60px; 
         border-radius: 15px; 
         color: white; 
         text-align: center; 
-        margin-bottom: 25px;
+        margin-bottom: 40px;
     }
 </style>
 <div class="hero-box">
@@ -25,15 +25,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-
-st.markdown("""
-<div style='text-align: left; margin-bottom: 30px;'>
-    <h2 style='margin-bottom: 0;'>💧 SmartStudio</h2>
-    <p style='color: #666;'> Tahun: 2025</p>
-</div>
-""", unsafe_allow_html=True)
-
-# --- MENU GRID ---
+# --- MENU GRID (LANGSUNG MODUL) ---
 st.subheader("🛠️ Modul Engineering")
 
 # Baris 1
@@ -55,4 +47,4 @@ st.write("")
 st.page_link("pages/5_Irigasi_Pipa.py", label="Irigasi Pipa & Pompa", icon="💧", use_container_width=True)
 
 st.divider()
-st.caption("Smart Studio © 2025 | Engineering Division")
+st.caption("SmartStudio © 2025 | Water Engineering Division")
