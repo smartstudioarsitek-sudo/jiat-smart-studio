@@ -28,8 +28,8 @@ st.markdown("""
 # --- IDENTITAS LOKASI (IDENTITAS JIAT TETAP ADA DI SINI) ---
 st.markdown("""
 <div style='text-align: left; margin-bottom: 30px;'>
-    <h2 style='margin-bottom: 0;'>💧 Lampung Timur</h2>
-    <p style='color: #666;'>Lokasi: Desa Hargomulyo | Tahun: 2025</p>
+    <h2 style='margin-bottom: 0;'>💧 SmartStudio</h2>
+    <p style='color: #666;'> Tahun: 2025</p>
 </div>
 """, unsafe_allow_html=True)
 
