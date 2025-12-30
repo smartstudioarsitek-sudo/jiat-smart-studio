@@ -1,13 +1,18 @@
 import streamlit as st
 
-st.set_page_config(page_title="JIAT Smart Studio", page_icon="🏗️", layout="wide")
+# --- KONFIGURASI HALAMAN ---
+st.set_page_config(
+    page_title="JIAT Smart Studio",
+    page_icon="🏗️", 
+    layout="wide"
+)
 
-# Banner Gradasi Biru
+# --- CSS BANNER GRADASI ---
 st.markdown("""
 <style>
     .hero-box {
         background: linear-gradient(120deg, #0d47a1 0%, #1976d2 50%, #42a5f5 100%);
-        padding: 40px; border-radius: 15px; color: white; text-align: center; margin-bottom: 20px;
+        padding: 40px; border-radius: 15px; color: white; text-align: center; margin-bottom: 25px;
     }
 </style>
 <div class="hero-box">
@@ -32,9 +37,9 @@ with col3:
 with col4:
     st.page_link("pages/4_Desain_Saluran.py", label="Desain Saluran", icon="🏗️", use_container_width=True)
 
-# Baris 3 (Aplikasi JIAT)
+# Baris 3 - Modul Pipa (JIAT)
 st.write("")
 st.page_link("pages/5_Irigasi_Pipa.py", label="Irigasi Pipa & Pompa (JIAT)", icon="💧", use_container_width=True)
 
 st.divider()
-st.caption("JIAT Smart Studio © 2025")
+st.caption("JIAT Smart Studio © 2025 | Engineering Division")
