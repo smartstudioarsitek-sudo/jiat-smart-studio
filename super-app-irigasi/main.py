@@ -38,36 +38,18 @@ st.markdown("""
         opacity: 0.9;
     }
 
-    /* 2. KARTU MENU */
-    .box-menu {
-        padding: 25px;
-        background-color: #ffffff;
-        border-radius: 15px;
+    /* 2. STYLE UNTUK TOMBOL LINK BIAR BESAR (Opsional) */
+    div[data-testid="stPageLink-NavLink"] {
         border: 1px solid #e3f2fd;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        text-align: center;
-        margin-bottom: 20px;
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
-        height: 100%;
+        border-radius: 10px;
+        padding: 15px;
+        transition: transform 0.2s;
     }
-    
-    .box-menu:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 10px 20px rgba(33, 150, 243, 0.2);
+    div[data-testid="stPageLink-NavLink"]:hover {
+        background-color: #f1f8fe;
+        transform: scale(1.02);
         border-color: #2196f3;
     }
-
-    .big-icon {
-        font-size: 50px;
-        margin-bottom: 15px;
-    }
-    
-    /* HILANGKAN GARIS BAWAH LINK */
-    a { text-decoration: none; color: inherit; }
-    a:hover { text-decoration: none; color: inherit; }
-    
-    h3 { color: #1565c0; font-weight: 700; font-size: 20px;}
-    p { color: #546e7a; font-size: 14px; line-height: 1.5;}
     
 </style>
 """, unsafe_allow_html=True)
@@ -92,6 +74,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     # Link ke halaman Klimatologi (Sesuaikan nama file di folder pages)
+    # Pastikan nama file di dalam tanda kutip SAMA PERSIS dengan di folder pages
     st.page_link("pages/1_☀️_Klimatologi.py", label="Klimatologi & ETo", icon="☀️", use_container_width=True, help="Analisis Cuaca & ETo")
 
 with col2:
