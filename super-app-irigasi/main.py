@@ -3,17 +3,15 @@ import streamlit as st
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(
     page_title="Sistem Irigasi Terpadu",
-    page_icon="💧", # Icon Tetesan Air
+    page_icon="💧", 
     layout="wide"
 )
 
-# --- CSS UNTUK TEMA TEKNIK SIPIL ---
+# --- CSS TEMA TEKNIK SIPIL ---
 st.markdown("""
 <style>
-    /* Background Header bersih */
     .stAppHeader {background-color: #f8f9fa;}
     
-    /* Styling Kotak Menu Kartu */
     .box-menu {
         padding: 25px;
         background-color: #ffffff;
@@ -25,11 +23,10 @@ st.markdown("""
         transition: all 0.3s ease;
     }
     
-    /* Efek Hover: Jadi lebih tegas */
     .box-menu:hover {
         transform: translateY(-5px);
         box-shadow: 0 8px 16px rgba(0,0,0,0.1);
-        border-color: #0d6efd; /* Biru Engineering */
+        border-color: #0d6efd;
     }
 
     .big-icon {
@@ -37,15 +34,8 @@ st.markdown("""
         margin-bottom: 15px;
     }
     
-    h3 {
-        color: #0d6efd; /* Biru Engineering */
-        font-weight: 700;
-    }
-    
-    p {
-        color: #6c757d; /* Abu-abu beton */
-        font-size: 14px;
-    }
+    h3 {color: #0d6efd; font-weight: 700;}
+    p {color: #6c757d; font-size: 14px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -54,13 +44,12 @@ st.title("🏗️ Sistem Perencanaan Irigasi Terpadu")
 st.markdown("### *Integrated Water Infrastructure Management System*")
 st.markdown("---")
 
-# --- BANNER IMAGE (TEMA BENDUNGAN) ---
-# Gambar Bendungan Besar (Dam) yang Gagah
-st.image("https://images.unsplash.com/photo-1574972748383-798c8c2b7749?q=80&w=2500&auto=format&fit=crop", 
-         use_column_width=True, 
+# --- BANNER IMAGE (LINK WIKIMEDIA - LEBIH STABIL) ---
+# Menggunakan Link Wikimedia Commons (Hoover Dam) yang servernya jarang down
+st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/b/b2/Hoover_Dam_from_air.jpg/1280px-Hoover_Dam_from_air.jpg", 
+         use_container_width=True, 
          caption="Infrastruktur Bendungan & Pengendalian Sumber Daya Air")
 
-st.write("") 
 st.write("") 
 
 # --- SAMBUTAN ---
