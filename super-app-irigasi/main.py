@@ -20,7 +20,7 @@ st.markdown("""
     }
 </style>
 <div class="hero-box">
-    <h1>🏗️ SmartStudio</h1>
+    <h1>💧 Sistem Perencanaan Irigasi Terpadu SmartStudio</h1>
     <p>Integrated Water Resources & Infrastructure Management System</p>
 </div>
 """, unsafe_allow_html=True)
