@@ -25,7 +25,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- IDENTITAS LOKASI (IDENTITAS JIAT TETAP ADA DI SINI) ---
+
 st.markdown("""
 <div style='text-align: left; margin-bottom: 30px;'>
     <h2 style='margin-bottom: 0;'>💧 SmartStudio</h2>
