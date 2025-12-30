@@ -2,12 +2,12 @@ import streamlit as st
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(
-    page_title="JIAT Lampung Timur",
+    page_title="SmartStudio",
     page_icon="💧", 
     layout="wide"
 )
 
-# --- CSS BANNER GRADASI (VERSI SEBELUMNYA) ---
+# --- CSS BANNER GRADASI ---
 st.markdown("""
 <style>
     .hero-box {
@@ -20,20 +20,18 @@ st.markdown("""
     }
 </style>
 <div class="hero-box">
-    <h1>🏗️ Sistem Perencanaan Irigasi Terpadu</h1>
+    <h1>🏗️ SmartStudio</h1>
     <p>Integrated Water Resources & Infrastructure Management System</p>
 </div>
 """, unsafe_allow_html=True)
 
-# --- IDENTITAS LOKASI ---
+# --- IDENTITAS LOKASI (IDENTITAS JIAT TETAP ADA DI SINI) ---
 st.markdown("""
-<div style='text-align: left; margin-bottom: 20px;'>
-    <h2 style='margin-bottom: 0;'>💧 JIAT Lampung Timur</h2>
+<div style='text-align: left; margin-bottom: 30px;'>
+    <h2 style='margin-bottom: 0;'>💧 Lampung Timur</h2>
     <p style='color: #666;'>Lokasi: Desa Hargomulyo | Tahun: 2025</p>
 </div>
 """, unsafe_allow_html=True)
-
-st.info("👋 **Selamat Datang, Engineer!** Silakan akses modul perhitungan teknis melalui kartu di bawah ini atau Sidebar sebelah kiri.")
 
 # --- MENU GRID ---
 st.subheader("🛠️ Modul Engineering")
@@ -54,7 +52,7 @@ with col4:
 
 # Baris 3
 st.write("")
-st.page_link("pages/5_Irigasi_Pipa.py", label="Irigasi Pipa & Pompa (JIAT)", icon="💧", use_container_width=True)
+st.page_link("pages/5_Irigasi_Pipa.py", label="Irigasi Pipa & Pompa", icon="💧", use_container_width=True)
 
 st.divider()
-st.caption("JIAT Smart Studio © 2025 | Engineering Division")
+st.caption("Smart Studio © 2025 | Engineering Division")
