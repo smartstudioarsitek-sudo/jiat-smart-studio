@@ -2,7 +2,7 @@ import streamlit as st
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(
-    page_title="SmartStudio",
+    page_title="Sistem Perencanaan Irigasi Terpadu SmartStudio",
     page_icon="💧", 
     layout="wide"
 )
