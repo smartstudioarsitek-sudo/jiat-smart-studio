@@ -3,72 +3,72 @@ import streamlit as st
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(
     page_title="Sistem Irigasi Terpadu",
-    page_icon="🌾", # Ganti icon jadi padi
+    page_icon="💧", # Icon Tetesan Air
     layout="wide"
 )
 
-# --- CSS UNTUK TEMA SAWAH/AIR YANG SEGAR ---
+# --- CSS UNTUK TEMA TEKNIK SIPIL ---
 st.markdown("""
 <style>
-    /* Background Header agak kebiruan dikit */
-    .stAppHeader {background-color: #f4f8fb;}
+    /* Background Header bersih */
+    .stAppHeader {background-color: #f8f9fa;}
     
     /* Styling Kotak Menu Kartu */
     .box-menu {
         padding: 25px;
         background-color: #ffffff;
-        border-radius: 15px;
-        border: 1px solid #e3f2fd; /* Border biru muda */
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        border-radius: 12px;
+        border: 1px solid #dee2e6;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         text-align: center;
         margin-bottom: 20px;
-        transition: transform 0.3s, box-shadow 0.3s; /* Animasi halus */
+        transition: all 0.3s ease;
     }
     
-    /* Efek saat mouse diarahkan ke kotak (Hover) */
+    /* Efek Hover: Jadi lebih tegas */
     .box-menu:hover {
-        transform: translateY(-5px); /* Naik sedikit */
-        box-shadow: 0 10px 20px rgba(13, 71, 161, 0.15); /* Bayangan biru */
-        border-color: #2196f3; /* Border jadi biru terang */
+        transform: translateY(-5px);
+        box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+        border-color: #0d6efd; /* Biru Engineering */
     }
 
     .big-icon {
         font-size: 60px;
         margin-bottom: 15px;
-        color: #0277bd; /* Warna ikon biru air */
     }
     
     h3 {
-        color: #1565c0; /* Warna judul biru tua */
+        color: #0d6efd; /* Biru Engineering */
         font-weight: 700;
     }
     
     p {
-        color: #546e7a; /* Warna teks abu kebiruan */
+        color: #6c757d; /* Abu-abu beton */
+        font-size: 14px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- HERO SECTION (JUDUL) ---
-st.title("🌾 Sistem Perencanaan Irigasi Terpadu")
-st.markdown("### *Integrated Water Resources Management System*")
+# --- HERO SECTION ---
+st.title("🏗️ Sistem Perencanaan Irigasi Terpadu")
+st.markdown("### *Integrated Water Infrastructure Management System*")
 st.markdown("---")
 
-# --- BANNER IMAGE (TEMA SAWAH/IRIGASI) ---
-# Gambar Terasering Sawah yang Segar (Unsplash)
-st.image("https://images.unsplash.com/photo-1530507629858-e4977d30e9e0?q=80&w=2500&auto=format&fit=crop", 
+# --- BANNER IMAGE (TEMA BENDUNGAN) ---
+# Gambar Bendungan Besar (Dam) yang Gagah
+st.image("https://images.unsplash.com/photo-1574972748383-798c8c2b7749?q=80&w=2500&auto=format&fit=crop", 
          use_column_width=True, 
-         caption="Manajemen Air untuk Ketahanan Pangan Berkelanjutan")
+         caption="Infrastruktur Bendungan & Pengendalian Sumber Daya Air")
 
 st.write("") 
 st.write("") 
 
 # --- SAMBUTAN ---
-st.info("💧 **Selamat Datang, Engineer!** Platform ini mengintegrasikan analisis hidrologi, kebutuhan air tanaman, dan desain infrastruktur irigasi dalam satu dasbor terpusat.")
+st.info("👋 **Selamat Datang, Engineer!** Dashboard ini mengintegrasikan analisis hidrologi hulu, kebutuhan air irigasi, hingga desain teknis saluran hilir.")
 
-# --- MENU GRID (KARTU-KARTU) ---
-st.subheader("🗺️ Navigasi Modul")
-st.caption("Pilih modul analisis di Sidebar sebelah kiri ( < ) untuk memulai perhitungan.")
+# --- MENU GRID ---
+st.subheader("🛠️ Modul Engineering")
+st.caption("Pilih tools analisis di Sidebar sebelah kiri ( < ) untuk memulai.")
 
 # Baris 1
 col1, col2 = st.columns(2)
@@ -78,7 +78,7 @@ with col1:
     <div class="box-menu">
         <div class="big-icon">☀️</div>
         <h3>Klimatologi & ETo</h3>
-        <p>Analisis data cuaca dan perhitungan Evapotranspirasi standar FAO Penman-Monteith.</p>
+        <p>Analisis data hidroklimatologi dan perhitungan Evapotranspirasi (Penman-Monteith).</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -87,7 +87,7 @@ with col2:
     <div class="box-menu">
         <div class="big-icon">🌾</div>
         <h3>Pola Tanam & NFR</h3>
-        <p>Simulasi jadwal tanam padi/palawija dan hitungan kebutuhan air bersih di sawah (NFR).</p>
+        <p>Simulasi neraca air lahan, koefisien tanaman (Kc), dan kebutuhan bersih air irigasi (NFR).</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -98,8 +98,8 @@ with col3:
     st.markdown("""
     <div class="box-menu">
         <div class="big-icon">🌊</div>
-        <h3>Analisis Sungai (Mock)</h3>
-        <p>Estimasi ketersediaan debit andalan sungai (Q80%) untuk sumber air irigasi.</p>
+        <h3>Debit Andalan (Mock)</h3>
+        <p>Analisis ketersediaan air sungai (Inflow) menggunakan Metode F.J. Mock untuk desain Intake.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -108,16 +108,16 @@ with col4:
     <div class="box-menu">
         <div class="big-icon">🏗️</div>
         <h3>Desain Saluran</h3>
-        <p>Kalkulator dimensi saluran terbuka (Batch System) dengan kontrol hidrolis otomatis.</p>
+        <p>Perhitungan dimensi hidrolis saluran (Trapesium/Persegi) dengan kontrol kestabilan aliran.</p>
     </div>
     """, unsafe_allow_html=True)
 
 st.markdown("---")
-# Footer dengan sentuhan profesional
+# Footer
 st.markdown(
     """
-    <div style='text-align: center; color: #78909c; padding: 20px;'>
-        Developed with 💙 by <b>JIAT Smart Studio</b> | Water Engineering Division © 2025
+    <div style='text-align: center; color: #adb5bd; padding: 20px;'>
+        <b>JIAT Smart Studio</b> | Civil & Water Resources Engineering © 2025
     </div>
     """, unsafe_allow_html=True
 )
