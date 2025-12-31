@@ -7,10 +7,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- 2. CSS UNTUK SEMBUNYIKAN SIDEBAR GANDA ---
+# --- 2. CSS UNTUK TAMPILAN PROFESIONAL ---
 st.markdown("""
 <style>
-    /* Menyembunyikan daftar file otomatis di sidebar agar tidak ganda */
+    /* MENYEMBUNYIKAN SIDEBAR OTOMATIS AGAR TIDAK GANDA */
     [data-testid="stSidebarNav"] {display: none;}
     
     .hero-box {
@@ -20,6 +20,7 @@ st.markdown("""
         color: white; 
         text-align: center; 
         margin-bottom: 40px;
+        box-shadow: 0 10px 20px rgba(0,0,0,0.1);
     }
     .hero-title { 
         font-size: 70px; 
@@ -28,8 +29,10 @@ st.markdown("""
         align-items: center;
         justify-content: center;
         gap: 25px;
+        margin-bottom: 10px;
     }
     .water-logo { font-size: 80px; }
+    .hero-subtitle { font-size: 22px; opacity: 0.9; font-weight: 300; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -37,27 +40,30 @@ st.markdown("""
 st.markdown("""
 <div class="hero-box">
     <div class="hero-title">
-        <span class="water-logo">💧</span> SmartStudio
+        <span class="water-logo">🏗️</span> SmartStudio
     </div>
-    <p style="font-size: 20px; opacity: 0.9;">Integrated Water Resources & Infrastructure Management System</p>
+    <div class="hero-subtitle">Integrated Water Resources & Infrastructure Management System</div>
 </div>
 """, unsafe_allow_html=True)
 
-# --- 4. MENU NAVIGASI (Satu-satunya Navigasi) ---
+# --- 4. MENU NAVIGASI DASHBOARD ---
 st.subheader("🛠️ Modul Engineering")
-col1, col2 = st.columns(2)
 
+# Baris 1
+col1, col2 = st.columns(2)
 with col1:
     st.page_link("pages/1_Klimatologi.py", label="Klimatologi & ETo", icon="☀️", use_container_width=True)
 with col2:
     st.page_link("pages/2_Pola_Tanam.py", label="Pola Tanam & NFR", icon="🌾", use_container_width=True)
 
+# Baris 2
 col3, col4 = st.columns(2)
 with col3:
     st.page_link("pages/3_FJ_Mock.py", label="Debit Andalan (Mock)", icon="🌊", use_container_width=True)
 with col4:
     st.page_link("pages/4_Desain_Saluran.py", label="Desain Saluran", icon="🏗️", use_container_width=True)
 
+# Baris 3 (Modul Tambahan)
 st.write("")
 st.page_link("pages/5_Irigasi_Pipa.py", label="Irigasi Pipa & Pompa", icon="💧", use_container_width=True)
 
