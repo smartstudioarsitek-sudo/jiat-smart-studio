@@ -80,10 +80,55 @@ edited_df = st.data_editor(st.session_state['df_iklim'], num_rows="fixed", use_c
 st.session_state['df_iklim'] = edited_df
 
 # B. Proses Hitung
-suhu = edited_df['Suhu (°C)'].tolist()
-hum = edited_df['Kelembaban (%)'].tolist()
-sun = edited_df['Penyinaran (%)'].tolist()
-wind = edited_df['Angin (km/jam)'].tolist()
-
+# Ambil data dan pastikan formatnya benar
 try:
-    eto_result = hitung_eto(suhu, hum, sun,
+    suhu = edited_df['Suhu (°C)'].tolist()
+    hum = edited_df['Kelembaban (%)'].tolist()
+    sun = edited_df['Penyinaran (%)'].tolist()
+    wind = edited_df['Angin (km/jam)'].tolist()
+
+    eto_result = hitung_eto(suhu, hum, sun, wind, latitude, elevasi)
+    
+    # Siapkan DataFrame Hasil
+    df_hasil = edited_df[['Bulan']].copy()
+    df_hasil['ETo (mm/hari)'] = np.round(eto_result, 2)
+    
+    # --- [PENTING] AUTO-SEND KE PAGE LAIN ---
+    st.session_state['data_eto_transfer'] = df_hasil['ETo (mm/hari)'].tolist()
+    
+    st.subheader("2. Hasil Perhitungan")
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # [SOLUSI ANTI-ERROR]: Filter kolom angka saja untuk diformat
+        # Ini mencegah error "ValueError" saat mencoba memformat teks 'Bulan'
+        numeric_cols = df_hasil.select_dtypes(include=[np.number]).columns
+        
+        st.dataframe(
+            df_hasil.style
+            .background_gradient(cmap="Blues", subset=['ETo (mm/hari)'])
+            .format("{:.2f}", subset=numeric_cols), # <--- KUNCI PERBAIKANNYA DI SINI
+            use_container_width=True
+        )
+    
+    with col2:
+        rata_eto = np.mean(eto_result)
+        st.markdown(f"""
+        <div class="metric-card">
+            <h4>Rata-rata ETo</h4>
+            <h2 style="margin:0;">{rata_eto:.2f} <span style="font-size:16px">mm/hari</span></h2>
+            <small>✅ Data Terkirim ke JIAT</small>
+        </div>
+        """, unsafe_allow_html=True)
+        st.bar_chart(df_hasil.set_index('Bulan')['ETo (mm/hari)'])
+
+except Exception as e:
+    st.error(f"⚠️ Terjadi kesalahan input: {e}")
+
+# --- 6. TOMBOL CETAK ---
+st.divider()
+import streamlit.components.v1 as components
+components.html(
+    """<button onclick="window.print()" style="background:#4CAF50;color:white;border:none;padding:10px 20px;border-radius:5px;font-weight:bold;cursor:pointer;">🖨️ Cetak PDF</button>""", 
+    height=50
+)
