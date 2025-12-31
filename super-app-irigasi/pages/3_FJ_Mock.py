@@ -29,8 +29,8 @@ def get_default_mock():
         sumber = "✅ Terhubung: Modul Klimatologi (Penman)"
         link_status = True
     else:
-        eto_12 = [4.5, 4.6, 4.5, 4.4, 4.2, 4.0, 3.8, 3.9, 4.2, 4.5, 4.6, 4.4] # Dummy
-        sumber = "⚠️ Warning: Data ETo Belum Ada (Menggunakan Data Dummy). Silakan ke Modul 1 & Klik 'Kirim Data'."
+        eto_12 = [4.5, 4.6, 4.5, 4.4, 4.2, 4.0, 3.8, 3.9, 4.2, 4.5, 4.6, 4.4] 
+        sumber = "⚠️ Warning: Data ETo Belum Ada (Menggunakan Data Dummy)."
         link_status = False
     
     # Data Hujan & Hari Hujan Default
@@ -53,9 +53,7 @@ if 'df_mock' not in st.session_state:
     st.session_state.link_ok = link_init
 
 # Cek Ulang Link (Refresh Logic)
-# Setiap kali halaman dibuka, cek apakah ada data baru dari Modul 1
 if 'data_eto_transfer' in st.session_state and not st.session_state.get('link_ok', False):
-    # Jika tiba-tiba ada data ETo masuk, update tabel
     st.session_state.df_mock['ETo (mm/hari)'] = st.session_state['data_eto_transfer']
     st.session_state.status_mock = "✅ Terhubung: Modul Klimatologi (Penman)"
     st.session_state.link_ok = True
@@ -66,7 +64,6 @@ with st.sidebar:
     st.header("🔧 Parameter DAS")
     
     if st.button("🔄 Reset Data Tabel", type="secondary"):
-        # Reset total ke default
         df_new, stat_new, link_new = get_default_mock()
         st.session_state.df_mock = df_new
         st.session_state.status_mock = stat_new
@@ -82,27 +79,25 @@ with st.sidebar:
         i_coeff = st.number_input("Koef. Infiltrasi (I)", value=0.4, max_value=1.0)
         k_rec = st.number_input("Faktor Resesi (k)", value=0.6, max_value=1.0)
 
-# --- 5. INPUT DATA (DENGAN VISUALISASI JELAS) ---
+# --- 5. INPUT DATA (LABEL LEBIH JELAS) ---
 col1, col2 = st.columns([1, 1.5])
 
 with col1:
     st.subheader("1. Input Data Hidrologi")
     
-    # Status Link Data
     if st.session_state.get('link_ok', False):
         st.success(st.session_state.status_mock)
     else:
         st.warning(st.session_state.status_mock)
         
-    st.info("💡 **Tips:** Copy data Hujan dari Excel -> Klik sel pertama -> Ctrl+V.")
+    # INFO PENTING soal Hujan Bulanan
+    st.info("ℹ️ **Catatan:** Masukkan **TOTAL curah hujan** selama satu bulan (akumulasi), BUKAN hujan harian maksimum.")
     
-    # Editor Tabel
     edited_df = st.data_editor(
         st.session_state.df_mock,
         height=480,
         use_container_width=True,
-        # SAYA GANTI KEY AGAR TAMPILAN MERESET (MEMAKSA IKON MUNCUL)
-        key="editor_mock_final_v2", 
+        key="editor_mock_jelas_v3", 
         column_config={
             "Bulan": st.column_config.TextColumn(
                 "📅 Bulan", disabled=True
@@ -113,14 +108,15 @@ with col1:
                 disabled=True, 
                 format="%.2f"
             ),
+            # LABEL DIPERJELAS DI SINI
             "Curah Hujan (mm)": st.column_config.NumberColumn(
-                "✏️ Curah Hujan (mm)", 
-                help="Input Manual",
+                "✏️ Tot. Hujan Bulanan (mm)", 
+                help="Masukkan jumlah total hujan dalam satu bulan (mm/bulan).",
                 required=True, min_value=0
             ),
             "Hari Hujan (hari)": st.column_config.NumberColumn(
                 "✏️ Hari Hujan", 
-                help="Input Manual",
+                help="Jumlah hari terjadinya hujan dalam bulan tersebut.",
                 required=True, min_value=0, max_value=31
             )
         }
@@ -216,7 +212,7 @@ with col2:
     c1.metric("Q Rata-rata", f"{q_avg:.2f} m³/s")
     c2.metric("Q Andalan (80%)", f"{df_hasil_mock['Debit (m³/s)'].quantile(0.2):.2f} m³/s", help="Estimasi Q80")
 
-# --- 8. TABEL DETAIL & TOMBOL EXPORT (BARU!) ---
+# --- 8. TABEL DETAIL & EXPORT ---
 st.divider()
 st.subheader("3. Hasil Analisa & Ekspor")
 
@@ -229,9 +225,7 @@ with col_res2:
     st.write("### 💾 Simpan Data")
     st.caption("Simpan hasil perhitungan Debit Andalan ini untuk digunakan pada modul Irigasi Pipa/Pompa.")
     
-    # TOMBOL EKSPOR DATA KE MODUL LAIN
     if st.button("🚀 Simpan Hasil Debit", type="primary", use_container_width=True):
-        # Menyimpan list Debit (Q) ke session state
         st.session_state['data_debit_mock'] = df_hasil_mock['Debit (m³/s)'].tolist()
         st.session_state['data_debit_bulan'] = df_hasil_mock['Bulan'].tolist()
         st.toast("✅ Data Debit Berhasil Disimpan! Siap dipakai di Modul Pipa.", icon="🌊")
