@@ -49,8 +49,7 @@ if 'df_mock' not in st.session_state:
     st.session_state.df_mock = df_init
     st.session_state.status_mock = status_init
 
-# --- [FIX CRASH] AUTO-REPAIR MEMORI LAMA ---
-# Ini langkah penting: Cek apakah kolom yang dibutuhkan ada. Jika tidak, reset paksa.
+# --- [FIX CRASH] AUTO-REPAIR MEMORI ---
 required_cols = ['Curah Hujan (mm)', 'Hari Hujan (hari)', 'ETo (mm/hari)']
 current_cols = st.session_state.df_mock.columns.tolist()
 
@@ -59,7 +58,7 @@ if not all(col in current_cols for col in required_cols):
     df_repair, stat_repair = get_default_mock()
     st.session_state.df_mock = df_repair
     st.session_state.status_mock = stat_repair
-    st.rerun() # Refresh halaman agar normal kembali
+    st.rerun()
 
 # --- 4. SIDEBAR PARAMETER ---
 with st.sidebar:
@@ -80,51 +79,69 @@ with st.sidebar:
         i_coeff = st.number_input("Koef. Infiltrasi (I)", value=0.4, max_value=1.0)
         k_rec = st.number_input("Faktor Resesi (k)", value=0.6, max_value=1.0)
 
-# --- 5. INPUT DATA ---
+# --- 5. INPUT DATA (VISUALISASI IKON) ---
 col1, col2 = st.columns([1, 1.5])
 
 with col1:
     st.subheader("1. Input Data Hidrologi")
-    st.caption(st.session_state.get('status_mock', ""))
     
-    st.info("💡 **Tips:** Copy data Hujan & Hari Hujan dari Excel dan Paste di sini.")
+    # Legend Sederhana
+    st.caption(f"{st.session_state.get('status_mock', '')}")
+    st.info("💡 **Legenda Kolom:**\n\n✏️ = Input Manual (Bisa Diedit)\n🔒 = Otomatis (Link dari Modul Lain)")
     
     edited_df = st.data_editor(
         st.session_state.df_mock,
-        height=450,
+        height=480,
         use_container_width=True,
+        # INI BAGIAN KUNCI UNTUK MEMBEDAKAN KOLOM
         column_config={
-            "Bulan": st.column_config.TextColumn(disabled=True),
-            "ETo (mm/hari)": st.column_config.NumberColumn(disabled=True, help="Otomatis dari Modul 1"),
-            "Curah Hujan (mm)": st.column_config.NumberColumn(required=True, min_value=0),
-            "Hari Hujan (hari)": st.column_config.NumberColumn(required=True, min_value=0)
+            "Bulan": st.column_config.TextColumn(
+                "📅 Bulan", 
+                disabled=True
+            ),
+            "ETo (mm/hari)": st.column_config.NumberColumn(
+                "🔒 ETo (Link)", # Judul Kolom di Tampilan
+                help="Data ini otomatis diambil dari Modul Klimatologi (Penman).",
+                disabled=True, # Mematikan edit
+                format="%.2f"
+            ),
+            "Curah Hujan (mm)": st.column_config.NumberColumn(
+                "✏️ Curah Hujan (mm)", # Judul dengan Ikon Pensil
+                help="Input Manual: Masukkan data hujan bulanan.",
+                required=True, 
+                min_value=0
+            ),
+            "Hari Hujan (hari)": st.column_config.NumberColumn(
+                "✏️ Hari Hujan (hari)", 
+                help="Input Manual: Masukkan jumlah hari hujan.",
+                required=True, 
+                min_value=0,
+                max_value=31
+            )
         }
     )
     st.session_state.df_mock = edited_df
 
-# --- 6. ENGINE MOCK ---
+# --- 6. ENGINE MOCK (LOOPING) ---
 def hitung_mock(df, luas, m_fac, smc_val, i_val, k_val):
-    # Loop Pemanasan (Warm-up)
+    # Loop Pemanasan
     vn_prev = smc_val 
     for idx, row in df.iterrows():
         days = 30
-        # Di sini error terjadi sebelumnya jika kolom hilang. Sekarang sudah aman.
         eto_bulan = row['ETo (mm/hari)'] * days 
         rain = row['Curah Hujan (mm)']
         
         ws_pot = rain - eto_bulan
         if ws_pot > 0:
             delta_s = min(ws_pot, smc_val - vn_prev)
-            ws = ws_pot - delta_s
         else:
             delta_s = ws_pot
             if (vn_prev + delta_s) < 0: delta_s = -vn_prev
-            ws = 0
         vn = vn_prev + delta_s
         vn_prev = vn
 
-    # Loop Hitungan Real
-    vg_prev = 100 # Initial Groundwater
+    # Loop Real
+    vg_prev = 100 
     final_data = []
     
     for idx, row in df.iterrows():
@@ -133,7 +150,6 @@ def hitung_mock(df, luas, m_fac, smc_val, i_val, k_val):
         rain = row['Curah Hujan (mm)']
         
         ws_pot = rain - eto_bulan
-        
         if ws_pot > 0:
             e_act = eto_bulan
             delta_s = min(ws_pot, smc_val - vn_prev)
@@ -145,7 +161,6 @@ def hitung_mock(df, luas, m_fac, smc_val, i_val, k_val):
             ws = 0
             
         vn = vn_prev + delta_s
-        
         infil = ws * i_val
         dro = ws - infil
         
@@ -154,7 +169,6 @@ def hitung_mock(df, luas, m_fac, smc_val, i_val, k_val):
         baseflow = infil - dvg
         
         tro_mm = baseflow + dro
-        # Konversi ke m3/s
         q_m3s = (tro_mm / 1000) * (luas * 1000000) / (days * 86400)
         q_m3s = max(0, q_m3s)
         
