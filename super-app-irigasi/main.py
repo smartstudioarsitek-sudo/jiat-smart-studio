@@ -7,10 +7,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- 2. CSS UNTUK TAMPILAN PROFESIONAL ---
+# --- 2. CSS CUSTOM (TAMPILAN BERSIH) ---
 st.markdown("""
 <style>
-    /* MENYEMBUNYIKAN SIDEBAR OTOMATIS AGAR TIDAK GANDA */
+    /* Sembunyikan Sidebar Navigasi Otomatis */
     [data-testid="stSidebarNav"] {display: none;}
     
     .hero-box {
@@ -23,16 +23,16 @@ st.markdown("""
         box-shadow: 0 10px 20px rgba(0,0,0,0.1);
     }
     .hero-title { 
-        font-size: 70px; 
+        font-size: 60px; 
         font-weight: 900; 
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 25px;
-        margin-bottom: 10px;
+        display: flex; align-items: center; justify-content: center; gap: 20px;
     }
-    .water-logo { font-size: 80px; }
-    .hero-subtitle { font-size: 22px; opacity: 0.9; font-weight: 300; }
+    .hero-subtitle { font-size: 20px; opacity: 0.9; font-weight: 300; margin-top: 10px; }
+    
+    /* Styling Header Bagian */
+    .section-header {
+        font-size: 22px; font-weight: bold; color: #444; margin-top: 20px; margin-bottom: 10px; border-bottom: 2px solid #eee; padding-bottom: 5px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -40,32 +40,38 @@ st.markdown("""
 st.markdown("""
 <div class="hero-box">
     <div class="hero-title">
-        <span class="water-logo">🏗️</span> SmartStudio
+        <span>💧</span> SmartStudio
     </div>
-    <div class="hero-subtitle">Integrated Water Resources & Infrastructure Management System</div>
+    <div class="hero-subtitle">Integrated Water Resources & Irrigation System</div>
 </div>
 """, unsafe_allow_html=True)
 
-# --- 4. MENU NAVIGASI DASHBOARD ---
-st.subheader("🛠️ Modul Engineering")
+# --- 4. MENU NAVIGASI ---
 
-# Baris 1
+# KELOMPOK 1: AGRONOMI & KLIMATOLOGI
+st.markdown('<div class="section-header">☀️ Agronomi & Klimatologi</div>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
-    st.page_link("pages/1_Klimatologi.py", label="Klimatologi & ETo", icon="☀️", use_container_width=True)
+    st.page_link("pages/1_Klimatologi.py", label="Modul 1: Klimatologi & ETo", icon="☀️", use_container_width=True)
 with col2:
-    st.page_link("pages/2_Pola_Tanam.py", label="Pola Tanam & NFR", icon="🌾", use_container_width=True)
+    st.page_link("pages/2_Pola_Tanam.py", label="Modul 2: Pola Tanam & NFR", icon="🌾", use_container_width=True)
 
-# Baris 2
+# KELOMPOK 2: HIDROLOGI SUMBER DAYA AIR
+st.markdown('<div class="section-header">🌊 Analisa Hidrologi</div>', unsafe_allow_html=True)
 col3, col4 = st.columns(2)
 with col3:
-    st.page_link("pages/3_FJ_Mock.py", label="Debit Andalan (Mock)", icon="🌊", use_container_width=True)
+    st.page_link("pages/3_FJ_Mock.py", label="Modul 3: Debit Andalan (Mock)", icon="🌊", use_container_width=True)
 with col4:
-    st.page_link("pages/4_Desain_Saluran.py", label="Desain Saluran", icon="🏗️", use_container_width=True)
+    # MODUL BARU KITA
+    st.page_link("pages/6_Analisa_Banjir.py", label="Modul 6: Debit Banjir Rencana", icon="⛈️", use_container_width=True)
 
-# Baris 3 (Modul Tambahan)
-st.write("")
-st.page_link("pages/5_Irigasi_Pipa.py", label="Irigasi Pipa & Pompa", icon="💧", use_container_width=True)
+# KELOMPOK 3: HIDROLIKA & BANGUNAN
+st.markdown('<div class="section-header">🏗️ Desain Hidrolika</div>', unsafe_allow_html=True)
+col5, col6 = st.columns(2)
+with col5:
+    st.page_link("pages/4_Desain_Saluran.py", label="Modul 4: Desain Saluran Terbuka", icon="🏗️", use_container_width=True)
+with col6:
+    st.page_link("pages/5_Irigasi_Pipa.py", label="Modul 5: Irigasi Pipa & Pompa", icon="🚰", use_container_width=True)
 
 st.divider()
 st.caption("SmartStudio © 2025 | Water Engineering Division")
