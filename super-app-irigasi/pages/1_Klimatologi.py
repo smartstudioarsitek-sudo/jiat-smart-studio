@@ -1,134 +1,184 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import math
 
-# --- 1. CONFIG & CSS ---
-st.set_page_config(page_title="Analisa Klimatologi", layout="wide", page_icon="🌦️")
+# --- 1. KONFIGURASI HALAMAN ---
+st.set_page_config(page_title="Klimatologi (Penman)", layout="wide", page_icon="☀️")
 
+# --- 2. HEADER ---
 st.markdown("""
 <style>
-    @media print {
-        [data-testid="stSidebar"] { display: none !important; }
-        [data-testid="stHeader"] { display: none !important; }
-        .block-container { padding-top: 0 !important; }
+    .hero-box {
+        background: linear-gradient(120deg, #ff6f00 0%, #ff8f00 50%, #ffca28 100%);
+        padding: 20px; border-radius: 10px; color: white; text-align: center; margin-bottom: 20px;
     }
-    .metric-card {
-        background-color: #e3f2fd; border-left: 5px solid #2196f3;
-        padding: 15px; border-radius: 5px; margin-bottom: 10px;
-    }
+    .stExpander { border: 1px solid #ddd; border-radius: 5px; }
 </style>
+<div class="hero-box">
+    <h1 style="margin:0; font-size: 35px;">☀️ Analisa Klimatologi</h1>
+    <p style="opacity: 0.9;">Perhitungan ETo Metode Penman Modifikasi (Standar KP-01)</p>
+</div>
 """, unsafe_allow_html=True)
 
-# --- 2. RUMUS PENMAN-MONTEITH (Simplified) ---
-def hitung_eto(temp, hum, sun, wind, lat_deg=-7.0, alt=10):
-    # Konversi ke array numpy (Safe Float)
-    def to_float(arr):
-        return np.array([float(x) for x in arr])
+# --- 3. ENGINE PERHITUNGAN (PENMAN) ---
+def hitung_ra_harian(lat_deg, bulan_idx):
+    # Konversi Lintang ke Radian
+    phi = math.radians(lat_deg)
+    # Deklinasi Matahari (Delta)
+    dr = 1 + 0.033 * math.cos(2 * math.pi / 365 * (30 * bulan_idx + 15))
+    delta = 0.409 * math.sin(2 * math.pi / 365 * (30 * bulan_idx + 15) - 1.39)
+    # Sudut Saat Matahari Terbenam (ws)
+    ws_val = -math.tan(phi) * math.tan(delta)
+    # Safety check domain acos (-1 s/d 1)
+    ws_val = max(-1.0, min(1.0, ws_val))
+    ws = math.acos(ws_val)
+    
+    # Ra (Radiasi Ekstraterestrial) dalam mm/hari
+    ra_val = (24 * 60 / math.pi) * 0.0820 * dr * (
+        ws * math.sin(phi) * math.sin(delta) + 
+        math.cos(phi) * math.cos(delta) * math.sin(ws)
+    )
+    return max(0, ra_val)
 
-    T = to_float(temp)
-    RH = to_float(hum)
-    n = to_float(sun)
-    u2 = to_float(wind) * (1000/3600) # km/jam ke m/s
-    
-    # --- Konstanta Fisik ---
-    es = 0.6108 * np.exp((17.27 * T) / (T + 237.3))
-    ea = es * (RH / 100)
-    delta = (4098 * es) / ((T + 237.3)**2)
-    P = 101.3 * ((293 - 0.0065 * alt) / 293)**5.26
-    gamma = 0.000665 * P
-    
-    # Radiasi (Simplifikasi)
-    Ra = np.array([15.8, 16.0, 15.8, 15.3, 14.4, 13.9, 14.1, 14.8, 15.6, 16.0, 15.9, 15.7])
-    Rs = (0.25 + 0.50 * (n/100)) * Ra
-    Rns = 0.77 * Rs
-    Rn = Rns - 2.5 
-    
-    term1 = 0.408 * delta * Rn
-    term2 = gamma * (900 / (T + 273)) * u2 * (es - ea)
-    term3 = delta + gamma * (1 + 0.34 * u2)
-    
-    ETo = (term1 + term2) / term3
-    return ETo
+def hitung_penman(row, lat, a, b, albedo):
+    try:
+        t = row['Suhu (°C)']
+        rh = row['RH (%)']
+        u_ms = row['Angin (m/s)']
+        n_N = row['Penyinaran (%)'] / 100
+        
+        if pd.isna(t) or pd.isna(rh): return 0.0
 
-# --- 3. STATE MANAGEMENT ---
-if 'df_iklim' not in st.session_state:
-    st.session_state['df_iklim'] = pd.DataFrame({
-        'Bulan': ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'],
-        'Suhu (°C)': [26.5]*12,
-        'Kelembaban (%)': [85.0]*12,
-        'Penyinaran (%)': [50.0]*12,
-        'Angin (km/jam)': [10.0]*12
+        # 1. Tekanan Uap (ea & ed) - kPa
+        ea = 0.6108 * math.exp((17.27 * t) / (t + 237.3))
+        ed = ea * (rh / 100)
+        
+        # 2. Kemiringan Kurva (Delta)
+        delta = (4098 * ea) / ((t + 237.3)**2)
+        gamma = 0.066 # Konstanta psikrometrik (kPa/°C)
+        
+        # 3. Radiasi Matahari (Rs)
+        ra = hitung_ra_harian(lat, row['Index'])
+        rs = (a + b * n_N) * ra
+        
+        # 4. Radiasi Bersih (Rn)
+        rns = (1 - albedo) * rs
+        sigma_t4 = 4.903e-9 * ((t + 273.16)**4)
+        # Rumus Rnl Penman-Monteith FAO/KP-01
+        rnl = sigma_t4 * (0.34 - 0.14 * math.sqrt(ed)) * (1.35 * (rs / max(0.1, (0.75 * ra))) - 0.35)
+        rn = rns - rnl
+        
+        # 5. ETo (mm/hari)
+        u2 = u_ms # Asumsi data angin diukur pada ketinggian 2m
+        term1 = 0.408 * delta * rn
+        term2 = gamma * (900 / (t + 273)) * u2 * (ea - ed)
+        div = delta + gamma * (1 + 0.34 * u2)
+        
+        eto = (term1 + term2) / div
+        return max(0, round(eto, 2))
+    except:
+        return 0.0
+
+# --- 4. DATA DEFAULT ---
+def get_default_meteo():
+    return pd.DataFrame({
+        'Index': range(12),
+        'Bulan': ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agt', 'Sep', 'Okt', 'Nov', 'Des'],
+        'Suhu (°C)': [27.5]*12,
+        'RH (%)': [85.0]*12,
+        'Angin (m/s)': [1.5]*12,
+        'Penyinaran (%)': [60.0]*12
     })
 
-# --- 4. SIDEBAR ---
+if 'df_klimatologi' not in st.session_state:
+    st.session_state.df_klimatologi = get_default_meteo()
+
+# --- 5. SIDEBAR PARAMETER ---
 with st.sidebar:
-    st.header("🌍 Parameter Lokasi")
-    latitude = st.number_input("Lintang (Derajat)", value=-7.5)
-    elevasi = st.number_input("Elevasi (mdpl)", value=50.0)
+    st.header("🌍 Lokasi Proyek")
+    
+    # Lintang Wajib Ada (Karena mempengaruhi Ra)
+    lintang = st.number_input(
+        "📍 Lintang Lokasi (Latitude)", 
+        value=-5.40, step=0.1, format="%.2f",
+        help="Posisi lintang daerah studi. Gunakan nilai NEGATIF (-) untuk Lintang Selatan (Indonesia bag. selatan khatulistiwa) dan POSITIF (+) untuk Utara."
+    )
+    st.info(f"Lokasi: {abs(lintang)}° {'LS' if lintang < 0 else 'LU'}")
+
     st.divider()
-    if st.button("🔄 Reset Data"):
-        st.session_state.pop('df_iklim')
+    
+    # Parameter Lanjut Disembunyikan (Clean UI)
+    with st.expander("⚙️ Parameter Kalibrasi (Advanced)"):
+        st.write("Ubah hanya jika ada data spesifik:")
+        albedo = st.number_input("Albedo (Pantulan)", value=0.25, step=0.01, 
+                               help="Koefisien pantulan tajuk. Tanaman hijau/rumput = 0.23 - 0.25. Air = 0.05.")
+        st.caption("Koefisien Angstrom (Radiasi):")
+        a = st.number_input("Konstanta a", value=0.25, help="Radiasi gelombang pendek yang menembus atmosfer.")
+        b = st.number_input("Konstanta b", value=0.50, help="Radiasi gelombang panjang.")
+
+    # Tombol Reset
+    if st.button("🔄 Reset Tabel", type="secondary"):
+        st.session_state.df_klimatologi = get_default_meteo()
         st.rerun()
 
-# --- 5. MAIN CONTENT ---
-st.title("🌦️ Analisa Klimatologi (ETo)")
-st.caption("Metode Penman-Monteith (Modifikasi FAO-56)")
+# --- 6. MAIN CONTENT ---
+col1, col2 = st.columns([1.5, 1])
 
-# A. Input Data
-st.subheader("1. Input Data Iklim")
-edited_df = st.data_editor(st.session_state['df_iklim'], num_rows="fixed", use_container_width=True, hide_index=True)
-st.session_state['df_iklim'] = edited_df
+with col1:
+    st.subheader("1. Input Data Meteo")
+    
+    # INFO COPY PASTE
+    st.info("💡 **Tips Excel:** Anda bisa Copy data (Suhu, RH, Angin, Penyinaran) dari Excel, lalu klik sel pertama tabel di bawah, dan tekan **Ctrl+V**.")
+    
+    edited_df = st.data_editor(
+        st.session_state.df_klimatologi,
+        use_container_width=True,
+        height=460,
+        column_config={
+            "Index": None, # Hide index internal
+            "Bulan": st.column_config.TextColumn(disabled=True),
+            "Suhu (°C)": st.column_config.NumberColumn(required=True),
+            "RH (%)": st.column_config.NumberColumn(required=True, min_value=0, max_value=100),
+            "Angin (m/s)": st.column_config.NumberColumn(required=True, min_value=0),
+            "Penyinaran (%)": st.column_config.NumberColumn(required=True, min_value=0, max_value=100)
+        }
+    )
+    # Update Session State
+    st.session_state.df_klimatologi = edited_df
 
-# B. Proses Hitung
-# Ambil data dan pastikan formatnya benar
-try:
-    suhu = edited_df['Suhu (°C)'].tolist()
-    hum = edited_df['Kelembaban (%)'].tolist()
-    sun = edited_df['Penyinaran (%)'].tolist()
-    wind = edited_df['Angin (km/jam)'].tolist()
+# HITUNG LIVE
+eto_list = []
+for idx, row in edited_df.iterrows():
+    val = hitung_penman(row, lintang, a, b, albedo)
+    eto_list.append(val)
 
-    eto_result = hitung_eto(suhu, hum, sun, wind, latitude, elevasi)
-    
-    # Siapkan DataFrame Hasil
-    df_hasil = edited_df[['Bulan']].copy()
-    df_hasil['ETo (mm/hari)'] = np.round(eto_result, 2)
-    
-    # --- [PENTING] AUTO-SEND KE PAGE LAIN ---
-    st.session_state['data_eto_transfer'] = df_hasil['ETo (mm/hari)'].tolist()
-    
-    st.subheader("2. Hasil Perhitungan")
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        # [SOLUSI ANTI-ERROR]: Filter kolom angka saja untuk diformat
-        # Ini mencegah error "ValueError" saat mencoba memformat teks 'Bulan'
-        numeric_cols = df_hasil.select_dtypes(include=[np.number]).columns
-        
-        st.dataframe(
-            df_hasil.style
-            .background_gradient(cmap="Blues", subset=['ETo (mm/hari)'])
-            .format("{:.2f}", subset=numeric_cols), # <--- KUNCI PERBAIKANNYA DI SINI
-            use_container_width=True
-        )
-    
-    with col2:
-        rata_eto = np.mean(eto_result)
-        st.markdown(f"""
-        <div class="metric-card">
-            <h4>Rata-rata ETo</h4>
-            <h2 style="margin:0;">{rata_eto:.2f} <span style="font-size:16px">mm/hari</span></h2>
-            <small>✅ Data Terkirim ke JIAT</small>
-        </div>
-        """, unsafe_allow_html=True)
-        st.bar_chart(df_hasil.set_index('Bulan')['ETo (mm/hari)'])
+# Dataframe Hasil
+df_hasil = edited_df.copy()
+df_hasil['ETo (mm/hari)'] = eto_list
 
-except Exception as e:
-    st.error(f"⚠️ Terjadi kesalahan input: {e}")
+with col2:
+    st.subheader("2. Hasil ETo (Penman)")
+    
+    # Tampilkan Tabel Hasil (Read Only)
+    st.dataframe(
+        df_hasil[['Bulan', 'ETo (mm/hari)']].style.background_gradient(cmap="Blues"),
+        use_container_width=True,
+        height=460
+    )
 
-# --- 6. TOMBOL CETAK ---
+# --- 7. FOOTER & SEND ---
 st.divider()
-import streamlit.components.v1 as components
-components.html(
-    """<button onclick="window.print()" style="background:#4CAF50;color:white;border:none;padding:10px 20px;border-radius:5px;font-weight:bold;cursor:pointer;">🖨️ Cetak PDF</button>""", 
-    height=50
-)
+col_grafik, col_tombol = st.columns([3, 1])
+
+with col_grafik:
+    st.line_chart(df_hasil.set_index('Bulan')[['ETo (mm/hari)']], color="#ffaa00")
+
+with col_tombol:
+    avg_eto = round(sum(eto_list)/12, 2)
+    st.metric("Rata-rata ETo", f"{avg_eto} mm/hari")
+    
+    if st.button("🚀 Kirim Data ke Pola Tanam", type="primary"):
+        st.session_state['data_eto_transfer'] = eto_list
+        st.toast(f"✅ Data ETo tersimpan! Siap digunakan di modul berikutnya.", icon="💾")
+
