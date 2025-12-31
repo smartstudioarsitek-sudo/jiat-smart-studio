@@ -4,176 +4,223 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # --- 1. KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Irigasi Pipa & Pompa", layout="wide", page_icon="🚰")
+st.set_page_config(page_title="JIAT Design", layout="wide", page_icon="💧")
 
-# --- 2. HEADER ---
+# --- 2. SIDEBAR: PROJECT MANAGER ---
+with st.sidebar:
+    st.header("📂 File Manager")
+    st.text_input("Nama Proyek", value="JIAT Lampung Timur")
+    st.text_input("Lokasi", value="Desa Hargomulyo")
+    st.number_input("Tahun Anggaran", value=2025, step=1)
+    
+    st.divider()
+    st.header("1. Input Parameter")
+    
+    # Input Debit Geologi (PENGGANTI FJ MOCK)
+    st.info("💧 **Sumber Air (Sumur)**")
+    q_sumur = st.number_input("Debit Izin / Q Sumur (l/det)", value=15.0, help="Kapasitas sumur bor berdasarkan uji pemompaan (Pumping Test).")
+    
+    st.info("🚜 **Lahan Irigasi**")
+    luas_layanan = st.number_input("Luas Potensial (ha)", value=10.0, step=0.1)
+
+# --- 3. HEADER UTAMA ---
 st.markdown("""
 <style>
     .hero-box {
-        background: linear-gradient(120deg, #37474f 0%, #455a64 50%, #607d8b 100%);
-        padding: 20px; border-radius: 10px; color: white; text-align: center; margin-bottom: 20px;
+        background: linear-gradient(120deg, #1e88e5 0%, #42a5f5 50%, #90caf9 100%);
+        padding: 20px; border-radius: 10px; color: white; margin-bottom: 20px;
     }
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] { font-weight: bold; font-size: 16px; }
+    .metric-card {
+        border: 1px solid #eee; padding: 15px; border-radius: 10px; box-shadow: 2px 2px 10px rgba(0,0,0,0.05); text-align: center;
+    }
 </style>
 <div class="hero-box">
-    <h1 style="margin:0; font-size: 35px;">🚰 Desain Pipa & Pompa</h1>
-    <p style="opacity: 0.9;">Analisa Jaringan Pipa Tekan, Head Loss, & Kebutuhan Daya</p>
+    <h1 style="margin:0; font-size: 32px;">💧 JIAT Lampung Timur</h1>
+    <p style="opacity: 0.9;">Desain Jaringan Irigasi Air Tanah & Perpipaan</p>
 </div>
 """, unsafe_allow_html=True)
 
-# --- 3. LINK DATA (AUTO-DETECT) ---
-# Cek NFR
+# --- 4. DATA LINKING (NFR ONLY) ---
 if 'nfr_global' in st.session_state:
     nfr_val = st.session_state['nfr_global']
-    status_nfr = f"✅ Terhubung: {nfr_val} l/s/ha"
+    status_nfr = f"✅ Terhubung: {nfr_val:.3f} l/s/ha"
 else:
     nfr_val = 1.25 # Default
-    status_nfr = "⚠️ Default (Data Pola Tanam Kosong)"
+    status_nfr = "⚠️ Default (Modul Pola Tanam Kosong)"
 
-# Cek Debit Andalan
-if 'data_debit_mock' in st.session_state:
-    debit_list = st.session_state['data_debit_mock']
-    q_andalan = np.percentile(debit_list, 20)
-    status_mock = f"✅ Terhubung: {q_andalan*1000:.2f} l/s"
-else:
-    q_andalan = 0.050 # Default 50 l/s
-    status_mock = "⚠️ Default (Data Mock Kosong)"
+# --- 5. TABS SYSTEM (RESTORING UI) ---
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📝 INPUT DATA", 
+    "💧 KEBUTUHAN AIR", 
+    "⚙️ PIPA & HIDROLIKA", 
+    "📊 HASIL & GRAFIK"
+])
 
-# --- 4. DATA INPUT GLOBAL ---
-st.info("ℹ️ **Status Data:** " + status_nfr + " | " + status_mock)
-
-# Input Luas (Global karena dipakai semua tab)
-col_glob1, col_glob2 = st.columns([1, 2])
-with col_glob1:
-    luas_lahan = st.number_input("Luas Lahan (ha)", value=25.0, step=0.5)
-with col_glob2:
-    # Hitung Demand Real-time
-    q_req_ls = luas_lahan * nfr_val
-    q_req_m3s = q_req_ls / 1000
-    
-    # Cek Neraca
-    if q_req_m3s > q_andalan:
-        st.error(f"❌ **DEFISIT!** Supply ({q_andalan*1000:.1f} l/s) < Kebutuhan ({q_req_ls:.1f} l/s)")
-    else:
-        st.success(f"✅ **SURPLUS.** Kebutuhan: {q_req_ls:.2f} l/s (Aman)")
-
-st.divider()
-
-# --- 5. TAB MENU UTAMA (SUB-PAGES) ---
-tab1, tab2, tab3 = st.tabs(["🌍 Parameter Geologi", "🚰 Jaringan Pipa", "⚡ Desain Pompa"])
-
-# === TAB 1: PARAMETER GEOLOGI & JALUR ===
+# === TAB 1: DATA GEOLOGI & ELEVASI ===
 with tab1:
-    st.subheader("1. Kondisi Geografis Jalur Pipa")
     col_geo1, col_geo2 = st.columns(2)
-    
     with col_geo1:
-        st.write("#### Elevasi (Head Statis)")
-        elev_ambil = st.number_input("Elevasi Muka Air Pengambilan (m)", value=100.0)
-        elev_keluar = st.number_input("Elevasi Outlet / Bak Penampung (m)", value=125.0)
-        hs = elev_keluar - elev_ambil
-        st.metric("Head Statis (Hs)", f"{hs:.2f} m", help="Beda tinggi total yang harus dilawan pompa")
+        st.subheader("A. Data Sumur & Geologi")
+        st.write("Parameter hidrolika sumur dalam:")
+        swl = st.number_input("Muka Air Statis / SWL (m)", value=15.0, help="Jarak permukaan tanah ke muka air saat pompa mati")
+        dwl = st.number_input("Muka Air Dinamis / DWL (m)", value=25.0, help="Jarak permukaan tanah ke muka air saat pompa nyala")
+        posisi_pompa = st.number_input("Posisi Pemasangan Pompa (m)", value=30.0)
         
     with col_geo2:
-        st.write("#### Jarak & Panjang")
-        panjang_pipa = st.number_input("Panjang Pipa Total (L)", value=650.0, help="Total panjang pipa dari intake ke outlet")
-        tek_sisa = st.number_input("Sisa Tekan di Outlet (m)", value=10.0, help="Tekanan yang dibutuhkan di ujung pipa (misal untuk sprinkler = 10-15m)")
+        st.subheader("B. Elevasi & Topografi")
+        elev_sumur = st.number_input("Elevasi Tanah Titik Sumur (mdpl)", value=100.0)
+        elev_reservoir = st.number_input("Elevasi Tanah Reservoir/Outlet (mdpl)", value=115.0)
+        tinggi_reservoir = st.number_input("Tinggi Menara/Reservoir (m)", value=6.0, help="Tinggi bak penampung dari tanah")
+        
+        # Hitung Head Statis Total
+        # H_statis = (Elev_Res + T_Res - Elev_Sumur) + DWL
+        # Atau simpelnya beda tinggi air ke air
+        elev_air_keluar = elev_reservoir + tinggi_reservoir
+        beda_tinggi_geodetik = elev_air_keluar - elev_sumur
+        h_statis_total = beda_tinggi_geodetik + dwl
+        
+        st.success(f"📏 **Head Statis Total (Hs): {h_statis_total:.2f} m**")
 
-# === TAB 2: JARINGAN PIPA ===
+# === TAB 2: KEBUTUHAN AIR (NERACA) ===
 with tab2:
-    st.subheader("2. Hidrolika & Head Loss")
-    col_pipa1, col_pipa2 = st.columns(2)
+    st.subheader("Analisa Ketersediaan vs Kebutuhan")
     
-    with col_pipa1:
-        st.write("#### Spesifikasi Material")
-        jenis_pipa = st.selectbox("Material Pipa", ["PVC (C=150)", "HDPE (C=140)", "GIP (C=120)", "Steel (C=100)"])
-        # Parse C value
-        if "150" in jenis_pipa: c_hw = 150
-        elif "140" in jenis_pipa: c_hw = 140
-        elif "120" in jenis_pipa: c_hw = 120
-        else: c_hw = 100
+    col_bal1, col_bal2 = st.columns(2)
+    with col_bal1:
+        st.markdown("### 1. Kebutuhan (Demand)")
+        st.caption(f"Sumber NFR: {status_nfr}")
         
-        d_inch = st.selectbox("Diameter Pipa (Inch)", [2, 3, 4, 6, 8, 10, 12, 14, 16], index=3)
-        d_m = d_inch * 0.0254
+        q_kebutuhan = luas_layanan * nfr_val
+        st.metric("Debit Kebutuhan (Q Req)", f"{q_kebutuhan:.2f} l/det")
         
-    with col_pipa2:
-        st.write("#### Analisa Kecepatan")
-        # Hitung V
-        area = np.pi * (d_m/2)**2
-        v = q_req_m3s / area
+    with col_bal2:
+        st.markdown("### 2. Ketersediaan (Supply)")
+        st.caption("Sumber: Data Uji Pemompaan (Geologi)")
         
-        # Cek V
-        if 0.3 <= v <= 2.5: status_v, col_v = "✅ Ideal", "normal"
-        elif v < 0.3: status_v, col_v = "⚠️ Endapan", "inverse"
-        else: status_v, col_v = "⛔ Erosi/Waterhammer", "inverse"
-            
-        st.metric("Kecepatan Aliran (V)", f"{v:.2f} m/s", status_v, delta_color=col_v)
-        st.caption("Range ideal: 0.3 - 2.5 m/s")
+        st.metric("Debit Sumur (Q Geologi)", f"{q_sumur:.2f} l/det")
+        
+    # NERACA
+    st.divider()
+    balance = q_sumur - q_kebutuhan
+    if balance >= 0:
+        st.success(f"✅ **SURPLUS AIR (+{balance:.2f} l/det)**. Debit sumur mencukupi untuk mengairi {luas_layanan} ha.")
+        q_desain = q_kebutuhan # Desain pipa pakai kebutuhan
+    else:
+        st.error(f"❌ **DEFISIT AIR ({balance:.2f} l/det)**. Debit sumur KURANG. Maksimal area layanan: {q_sumur/nfr_val:.1f} ha.")
+        q_desain = q_sumur # Desain pipa dipaksa pakai supply max
 
-    # Hitung Head Loss (Major + Minor)
-    hf_major = 10.67 * panjang_pipa * (q_req_m3s**1.852) / ((c_hw**1.852) * (d_m**4.87))
-    hf_minor = 0.1 * hf_major # Asumsi 10%
-    hf_total = hf_major + hf_minor
-    
-    st.info(f"📉 **Total Kehilangan Tekanan (Head Loss):** {hf_total:.2f} m (Gesekan Pipa + Fitting)")
-
-# === TAB 3: DESAIN POMPA ===
+# === TAB 3: PIPA & HIDROLIKA (MULTI-SEGMEN) ===
 with tab3:
-    st.subheader("3. Kebutuhan Daya Pompa")
+    st.subheader("Perhitungan Hidrolis Jaringan Pipa")
+    st.info(f"💡 **Debit Desain Pipa:** {q_desain:.2f} l/det (Berdasarkan Neraca Air)")
     
-    # Hitung TDH
-    tdh = hs + hf_total + tek_sisa
+    # Template Data Segmen Pipa
+    if 'df_pipa' not in st.session_state:
+        st.session_state.df_pipa = pd.DataFrame([
+            {"Segmen": "Pompa-Res", "Panjang (m)": 10.0, "Diameter (mm)": 90, "C (Hazen)": 150},
+            {"Segmen": "Jalur Utama", "Panjang (m)": 500.0, "Diameter (mm)": 90, "C (Hazen)": 150},
+            {"Segmen": "Distribusi 1", "Panjang (m)": 200.0, "Diameter (mm)": 63, "C (Hazen)": 150},
+        ])
+
+    # Editor Tabel
+    edited_pipa = st.data_editor(
+        st.session_state.df_pipa,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="editor_pipa_jiat",
+        column_config={
+            "Diameter (mm)": st.column_config.NumberColumn(help="Diameter luar (OD)"),
+            "C (Hazen)": st.column_config.NumberColumn(help="PVC=150, HDPE=140, GIP=120")
+        }
+    )
+    st.session_state.df_pipa = edited_pipa
     
-    col_pump1, col_pump2 = st.columns(2)
-    with col_pump1:
-        eff_pompa = st.slider("Efisiensi Pompa (%)", 40, 90, 75) / 100
-        sf_head = st.number_input("Safety Factor Head (%)", value=10) / 100
+    # Hitung Head Loss per Segmen
+    total_hf = 0
+    results_pipa = []
+    
+    for idx, row in edited_pipa.iterrows():
+        L = row['Panjang (m)']
+        D_mm = row['Diameter (mm)']
+        C = row['C (Hazen)']
         
-        tdh_safe = tdh * (1 + sf_head)
+        # Konversi ke SI
+        Q_m3s = q_desain / 1000
+        D_m = D_mm / 1000
         
-    with col_pump2:
-        # Power Calculation
-        # P = (rho * g * Q * H) / eff
-        p_kw = (9.81 * q_req_m3s * tdh_safe) / eff_pompa
-        p_hp = p_kw * 1.341
+        # Hazen-Williams Formula
+        if D_m > 0 and C > 0:
+            Hf = 10.67 * L * (Q_m3s**1.852) / ((C**1.852) * (D_m**4.87))
+            
+            # Cek Kecepatan (V)
+            Area = np.pi * (D_m/2)**2
+            V = Q_m3s / Area
+        else:
+            Hf = 0
+            V = 0
+            
+        total_hf += Hf
         
-        st.metric("Total Dynamic Head (TDH)", f"{tdh_safe:.2f} m", f"Termasuk Safety {int(sf_head*100)}%")
-        st.metric("Daya Poros (Power)", f"{p_kw:.2f} kW", f"Setara {p_hp:.2f} HP")
+        results_pipa.append({
+            "Segmen": row['Segmen'],
+            "V (m/s)": round(V, 2),
+            "Head Loss (m)": round(Hf, 3)
+        })
+        
+    st.write("#### 🔍 Hasil Analisa Per Segmen")
+    st.dataframe(pd.DataFrame(results_pipa), use_container_width=True)
 
-# --- 6. VISUALISASI FINAL (GLOBAL) ---
-st.divider()
-st.subheader("📈 Profil Hidrolis Sistem (HGL)")
+# === TAB 4: HASIL & GRAFIK (POMPA) ===
+with tab4:
+    st.subheader("Resume Kebutuhan Pompa (Submersible)")
+    
+    # Hitung Total Head (H)
+    # H_total = H_statis + H_friction + H_minor (10%) + Sisa Tekan
+    h_minor = 0.10 * total_hf
+    sisa_tekan = 10.0 # m (Asumsi untuk outlet keran/sprinkler)
+    
+    h_manometrik = h_statis_total + total_hf + h_minor + sisa_tekan
+    
+    col_res1, col_res2 = st.columns(2)
+    
+    with col_res1:
+        st.markdown("#### 📐 Head Sistem")
+        st.write(f"- Head Statis (Hs): **{h_statis_total:.2f} m**")
+        st.write(f"- Friction Loss (Hf): **{total_hf:.2f} m**")
+        st.write(f"- Minor Loss (10%): **{h_minor:.2f} m**")
+        st.write(f"- Sisa Tekan Outlet: **{sisa_tekan:.2f} m**")
+        st.markdown("---")
+        st.metric("TOTAL HEAD (H)", f"{h_manometrik:.2f} m")
+        
+    with col_res2:
+        st.markdown("#### ⚡ Spesifikasi Pompa")
+        eff = st.slider("Efisiensi Pompa", 0.4, 0.9, 0.75)
+        
+        # Power (kW) = (rho * g * Q * H) / eff
+        # Q dalam m3/s, H dalam m
+        power_kw = (9.81 * (q_desain/1000) * h_manometrik) / eff
+        power_hp = power_kw * 1.341
+        
+        st.metric("Debit Desain (Q)", f"{q_desain:.2f} l/det")
+        st.metric("Daya Poros (P)", f"{power_kw:.2f} kW ({power_hp:.2f} HP)")
+        
+        st.info(f"💡 **Rekomendasi:** Cari pompa Submersible dengan Q ≥ {q_desain:.1f} l/det pada Head {h_manometrik:.0f} m.")
 
-fig, ax = plt.subplots(figsize=(10, 4))
-
-# Koordinat
-x = [0, panjang_pipa]
-y_tanah = [elev_ambil, elev_keluar]
-y_hgl_start = elev_ambil + tdh # Energi di pompa
-y_hgl_end = elev_keluar + tek_sisa # Energi di outlet
-
-# Plot Tanah
-ax.plot(x, y_tanah, 'k-', linewidth=2, label='Elevasi Tanah')
-ax.fill_between(x, y_tanah, min(y_tanah)-5, color='#795548', alpha=0.3)
-
-# Plot HGL
-ax.plot(x, [y_hgl_start, y_hgl_end], 'b--', linewidth=2, label='HGL (Tekanan)')
-
-# Annotasi
-ax.annotate(f'Pompa\n(+{tdh_safe:.1f}m)', xy=(0, elev_ambil), xytext=(20, elev_ambil+10),
-            arrowprops=dict(facecolor='red', shrink=0.05))
-ax.annotate(f'Outlet\n(Sisa {tek_sisa}m)', xy=(panjang_pipa, elev_keluar), xytext=(panjang_pipa-50, elev_keluar+10),
-            arrowprops=dict(facecolor='blue', shrink=0.05))
-
-ax.set_title(f"Profil Memanjang Pipa {d_inch}\" (Material: {jenis_pipa.split()[0]})")
-ax.set_ylabel("Elevasi (m)")
-ax.set_xlabel("Jarak (m)")
-ax.legend()
-ax.grid(True, linestyle=':', alpha=0.5)
-
-st.pyplot(fig)
-
-# Tombol Simpan (Opsional)
-if st.button("💾 Simpan Desain Pompa"):
-    st.toast("Desain Pompa tersimpan!", icon="✅")
+    # Grafik Sederhana
+    st.divider()
+    st.write("#### 📉 Grafik Sistem")
+    
+    fig, ax = plt.subplots(figsize=(8, 3))
+    # Bar Chart Head Breakdown
+    components = ['Statis', 'Gesekan', 'Minor', 'Sisa Tekan']
+    values = [h_statis_total, total_hf, h_minor, sisa_tekan]
+    colors = ['#795548', '#f44336', '#ff9800', '#2196f3']
+    
+    ax.barh(components, values, color=colors)
+    ax.set_xlabel("Head (meter)")
+    ax.set_title("Komponen Head Loss Sistem JIAT")
+    
+    for i, v in enumerate(values):
+        ax.text(v + 0.1, i, f"{v:.1f}m", va='center')
+        
+    st.pyplot(fig)
