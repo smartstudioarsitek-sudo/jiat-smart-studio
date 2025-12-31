@@ -36,25 +36,8 @@ def analisa_gumbel(df_hujan):
     rata = np.mean(data)
     std = np.std(data, ddof=1) # Standar Deviasi Sampel
     
-    # Parameter Gumbel (Yn & Sn - Simplified approximation for code without lookup table)
-    # Pendekatan rumus Yn dan Sn berdasarkan jumlah data (n)
-    # Sumber: Tabel Gumbel (Approximation)
-    yt_dict = {
-        2: 0.3665, 5: 1.4999, 10: 2.2502, 25: 3.1985, 50: 3.9019, 100: 4.6001
-    }
-    
-    # Sn & Yn (Approximation logic or Lookup)
-    # Agar akurat kita pakai rumus regresi sederhana untuk Sn Yn berdasarkan N
-    # Atau pakai nilai standar N=10 s/d 100
-    yn = -0.5772 - np.log(np.log(n/(n-1))) # Approximation basic Euler
-    # Lebih baik pakai Hardcoded tabel umum Indonesia (Subarkah) untuk N=10-20
-    # Kita pakai pendekatan N=15 (Rata-rata data proyek) jika tabel tidak lengkap, 
-    # TAPI agar scientific, kita hitung exact Gumbel Formula: X_T = X_bar + K * S
-    
-    # K = (Yt - Yn) / Sn
-    # Yt = -ln(-ln((T-1)/T))
-    
-    # Tabel Yn Sn Standard (Source: Soewarno)
+    # Parameter Gumbel (Yn & Sn - Pendekatan Tabel Soewarno)
+    # Sumber: Tabel Gumbel Standard untuk N=10 s/d 100
     gumbel_table = {
         10: (0.4952, 0.9497), 11: (0.4996, 0.9676), 12: (0.5035, 0.9833),
         13: (0.5070, 0.9971), 14: (0.5100, 1.0095), 15: (0.5128, 1.0206),
@@ -63,7 +46,7 @@ def analisa_gumbel(df_hujan):
         30: (0.5362, 1.1124), 100: (0.5600, 1.2065)
     }
     
-    # Cari N terdekat
+    # Cari N terdekat (jika N user tidak pas di tabel, ambil yg terdekat)
     closest_n = min(gumbel_table.keys(), key=lambda k: abs(k-n))
     yn_val, sn_val = gumbel_table[closest_n]
     
@@ -94,7 +77,7 @@ def hitung_banjir_all(A, L, H, R24, C):
     q_has = 0.278 * C * i_has * A
     
     # 3. Weduwen
-    t_wed = 0.06628 * (L**0.77) / (S**0.385) # Simplify
+    t_wed = 0.06628 * (L**0.77) / (S**0.385) 
     i_wed = (R24 / 24) * ((24 / t_wed)**(2/3))
     q_wed = 0.278 * C * 1.0 * i_wed * A # Beta=1
     
@@ -151,7 +134,6 @@ if mode_input == "💾 Punya Data Series (10 Thn)":
             
             st.dataframe(df_r_plan.style.format("{:.1f}"), use_container_width=True)
             
-            # Gunakan hasil ini untuk perhitungan banjir
             r_dict = hasil_gumbel
         else:
             st.error("Data kurang! Masukkan minimal 2 tahun data.")
@@ -203,8 +185,9 @@ if r_dict:
     # --- 7. GRAFIK LOGARITMIK (KURVA LENGKUNG FREKUENSI) ---
     st.write("### 📈 Grafik Lengkung Frekuensi Banjir")
     
-    # Prepare data for Altair
-    df_chart = df_rekap.melt('Kala Ulang (T)', measure_vars=['Q Rasional', 'Q Haspers', 'Q Weduwen'], 
+    # [FIX] MENGGUNAKAN 'value_vars' BUKAN 'measure_vars'
+    df_chart = df_rekap.melt(id_vars='Kala Ulang (T)', 
+                             value_vars=['Q Rasional', 'Q Haspers', 'Q Weduwen'], 
                              var_name='Metode', value_name='Debit (m3/s)')
     
     chart = alt.Chart(df_chart).mark_line(point=True).encode(
@@ -223,12 +206,11 @@ if r_dict:
         st.write("#### 💾 Simpan Debit Desain")
         pilih_t = st.selectbox("Pilih Kala Ulang untuk Desain Saluran:", [2, 5, 10, 25, 50, 100], index=3)
         
-        # Ambil nilai Q Max pada T terpilih
         q_selected = df_rekap[df_rekap['Kala Ulang (T)'] == f"{pilih_t} Tahun"]['Q Desain (Max)'].values[0]
         st.caption(f"Debit Banjir Q{pilih_t} = **{q_selected} m³/s** akan disimpan untuk cek keamanan.")
         
     with col_save2:
-        st.write("") # Spacer
+        st.write("") 
         st.write("")
         if st.button("🚀 Simpan Debit Terpilih", type="primary", use_container_width=True):
             st.session_state['debit_banjir_global'] = float(q_selected)
