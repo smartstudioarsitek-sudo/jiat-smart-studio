@@ -27,7 +27,7 @@ st.markdown("""
 # 1. INISIALISASI DATA & LINKING
 # ==========================================
 def init_state():
-    # A. Struktur Data Hujan Internal
+    # A. Buat DataFrame Hujan Kosong (Default)
     if 'df_hujan' not in st.session_state:
         st.session_state['df_hujan'] = pd.DataFrame({
             'Bulan': ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'],
@@ -36,16 +36,24 @@ def init_state():
             'Kc': [0.8]*12
         })
 
-    # B. LOGIKA LINKING (Auto-Fill Table)
-    if 'data_eto_transfer' in st.session_state and len(st.session_state['data_eto_transfer']) == 12:
-        st.session_state['df_hujan']['ETo (mm/hari)'] = st.session_state['data_eto_transfer']
+    # B. LOGIKA LINKING (Tarik Data dari Modul Lain)
+    
+    # 1. Ambil ETo dari Modul 1 (Klimatologi)
+    if 'data_eto_transfer' in st.session_state:
+        data_eto = st.session_state['data_eto_transfer']
+        # Pastikan jumlah datanya 12 bulan
+        if len(data_eto) == 12:
+            st.session_state['df_hujan']['ETo (mm/hari)'] = data_eto
 
+    # 2. Ambil Curah Hujan dari Modul 3 (FJ Mock)
     if 'df_mock' in st.session_state:
         try:
+            # Coba ambil kolom hujan dari tabel Mock
             hujan_mock = st.session_state['df_mock']['Curah Hujan (mm)'].tolist()
             if len(hujan_mock) == 12:
                 st.session_state['df_hujan']['CH (mm)'] = hujan_mock
-        except: pass
+        except:
+            pass # Jika gagal, biarkan 0
 
     # C. Data Pipa Default
     if 'df_pipa' not in st.session_state:
@@ -68,6 +76,7 @@ def init_state():
     for key, val in defaults.items():
         if key not in st.session_state: st.session_state[key] = val
 
+# Jalankan Inisialisasi
 init_state()
 
 # ==========================================
@@ -76,6 +85,7 @@ init_state()
 with st.sidebar:
     st.title("📂 File Manager")
     
+    # Fitur Save/Load JSON
     clean_params = {k:v for k,v in st.session_state.items() if not isinstance(v, pd.DataFrame)}
     current_data = {
         'params': clean_params,
@@ -85,7 +95,7 @@ with st.sidebar:
     
     c_dl, c_up = st.columns(2)
     c_dl.download_button("💾 Save", json.dumps(current_data, indent=2), "proyek_jiat.json", "application/json")
-    uploaded = st.file_uploader("📂 Open Project", type=["json"], label_visibility="collapsed")
+    uploaded = st.file_uploader("📂 Open", type=["json"], label_visibility="collapsed")
     if uploaded:
         try:
             data = json.load(uploaded)
@@ -93,7 +103,7 @@ with st.sidebar:
             st.session_state['df_hujan'] = pd.DataFrame(data['hujan'])
             st.session_state['df_pipa'] = pd.DataFrame(data['pipa'])
             st.toast("Proyek berhasil dimuat!", icon="✅")
-        except: st.error("File korup/salah format!")
+        except: st.error("File korup!")
 
     st.markdown("---")
     st.header("1. Input Parameter")
@@ -103,7 +113,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.session_state['luas_ha'] = st.number_input("Luas Layanan (Ha)", value=st.session_state['luas_ha'])
-    st.session_state['head_statis_m'] = st.number_input("Head Statis (m)", value=st.session_state['head_statis_m'], help="Beda tinggi Elevasi Akhir - Awal")
+    st.session_state['head_statis_m'] = st.number_input("Head Statis (m)", value=st.session_state['head_statis_m'])
     
     with st.expander("⛰️ Parameter Sumur (Geologi)", expanded=False):
         st.session_state['tebal_akuifer_m'] = st.number_input("Tebal Akuifer (m)", value=st.session_state['tebal_akuifer_m'])
@@ -123,7 +133,7 @@ st.markdown("---")
 # 4. ENGINE HITUNGAN
 # ==========================================
 
-# --- A. Hitung Supply ---
+# --- A. Hitung Supply (Air Tanah) ---
 T = st.session_state['k_perm'] * st.session_state['tebal_akuifer_m']
 k_detik = st.session_state['k_perm'] / 86400
 R = 3000 * st.session_state['drawdown_izin_m'] * math.sqrt(k_detik)
@@ -132,7 +142,8 @@ if R <= st.session_state['radius_m']: R = st.session_state['radius_m'] + 10
 q_teoritis = ((2 * math.pi * T * st.session_state['drawdown_izin_m']) / math.log(R/st.session_state['radius_m'])) * 1000 / 86400
 q_safe = q_teoritis * (st.session_state['safety_factor'] / 100)
 
-# --- B. Hitung Demand ---
+# --- B. Hitung Demand (Kebutuhan Air) ---
+# Cek NFR Link (Prioritas Utama)
 link_nfr = False
 nfr_linked_val = 0
 
@@ -141,9 +152,12 @@ if 'nfr_global' in st.session_state and st.session_state['nfr_global'] > 0:
     nfr_linked_val = st.session_state['nfr_global']
     q_desain = nfr_linked_val * st.session_state['luas_ha']
     sumber_nfr = f"🔗 Terhubung Modul Pola Tanam ({nfr_linked_val:.3f} l/s/ha)"
+    
+    # Buat tabel dummy untuk visualisasi grafik saja
     df_calc = st.session_state['df_hujan'].copy()
-    df_calc['Q_Req'] = q_desain
+    df_calc['Q_Req'] = q_desain 
 else:
+    # Hitung Manual dari Tabel Internal
     df_calc = st.session_state['df_hujan'].copy()
     df_calc['Re'] = df_calc['CH (mm)'].apply(lambda x: (0.8 * x)/30 if x < 250 else (125 + 0.1*(x-250))/30)
     df_calc['ETc'] = df_calc['ETo (mm/hari)'] * df_calc['Kc']
@@ -197,11 +211,14 @@ tab1, tab2, tab3, tab4 = st.tabs(["📝 INPUT DATA", "💧 KEBUTUHAN AIR", "⚙�
 with tab1:
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("A. Data Klimatologi")
-        if link_nfr:
-            st.success(f"✅ **NFR Otomatis:** {nfr_linked_val:.3f} l/s/ha")
-        else:
-            st.info("💡 **NFR Manual**")
+        st.subheader("A. Data Hujan & ETo")
+        
+        # Info Koneksi Data
+        if 'data_eto_transfer' in st.session_state:
+            st.success("✅ ETo terhubung dengan Modul Klimatologi.")
+        if 'df_mock' in st.session_state:
+            st.success("✅ Curah Hujan terhubung dengan Modul Mock.")
+            
         st.data_editor(st.session_state['df_hujan'], key='editor_hujan', num_rows="dynamic", use_container_width=True,
                        on_change=lambda: st.session_state.update({'df_hujan': st.session_state.editor_hujan}))
     with col2:
@@ -232,14 +249,14 @@ with tab2:
 
     if not link_nfr:
         st.write("#### 📅 Detail Perhitungan Bulanan (Manual)")
-        # [FIX UTAMA] Filter kolom numerik saja agar format "{:.2f}" tidak error kena teks
+        # [SOLUSI ANTI-ERROR]: Filter hanya kolom angka untuk diformat
         numeric_cols = df_calc.select_dtypes(include=[np.number]).columns
-        st.dataframe(df_calc.set_index('Bulan').style.format("{:.2f}", subset=numeric_cols), use_container_width=True)
+        st.dataframe(df_calc.style.format("{:.2f}", subset=numeric_cols), use_container_width=True)
 
 # === TAB 3: PIPA ===
 with tab3:
     st.subheader("Analisa Hidrolis Pipa")
-    # [FIX] Filter kolom numerik untuk pipa juga
+    # [SOLUSI ANTI-ERROR]: Filter kolom angka
     num_cols_pipa = df_pipa_res.select_dtypes(include=[np.number]).columns
     st.dataframe(df_pipa_res.style.format("{:.3f}", subset=num_cols_pipa), use_container_width=True)
     
