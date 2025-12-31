@@ -3,143 +3,131 @@ import streamlit.components.v1 as components
 
 # --- 1. KONFIGURASI HALAMAN UTAMA ---
 st.set_page_config(
-    page_title="SmartStudio - Water Engineering",
+    page_title="SmartStudio | Water Engineering",
     layout="wide",
     page_icon="💧",
     initial_sidebar_state="expanded"
 )
 
-# --- 2. GLOBAL CSS (UNTUK MEMPERCANTIK & PRINT) ---
+# --- 2. STYLE CSS (MODERN & CLEAN) ---
 st.markdown("""
 <style>
-    /* A. STYLE UMUM */
-    .main { background-color: #f8f9fa; }
-    h1, h2, h3 { font-family: 'Segoe UI', sans-serif; color: #0f172a; }
-    
-    /* B. HERO SECTION (BANNER ATAS) */
-    .hero-container {
-        background: linear-gradient(135deg, #0288d1 0%, #26c6da 100%);
-        padding: 40px;
-        border-radius: 15px;
+    /* A. HERO SECTION */
+    .hero-box {
+        background: linear-gradient(120deg, #0288d1 0%, #26c6da 100%);
+        padding: 30px;
+        border-radius: 12px;
         color: white;
         text-align: center;
-        margin-bottom: 30px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        margin-bottom: 25px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    .hero-title { font-size: 3rem; font-weight: 800; margin: 0; }
-    .hero-subtitle { font-size: 1.2rem; opacity: 0.9; margin-top: 10px; }
+    .hero-title { font-size: 2.5rem; font-weight: 700; margin: 0; }
+    .hero-sub { font-size: 1.1rem; opacity: 0.9; margin-top: 5px; font-weight: 300; }
 
-    /* C. STYLE KARTU MENU (CARD) */
-    .stButton > button {
-        width: 100%;
+    /* B. CARD STYLING */
+    div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column;"] > div[data-testid="stVerticalBlock"] {
+        background-color: white;
+        padding: 20px;
         border-radius: 10px;
-        height: 3em;
+        border: 1px solid #e0e0e0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        height: 100%;
+        transition: transform 0.2s;
+    }
+    div[data-testid="stVerticalBlock"]:hover {
+        border-color: #0288d1;
     }
     
-    /* D. CSS KHUSUS PRINT (Agar Sidebar Hilang saat Print) */
+    /* C. HEADER SECTIONS */
+    .section-header {
+        font-size: 1.3rem;
+        font-weight: 600;
+        color: #37474f;
+        margin-top: 10px;
+        margin-bottom: 15px;
+        border-left: 5px solid #0288d1;
+        padding-left: 10px;
+    }
+
+    /* D. HIDE SIDEBAR ON PRINT */
     @media print {
         [data-testid="stSidebar"] { display: none !important; }
-        [data-testid="stHeader"] { display: none !important; }
-        .block-container { padding-top: 0 !important; }
         .no-print { display: none !important; }
-        /* Paksa background warna tercetak */
-        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. JAVASCRIPT PRINT TRIGGER ---
-# Fungsi untuk tombol print yang bisa dipanggil di mana saja
+# --- 3. FUNGSI TOMBOL CETAK ---
 def tombol_cetak():
-    # Membuat tombol HTML custom yang memicu window.print()
     components.html(
         """
-        <style>
-        .btn-print {
-            background-color: #4CAF50; border: none; color: white; 
-            padding: 10px 24px; text-align: center; text-decoration: none;
-            display: inline-block; font-size: 16px; margin: 4px 2px; 
-            cursor: pointer; border-radius: 8px; font-family: sans-serif;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2); transition: 0.3s;
-        }
-        .btn-print:hover { background-color: #45a049; }
-        </style>
-        <button class="btn-print" onclick="window.print()">🖨️ Cetak / Simpan PDF</button>
-        """,
-        height=60
+        <button onclick="window.print()" style="
+            background-color: #4CAF50; color: white; border: none; 
+            padding: 8px 16px; border-radius: 4px; cursor: pointer; 
+            font-size: 14px; font-family: sans-serif; font-weight: bold;">
+            🖨️ Cetak Halaman / Save PDF
+        </button>
+        """, 
+        height=45
     )
 
-# --- 4. HEADER HERO SECTION ---
+# --- 4. HERO BANNER ---
 st.markdown("""
-<div class="hero-container">
+<div class="hero-box">
     <div class="hero-title">💧 SmartStudio</div>
-    <div class="hero-subtitle">Integrated Water Resources & Irrigation System Planning</div>
+    <div class="hero-sub">Sistem Perencanaan Irigasi & Sumber Daya Air Terpadu</div>
 </div>
 """, unsafe_allow_html=True)
 
-# --- 5. DASHBOARD GRID MENU ---
+# --- 5. GRID MENU ---
 
-# --- BARIS 1: DATA DASAR ---
-st.write("### ☀️ 1. Data & Agronomi")
-st.write("Langkah awal: Siapkan data klimatologi dan tentukan kebutuhan air tanaman.")
+# === KELOMPOK 1: DATA & AGRONOMI ===
+st.markdown('<div class="section-header">1. Data & Agronomi</div>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 
 with col1:
-    with st.container(border=True):
-        st.markdown("#### 🌦️ Modul 1: Klimatologi")
-        st.caption("Analisa Evapotranspirasi (ETo) Metode Penman-Monteith.")
-        # Gunakan st.page_link agar transisi INSTAN (tanpa reload berat)
-        # Pastikan nama file di folder pages sesuai (misal: pages/1_Klimatologi.py)
-        st.page_link("pages/1_Klimatologi.py", label="Buka Modul Klimatologi", icon="🌦️")
+    st.subheader("🌦️ Modul Klimatologi")
+    st.caption("Analisa Evapotranspirasi (ETo) Penman-Monteith.")
+    st.page_link("pages/1_Klimatologi.py", label="Buka Modul Klimatologi", icon="➡️", use_container_width=True)
 
 with col2:
-    with st.container(border=True):
-        st.markdown("#### 🌾 Modul 2: Pola Tanam")
-        st.caption("Perhitungan Kebutuhan Air Irigasi (NFR) Padi & Palawija.")
-        st.page_link("pages/2_Pola_Tanam.py", label="Buka Modul Pola Tanam", icon="🌾")
+    st.subheader("🌾 Modul Pola Tanam")
+    st.caption("Perhitungan Kebutuhan Air Irigasi (NFR).")
+    st.page_link("pages/2_Pola_Tanam.py", label="Buka Modul Pola Tanam", icon="➡️", use_container_width=True)
 
-# --- BARIS 2: ANALISA HIDROLOGI ---
-st.divider()
-st.write("### 🌊 2. Analisa Hidrologi")
-st.write("Analisa ketersediaan air sungai dan keamanan terhadap banjir.")
+# === KELOMPOK 2: ANALISA HIDROLOGI ===
+st.markdown('<div class="section-header">2. Analisa Hidrologi</div>', unsafe_allow_html=True)
 col3, col4 = st.columns(2)
 
 with col3:
-    with st.container(border=True):
-        st.markdown("#### 📉 Modul 3: Ketersediaan Air")
-        st.caption("Analisa Debit Andalan Sungai Metode FJ. Mock.")
-        st.page_link("pages/3_FJ_Mock.py", label="Buka Modul FJ Mock", icon="📉")
+    st.subheader("📉 Modul FJ Mock")
+    st.caption("Analisa Ketersediaan Air (Debit Andalan).")
+    st.page_link("pages/3_FJ_Mock.py", label="Buka Modul FJ Mock", icon="➡️", use_container_width=True)
 
 with col4:
-    with st.container(border=True):
-        st.markdown("#### ⛈️ Modul 6: Analisa Banjir")
-        st.caption("Analisa Debit Banjir Rencana (Rasional, Haspers, Weduwen).")
-        st.page_link("pages/6_Analisa_Banjir.py", label="Buka Modul Banjir", icon="⛈️")
+    st.subheader("⛈️ Modul Analisa Banjir")
+    st.caption("Analisa Debit Banjir Rencana (Metode Statistik).")
+    st.page_link("pages/6_Analisa_Banjir.py", label="Buka Modul Banjir", icon="➡️", use_container_width=True)
 
-# --- BARIS 3: DESAIN INFRASTRUKTUR ---
-st.divider()
-st.write("### 🏗️ 3. Desain Hidrolika")
-st.write("Perencanaan dimensi saluran dan jaringan perpipaan.")
+# === KELOMPOK 3: DESAIN INFRASTRUKTUR ===
+st.markdown('<div class="section-header">3. Desain Hidrolika</div>', unsafe_allow_html=True)
 col5, col6 = st.columns(2)
 
 with col5:
-    with st.container(border=True):
-        st.markdown("#### 🏞️ Modul 4: Saluran Terbuka")
-        st.caption("Desain Dimensi Saluran Irigasi (Trarapesium/Persegi).")
-        st.page_link("pages/4_Desain_Saluran.py", label="Buka Desain Saluran", icon="🏞️")
+    st.subheader("🏞️ Modul Desain Saluran")
+    st.caption("Dimensi Saluran Terbuka (Gravitasi).")
+    st.page_link("pages/4_Desain_Saluran.py", label="Buka Desain Saluran", icon="➡️", use_container_width=True)
 
 with col6:
-    with st.container(border=True):
-        st.markdown("#### 🚰 Modul 5: Pipa & Pompa (JIAT)")
-        st.caption("Desain Jaringan Pipa Tekan, Head Loss & Pompa.")
-        st.page_link("pages/5_Irigasi_Pipa.py", label="Buka Irigasi Pipa", icon="🚰")
+    st.subheader("🚰 Modul Irigasi Pipa")
+    st.caption("Jaringan Pipa Tekan & Pompa (JIAT).")
+    st.page_link("pages/5_Irigasi_Pipa.py", label="Buka Irigasi Pipa", icon="➡️", use_container_width=True)
 
-# --- 6. FOOTER & PRINT BUTTON ---
+# --- 6. FOOTER ---
 st.divider()
-c_print, c_copy = st.columns([1, 4])
+c_print, c_text = st.columns([1, 4])
 with c_print:
-    st.write("**Menu Cepat:**")
     tombol_cetak()
-with c_copy:
-    st.caption("© 2025 SmartStudio | Water Engineering Division")
-    st.caption("Tips: Gunakan tombol cetak di atas untuk menyimpan laporan ini sebagai PDF.")
+with c_text:
+    st.caption("SmartStudio v2.0 | Integrated Water Resources Management System")
