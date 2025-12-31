@@ -152,6 +152,10 @@ if 'nfr_global' in st.session_state and st.session_state['nfr_global'] > 0:
     nfr_linked_val = st.session_state['nfr_global'] # l/s/ha
     q_desain = nfr_linked_val * st.session_state['luas_ha']
     sumber_nfr = f"🔗 Terhubung Modul Pola Tanam ({nfr_linked_val:.3f} l/s/ha)"
+    
+    # Hitung data dummy bulanan untuk grafik (flat line)
+    df_calc = st.session_state['df_hujan'].copy()
+    df_calc['Q_Req'] = q_desain # Flat demand
 else:
     # Hitung Manual dari Tabel Internal
     df_calc = st.session_state['df_hujan'].copy()
@@ -312,12 +316,10 @@ with tab4:
             'Meter': [st.session_state['head_statis_m'], hf_total*1.1, 0] # Sisa tekan asumsi masuk head statis/pompa
         })
         
-        # Grafik Kebutuhan Air (Jika Manual)
-        if not link_nfr:
-            base = alt.Chart(df_calc).encode(x='Bulan')
-            bar = base.mark_bar().encode(y='Q_Req')
-            line = base.mark_rule(color='red').encode(y=alt.datum(q_safe))
-            st.altair_chart((bar + line).interactive(), use_container_width=True)
-            st.caption("Grafik Kebutuhan Air Bulanan (Biru) vs Kapasitas Sumur (Merah)")
-        else:
-            st.info("Grafik bulanan tidak tersedia karena menggunakan Single Value NFR dari Modul Pola Tanam.")
+        # Grafik Kebutuhan Air
+        base = alt.Chart(df_calc).encode(x='Bulan')
+        bar = base.mark_bar().encode(y=alt.Y('Q_Req', title='Debit Kebutuhan (l/s)'), tooltip=['Q_Req'])
+        line = base.mark_rule(color='red').encode(y=alt.datum(q_safe), tooltip=alt.Tooltip(value=q_safe, title="Limit Sumur"))
+        
+        st.altair_chart((bar + line).interactive(), use_container_width=True)
+        st.caption("Grafik Kebutuhan Air (Biru) vs Kapasitas Sumur (Merah)")
