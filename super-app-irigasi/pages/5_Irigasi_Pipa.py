@@ -18,7 +18,8 @@ st.markdown("""
         * {-webkit-print-color-adjust: exact !important; print-color-adjust: exact !important;}
     }
     .box-hasil {padding: 15px; background-color: #f8f9fa; border: 1px solid #ccc; border-radius: 5px; margin-bottom: 10px;}
-    .tooltip {font-size: 12px; color: #555; font-style: italic;}
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .stTabs [data-baseweb="tab"] { font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -26,7 +27,7 @@ st.markdown("""
 # 1. INISIALISASI DATA & LINKING
 # ==========================================
 def init_state():
-    # A. Siapkan Struktur Data Default
+    # A. Struktur Data Hujan Internal (Untuk Grafik Bulanan)
     if 'df_hujan' not in st.session_state:
         st.session_state['df_hujan'] = pd.DataFrame({
             'Bulan': ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'],
@@ -35,246 +36,288 @@ def init_state():
             'Kc': [0.8]*12
         })
 
-    # B. LOGIKA LINKING DATA (Auto-Update dari Modul Lain)
-    # 1. Ambil ETo dari Modul Klimatologi
-    status_eto = "⚠️ Manual"
-    if 'data_eto_transfer' in st.session_state:
-        # Pastikan panjang data sama (12 bulan)
-        if len(st.session_state['data_eto_transfer']) == 12:
-            st.session_state['df_hujan']['ETo (mm/hari)'] = st.session_state['data_eto_transfer']
-            status_eto = "✅ Terhubung Modul Klimatologi"
+    # B. LOGIKA LINKING (Auto-Fill Table)
+    # 1. Ambil ETo dari Klimatologi (Opsional, untuk melengkapi tabel)
+    if 'data_eto_transfer' in st.session_state and len(st.session_state['data_eto_transfer']) == 12:
+        st.session_state['df_hujan']['ETo (mm/hari)'] = st.session_state['data_eto_transfer']
 
-    # 2. Ambil Curah Hujan dari Modul Mock (Jika ada)
-    status_hujan = "⚠️ Manual"
+    # 2. Ambil Hujan dari Mock (Opsional)
     if 'df_mock' in st.session_state:
         try:
-            # Mengambil kolom hujan dari Mock
             hujan_mock = st.session_state['df_mock']['Curah Hujan (mm)'].tolist()
             if len(hujan_mock) == 12:
                 st.session_state['df_hujan']['CH (mm)'] = hujan_mock
-                status_hujan = "✅ Terhubung Modul Mock"
-        except:
-            pass
-
-    # Simpan status koneksi untuk ditampilkan di UI
-    st.session_state['status_koneksi'] = f"{status_hujan} | {status_eto}"
+        except: pass
 
     # C. Data Pipa Default
     if 'df_pipa' not in st.session_state:
         st.session_state['df_pipa'] = pd.DataFrame({
-            'Segmen': ['S1', 'S2', 'S3'],
-            'Panjang (m)': [5, 102, 43],
-            'Diameter (mm)': [75, 75, 75],
-            'C (Hazen)': [140, 140, 140],
-            'Debit (L/s)': [1.96, 1.05, 0.50]
+            'Segmen': ['Jalur Utama', 'Sub-S1', 'Sub-S2'],
+            'Panjang (m)': [500, 200, 150],
+            'Diameter (mm)': [90, 63, 63],
+            'C (Hazen)': [150, 150, 150],
+            'Debit (L/s)': [5.0, 2.5, 2.5]
         })
     
     # D. Parameter Default
     defaults = {
         'nama_proyek': "JIAT Lampung Timur", 'lokasi': "Desa Hargomulyo", 'tahun': "2025",
-        'luas_ha': 2.0, 'perkolasi': 2.0, 'efisiensi': 65,
-        'kedalaman_m': 95, 'head_statis_m': 63,
-        'drawdown_izin_m': 10, 'radius_m': 0.15, 'safety_factor': 80,
-        'tebal_akuifer_m': 20, 'k_perm': 4.32
+        'luas_ha': 5.0, 'perkolasi': 2.0, 'efisiensi': 80,
+        'head_statis_m': 25, 'safety_factor': 80,
+        'tebal_akuifer_m': 20, 'k_perm': 4.32, 
+        'drawdown_izin_m': 10, 'radius_m': 0.15
     }
     for key, val in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = val
+        if key not in st.session_state: st.session_state[key] = val
 
 init_state()
 
 # ==========================================
-# 2. SIDEBAR (INPUT & FILE MANAGER)
+# 2. SIDEBAR (FILE MANAGER & PARAMETER)
 # ==========================================
 with st.sidebar:
     st.title("📂 File Manager")
     
-    clean_params = {}
-    for key, value in st.session_state.items():
-        if not isinstance(value, pd.DataFrame): 
-            clean_params[key] = value
-
+    # Tombol Save/Load JSON
+    clean_params = {k:v for k,v in st.session_state.items() if not isinstance(v, pd.DataFrame)}
     current_data = {
         'params': clean_params,
         'hujan': st.session_state['df_hujan'].to_dict(orient='records'),
         'pipa': st.session_state['df_pipa'].to_dict(orient='records')
     }
     
-    st.download_button(
-        "💾 Simpan Proyek (Save)", json.dumps(current_data, indent=2), "proyek_jiat.json", "application/json",
-        help="Simpan pekerjaan ke file JSON."
-    )
-    
-    uploaded = st.file_uploader("📂 Buka Proyek (Open)", type=["json"])
+    c_dl, c_up = st.columns(2)
+    c_dl.download_button("💾 Save", json.dumps(current_data, indent=2), "proyek_jiat.json", "application/json")
+    uploaded = st.file_uploader("📂 Open Project", type=["json"], label_visibility="collapsed")
     if uploaded:
         try:
             data = json.load(uploaded)
             for k, v in data['params'].items(): st.session_state[k] = v
             st.session_state['df_hujan'] = pd.DataFrame(data['hujan'])
             st.session_state['df_pipa'] = pd.DataFrame(data['pipa'])
-            st.success("Data berhasil dimuat!")
-        except: st.error("File rusak!")
+            st.toast("Proyek berhasil dimuat!", icon="✅")
+        except: st.error("File korup/salah format!")
 
     st.markdown("---")
     st.header("1. Input Parameter")
     
     st.session_state['nama_proyek'] = st.text_input("Nama Proyek", st.session_state['nama_proyek'])
     st.session_state['lokasi'] = st.text_input("Lokasi", st.session_state['lokasi'])
-    st.session_state['tahun'] = st.text_input("Tahun", st.session_state['tahun'])
     
     st.markdown("---")
+    # Luas Lahan
     st.session_state['luas_ha'] = st.number_input("Luas Layanan (Ha)", value=st.session_state['luas_ha'])
     
-    with st.expander("🌊 Faktor Kebutuhan", expanded=True):
-        st.session_state['perkolasi'] = st.number_input("Perkolasi (mm)", value=st.session_state['perkolasi'])
-        st.session_state['efisiensi'] = st.number_input("Efisiensi (%)", value=st.session_state['efisiensi'])
+    # Parameter Head
+    st.session_state['head_statis_m'] = st.number_input("Head Statis (m)", value=st.session_state['head_statis_m'], help="Beda tinggi Elevasi Akhir - Awal")
     
-    st.markdown("---")
-    st.session_state['head_statis_m'] = st.number_input("Head Statis (m)", value=st.session_state['head_statis_m'])
-    
-    with st.expander("⛰️ Faktor Geologi", expanded=True):
-        st.session_state['safety_factor'] = st.number_input("Safety Factor (%)", value=st.session_state['safety_factor'])
+    # Parameter Geologi (Supply)
+    with st.expander("⛰️ Parameter Sumur (Geologi)", expanded=False):
         st.session_state['tebal_akuifer_m'] = st.number_input("Tebal Akuifer (m)", value=st.session_state['tebal_akuifer_m'])
-        st.session_state['k_perm'] = st.number_input("Permeabilitas K", value=st.session_state['k_perm'])
+        st.session_state['k_perm'] = st.number_input("Permeabilitas K (m/hari)", value=st.session_state['k_perm'])
         st.session_state['drawdown_izin_m'] = st.number_input("Drawdown Izin (m)", value=st.session_state['drawdown_izin_m'])
         st.session_state['radius_m'] = st.number_input("Jari-jari Sumur (m)", value=st.session_state['radius_m'])
+        st.session_state['safety_factor'] = st.number_input("Safety Factor Debit (%)", value=st.session_state['safety_factor'])
 
 # ==========================================
-# 3. KONTEN UTAMA
+# 3. HEADER & JUDUL
 # ==========================================
 st.title(f"💧 {st.session_state['nama_proyek']}")
-st.caption(f"**Lokasi:** {st.session_state['lokasi']} | **Tahun:** {st.session_state['tahun']} | **Status Data:** {st.session_state.get('status_koneksi', '-')}")
+st.caption(f"📍 {st.session_state['lokasi']} | 🗓️ Tahun {st.session_state['tahun']}")
 st.markdown("---")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📝 INPUT DATA", "💧 KEBUTUHAN AIR", "⚙️ PIPA & HIDROLIKA", "📊 HASIL & GRAFIK"])
-
-# --- TAB 1: INPUT TABEL ---
-with tab1:
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("A. Data Hujan & ETo")
-        
-        # Tampilkan Info Link
-        if "Terhubung" in st.session_state.get('status_koneksi', ''):
-            st.info("💡 Kolom **CH (mm)** dan **ETo** otomatis terisi dari Modul Klimatologi & Mock.")
-        else:
-            st.warning("⚠️ Data belum terhubung. Silakan input manual atau jalankan Modul 1 & 3 terlebih dahulu.")
-            
-        st.data_editor(
-            st.session_state['df_hujan'], 
-            key='editor_hujan', 
-            num_rows="dynamic", 
-            use_container_width=True,
-            column_config={
-                "ETo (mm/hari)": st.column_config.NumberColumn(format="%.2f", help="Otomatis dari Modul Klimatologi jika tersedia")
-            },
-            on_change=lambda: st.session_state.update({'df_hujan': st.session_state.editor_hujan})
-        )
-        
-    with c2:
-        st.subheader("B. Jaringan Pipa")
-        st.data_editor(st.session_state['df_pipa'], key='editor_pipa', num_rows="dynamic", use_container_width=True, on_change=lambda: st.session_state.update({'df_pipa': st.session_state.editor_pipa}))
-        with st.expander("ℹ️ Keterangan"): st.caption("Urutkan dari Sumur ke Lahan.")
-
 # ==========================================
-# 4. ENGINE HITUNGAN (GLOBAL)
+# 4. ENGINE HITUNGAN (CORE)
 # ==========================================
-# 1. Demand (Perhitungan NFR di sini, menggunakan Data Link)
-df_calc = st.session_state['df_hujan'].copy()
-df_calc['Re (mm)'] = df_calc['CH (mm)'].apply(lambda x: (0.8 * x)/30 if x < 250 else (125 + 0.1*(x-250))/30)
-df_calc['ETc (mm)'] = df_calc['ETo (mm/hari)'] * df_calc['Kc']
-df_calc['NFR (mm)'] = (df_calc['ETc (mm)'] + st.session_state['perkolasi'] - df_calc['Re (mm)']).clip(lower=0)
-eff = st.session_state['efisiensi'] / 100
-df_calc['Q Req (L/s)'] = (df_calc['NFR (mm)'] * 0.1157 * st.session_state['luas_ha']) / eff
 
-q_desain = df_calc['Q Req (L/s)'].max() # Mengambil Q Terbesar (Puncak)
-bln_puncak = df_calc.loc[df_calc['Q Req (L/s)'].idxmax(), 'Bulan']
-
-# 2. Supply (Geologi)
-T = st.session_state['k_perm'] * st.session_state['tebal_akuifer_m']
+# --- A. Hitung Supply (Ketersediaan Air Tanah) ---
+# Rumus Pendekatan Cooper-Jacob / Theis untuk Safe Yield Sederhana
+T = st.session_state['k_perm'] * st.session_state['tebal_akuifer_m'] # Transmisivitas
 k_detik = st.session_state['k_perm'] / 86400
-R = 3000 * st.session_state['drawdown_izin_m'] * math.sqrt(k_detik)
+R = 3000 * st.session_state['drawdown_izin_m'] * math.sqrt(k_detik) # Jari-jari pengaruh
 if R <= st.session_state['radius_m']: R = st.session_state['radius_m'] + 10
+
+# Q Teoritis (L/s)
 q_teoritis = ((2 * math.pi * T * st.session_state['drawdown_izin_m']) / math.log(R/st.session_state['radius_m'])) * 1000 / 86400
+# Q Safe Yield (L/s)
 q_safe = q_teoritis * (st.session_state['safety_factor'] / 100)
 
-# 3. Pipa
+# --- B. Hitung Demand (Kebutuhan Air) ---
+# Cek apakah ada data LINK dari Modul Pola Tanam?
+link_nfr = False
+nfr_linked_val = 0
+
+if 'nfr_global' in st.session_state and st.session_state['nfr_global'] > 0:
+    link_nfr = True
+    nfr_linked_val = st.session_state['nfr_global'] # l/s/ha
+    q_desain = nfr_linked_val * st.session_state['luas_ha']
+    sumber_nfr = f"🔗 Terhubung Modul Pola Tanam ({nfr_linked_val:.3f} l/s/ha)"
+else:
+    # Hitung Manual dari Tabel Internal
+    df_calc = st.session_state['df_hujan'].copy()
+    # Re (Hujan Efektif padi/palawija simplifikasi)
+    df_calc['Re'] = df_calc['CH (mm)'].apply(lambda x: (0.8 * x)/30 if x < 250 else (125 + 0.1*(x-250))/30)
+    df_calc['ETc'] = df_calc['ETo (mm/hari)'] * df_calc['Kc']
+    df_calc['NFR_mm'] = (df_calc['ETc'] + st.session_state['perkolasi'] - df_calc['Re']).clip(lower=0)
+    
+    # Q Req per bulan
+    eff_dec = st.session_state['efisiensi'] / 100
+    df_calc['Q_Req'] = (df_calc['NFR_mm'] * 0.1157 * st.session_state['luas_ha']) / eff_dec
+    
+    q_desain = df_calc['Q_Req'].max()
+    sumber_nfr = "✏️ Perhitungan Internal (Tabel)"
+
+# --- C. Hitung Hidrolika Pipa ---
 df_pipa_res = st.session_state['df_pipa'].copy()
 hf_total = 0
 v_list, hf_list = [], []
+
 for i, row in df_pipa_res.iterrows():
-    L, Dm, Qm3, C = row['Panjang (m)'], row['Diameter (mm)']/1000, row['Debit (L/s)']/1000, row['C (Hazen)']
-    Area = 0.25 * 3.14 * (Dm**2)
-    V = Qm3/Area if Area > 0 else 0
-    hf = 10.67 * L * (Qm3**1.852) / ((C**1.852)*(Dm**4.87)) if Qm3 > 0 else 0
-    v_list.append(V); hf_list.append(hf); hf_total += hf
+    L = row['Panjang (m)']
+    D_mm = row['Diameter (mm)']
+    Q_ls = row['Debit (L/s)']
+    C = row['C (Hazen)']
+    
+    # Konversi
+    D_m = D_mm / 1000
+    Q_m3s = Q_ls / 1000
+    
+    if D_m > 0 and Q_m3s > 0:
+        Area = 0.25 * math.pi * (D_m**2)
+        V = Q_m3s / Area
+        # Hazen Williams
+        Hf = 10.67 * L * (Q_m3s**1.852) / ((C**1.852)*(D_m**4.87))
+    else:
+        V = 0
+        Hf = 0
+        
+    v_list.append(V)
+    hf_list.append(Hf)
+    hf_total += Hf
 
 df_pipa_res['V (m/s)'] = v_list
 df_pipa_res['Hf (m)'] = hf_list
-head_total = st.session_state['head_statis_m'] + hf_total + (0.1 * hf_total)
 
-# Daya
-daya_kw = (9.81 * (q_desain/1000) * head_total) / 0.70  
-daya_watt = (daya_kw / 0.85) * 1000                     
+# --- D. Kebutuhan Pompa ---
+head_total = st.session_state['head_statis_m'] + hf_total + (0.1 * hf_total) # +10% minor loss
+daya_kw = (9.81 * (q_desain/1000) * head_total) / 0.70 # Eff 70%
+daya_hp = daya_kw * 1.341
 
 # ==========================================
-# 5. OUTPUT
+# 5. TAMPILAN TABS
 # ==========================================
+tab1, tab2, tab3, tab4 = st.tabs(["📝 INPUT DATA", "💧 KEBUTUHAN AIR", "⚙️ PIPA & HIDROLIKA", "📊 HASIL & LAPORAN"])
 
-# --- TAB 2: KEBUTUHAN ---
+# === TAB 1: INPUT ===
+with tab1:
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("A. Data Klimatologi")
+        if link_nfr:
+            st.success(f"✅ **NFR Otomatis:** Menggunakan data dari Modul Pola Tanam ({nfr_linked_val:.3f} l/s/ha). Tabel di bawah hanya referensi.")
+        else:
+            st.info("💡 **NFR Manual:** Edit data di bawah ini untuk menghitung kebutuhan air.")
+            
+        st.data_editor(st.session_state['df_hujan'], key='editor_hujan', num_rows="dynamic", use_container_width=True,
+                       on_change=lambda: st.session_state.update({'df_hujan': st.session_state.editor_hujan}))
+    with col2:
+        st.subheader("B. Segmen Pipa")
+        st.data_editor(st.session_state['df_pipa'], key='editor_pipa', num_rows="dynamic", use_container_width=True,
+                       on_change=lambda: st.session_state.update({'df_pipa': st.session_state.editor_pipa}))
+        st.caption("Tips: Masukkan segmen pipa dari pompa menuju outlet.")
+
+# === TAB 2: KEBUTUHAN (DEMAND VS SUPPLY) ===
 with tab2:
     st.subheader("Analisa Neraca Air")
-    st.dataframe(df_calc.set_index('Bulan').style.format("{:.2f}"), use_container_width=True)
-    st.info(f"Debit Puncak: **{q_desain:.2f} L/s** (Bulan {bln_puncak})")
+    
+    col_k1, col_k2 = st.columns(2)
+    with col_k1:
+        st.markdown(f"""
+        <div class="box-hasil" style="border-left: 5px solid #2196F3;">
+            <h4>💧 Kebutuhan (Demand)</h4>
+            <div style="font-size: 24px; font-weight: bold;">{q_desain:.2f} L/detik</div>
+            <small>{sumber_nfr}</small>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col_k2:
+        color_sup = "green" if q_safe >= q_desain else "red"
+        st.markdown(f"""
+        <div class="box-hasil" style="border-left: 5px solid {color_sup};">
+            <h4>🚰 Ketersediaan Sumur (Supply)</h4>
+            <div style="font-size: 24px; font-weight: bold; color: {color_sup}">{q_safe:.2f} L/detik</div>
+            <small>Safe Yield Geologi (SF: {st.session_state['safety_factor']}%)</small>
+        </div>
+        """, unsafe_allow_html=True)
 
-# --- TAB 3: PIPA ---
+    if q_safe < q_desain:
+        st.error(f"❌ **DEFISIT AIR!** Sumur tidak mampu melayani luasan {st.session_state['luas_ha']} Ha dengan pola tanam ini. Kurangi luas lahan atau ganti pola tanam.")
+    else:
+        st.success("✅ **SURPLUS.** Debit sumur aman untuk operasional.")
+
+    if not link_nfr:
+        st.write("#### 📅 Detail Perhitungan Bulanan (Manual)")
+        st.dataframe(df_calc.style.format("{:.2f}"), use_container_width=True)
+
+# === TAB 3: PIPA ===
 with tab3:
-    st.subheader("Analisa Hidrolika")
+    st.subheader("Analisa Hidrolis Pipa")
     st.dataframe(df_pipa_res.style.format({'V (m/s)': '{:.2f}', 'Hf (m)': '{:.3f}'}), use_container_width=True)
     
-    st.markdown("### 🚦 Cek Kecepatan")
-    aman = True
+    # Cek Velocity
+    st.write("#### 🚦 Cek Kecepatan Aliran")
+    cols = st.columns(3)
+    idx = 0
+    all_safe = True
     for i, row in df_pipa_res.iterrows():
         v = row['V (m/s)']
-        if v < 0.6: 
-            st.warning(f"⚠️ {row['Segmen']} (V={v:.2f}): Terlalu Pelan (<0.6).")
-            aman = False
-        elif v > 2.0: 
-            st.error(f"⛔ {row['Segmen']} (V={v:.2f}): Terlalu Cepat (>2.0).")
-            aman = False
-    if aman: st.success("✅ Kecepatan Aliran Pipa AMAN.")
+        seg = row['Segmen']
+        if v < 0.3:
+            st.warning(f"⚠️ {seg}: Endapan (V={v:.2f} m/s)")
+            all_safe = False
+        elif v > 2.5:
+            st.error(f"⛔ {seg}: Bahaya Erosi/Waterhammer (V={v:.2f} m/s)")
+            all_safe = False
+        else:
+            st.success(f"✅ {seg}: Aman (V={v:.2f} m/s)")
+            
+    st.info("Range Kecepatan Ideal: **0.3 m/s - 2.5 m/s**")
 
-# --- TAB 4: HASIL (LENGKAP) ---
+# === TAB 4: HASIL ===
 with tab4:
-    st.markdown("## LAPORAN HASIL PERENCANAAN")
-    st.info("💡 Tekan **Ctrl + P** untuk Print.")
+    st.markdown("## 📑 Laporan Desain")
     
-    # A. Grafik
-    source = df_calc.copy()
-    source['Limit Sumur'] = q_safe
-    bar = alt.Chart(source).mark_bar(color='#29B5E8').encode(x='Bulan', y=alt.Y('Q Req (L/s)', title='Debit (L/s)'), tooltip=['Q Req (L/s)'])
-    line = alt.Chart(source).mark_rule(color='red').encode(y='Limit Sumur', tooltip=['Limit Sumur'])
-    st.altair_chart((bar+line).interactive(), use_container_width=True)
-    st.caption("🟦 Balok: Kebutuhan | 🟥 Garis: Batas Aman Sumur")
-
-    # B. Rangkuman
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown(f"""<div class="box-hasil" style="border-left:5px solid #2196F3">
-        <b>1. SUPPLY (SUMUR)</b><br>Safe Yield: <b>{q_safe:.2f} L/s</b><br>(SF: {st.session_state['safety_factor']}%)</div>""", unsafe_allow_html=True)
-    with c2:
-        warna = "green" if q_safe >= q_desain else "red"
-        status = "AMAN" if q_safe >= q_desain else "DEFISIT"
-        st.markdown(f"""<div class="box-hasil" style="border-left:5px solid {warna}">
-        <b>2. DEMAND (KEBUTUHAN)</b><br>Max: <b>{q_desain:.2f} L/s</b><br>Status: <b style="color:{warna}">{status}</b></div>""", unsafe_allow_html=True)
+    c_res1, c_res2 = st.columns([1, 1.5])
     
-    # C. Rekomendasi
-    st.markdown("### Rekomendasi Pompa")
-    st.success(f"""
-    ✅ **Spesifikasi:**
-    - Debit (Q): **{q_desain:.2f} L/s**
-    - Head (H): **{head_total:.2f} m**
-    - Power: **{daya_kw:.2f} kW** ({daya_watt:.0f} W)
-    """)
-    with st.expander("Detail Head"):
-        st.write(f"Statis: {st.session_state['head_statis_m']} m | Mayor: {hf_total:.2f} m | Minor: {hf_total*0.1:.2f} m")
+    with c_res1:
+        st.markdown("### Spesifikasi Pompa")
+        st.success(f"""
+        **Rekomendasi:**
+        * **Debit (Q)**: {q_desain:.2f} L/s
+        * **Total Head (H)**: {head_total:.2f} m
+        * **Power Estimasi**: {daya_kw:.2f} kW ({daya_hp:.2f} HP)
+        """)
+        st.write(f"*(Efisiensi Pompa diasumsikan 70%)*")
+        
+        st.write("#### Rincian Head:")
+        st.write(f"- Head Statis: {st.session_state['head_statis_m']} m")
+        st.write(f"- Mayor Losses: {hf_total:.2f} m")
+        st.write(f"- Minor Losses (10%): {hf_total*0.1:.2f} m")
+    
+    with c_res2:
+        st.markdown("### Grafik Profil")
+        # Grafik Bar Sederhana
+        chart_data = pd.DataFrame({
+            'Komponen': ['Head Statis', 'Friction Loss', 'Sisa Tekan'],
+            'Meter': [st.session_state['head_statis_m'], hf_total*1.1, 0] # Sisa tekan asumsi masuk head statis/pompa
+        })
+        
+        # Grafik Kebutuhan Air (Jika Manual)
+        if not link_nfr:
+            base = alt.Chart(df_calc).encode(x='Bulan')
+            bar = base.mark_bar().encode(y='Q_Req')
+            line = base.mark_rule(color='red').encode(y=alt.datum(q_safe))
+            st.altair_chart((bar + line).interactive(), use_container_width=True)
+            st.caption("Grafik Kebutuhan Air Bulanan (Biru) vs Kapasitas Sumur (Merah)")
+        else:
+            st.info("Grafik bulanan tidak tersedia karena menggunakan Single Value NFR dari Modul Pola Tanam.")
