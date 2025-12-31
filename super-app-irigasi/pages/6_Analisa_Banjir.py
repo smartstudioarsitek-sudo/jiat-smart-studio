@@ -26,6 +26,7 @@ with st.sidebar:
     
     luas_das = st.number_input("Luas DAS (A) [km²]", value=15.5, min_value=0.1, step=0.1)
     panjang_sungai = st.number_input("Panjang Sungai Utama (L) [km]", value=6.5, min_value=0.1, step=0.1)
+    # Variabel ini bernama 'beda_tinggi'
     beda_tinggi = st.number_input("Beda Tinggi (H) [m]", value=120.0, min_value=1.0, step=1.0, help="Selisih elevasi hulu ke hilir")
     
     st.divider()
@@ -36,22 +37,15 @@ with st.sidebar:
 # --- 4. RUMUS-RUMUS BANJIR (ENGINE) ---
 
 # --- A. METODE RASIONAL (Q = 0.278 C I A) ---
-# Biasanya untuk DAS < 300 ha (3 km2), tapi sering dipakai estimasi kasar DAS kecil
 def hitung_rasional(A, L, H, R24, C):
-    # 1. Waktu Konsentrasi (tc) Rumus Kirpich
-    # tc = 0.0195 * (L^0.77) * (S^-0.385) ... L dalam meter? Cek satuan.
-    # Rumus umum Kirpich (L km, S m/m, tc jam):
-    # tc = (0.87 * L^2 / 1000 * S)^0.385 ... banyak versi
-    # Kita pakai versi standar PU: tc = (0.87 * L^2 / S)^0.385 (L dalam km)
-    
-    S = H / (L * 1000) # Kemiringan (m/m)
+    # Hitung Slope (S)
+    S = H / (L * 1000) 
     if S <= 0: S = 0.001
     
-    # tc (jam) - Rumus Kirpich
+    # 1. Waktu Konsentrasi (tc) - Rumus Kirpich
     tc = 0.06628 * (L**0.77) / (S**0.385)
     
     # 2. Intensitas Hujan (I) - Rumus Mononobe
-    # I = (R24 / 24) * (24 / tc)^(2/3)
     I = (R24 / 24) * ((24 / tc)**(2/3))
     
     # 3. Debit (Q)
@@ -60,56 +54,30 @@ def hitung_rasional(A, L, H, R24, C):
     return Q, tc, I
 
 # --- B. METODE HASPERS ---
-# Cocok untuk DAS sedang di Indonesia
 def hitung_haspers(A, L, H, R24, C):
     S = H / (L * 1000)
-    
-    # 1. Koefisien Aliran (Alpha) Haspers
-    # Haspers punya rumus alpha sendiri berdasarkan t, tapi kita pakai input C user untuk simplifikasi atau rumus empiris:
-    # Alpha = (1 + 0.012 * A^0.7) / (1 + 0.075 * A^0.7) ... ini contoh Balai
-    # Kita gunakan pendekatan Alpha = C input user agar konsisten
     alpha = C 
     
-    # 2. Waktu Konsentrasi (t) Haspers
-    # 1/t = 1/t_sungai + 1/t_lereng
-    # Pendekatan sederhana: V = 72 * S^0.6
-    v = 72 * (S**0.6) # km/jam? Cek empiris
-    # Kecepatan rata-rata Haspers (m/s) biasanya V = ... 
-    # Kita pakai rumus t = 0.1 * L^0.8 * S^-0.3 (mirip Kirpich tapi beda konstanta)
-    # Gunakan Melchior/Haspers standar:
+    # Waktu Konsentrasi (t) Haspers
     t = 0.1 * (L**0.8) * (S**-0.3) 
-    
-    # 3. Koefisien Reduksi (Beta)
-    # Beta = 1 / (1 + (t * A^0.75)/...) 
-    # Simplifikasi Mononobe untuk area:
-    beta = 1 # Haspers fokus ke R t
     
     # Intensitas
     I = (R24 / 24) * ((24 / t)**(2/3))
     
-    # Haspers Q = alpha * beta * I * A * 0.278
+    # Haspers Q
     Q = 0.278 * alpha * I * A
     return Q, t, I
 
 # --- C. METODE WEDUWEN ---
-# Untuk DAS < 100 km2
 def hitung_weduwen(A, L, H, R24, C):
     S = H / (L * 1000)
-    
-    # Koefisien Aliran Weduwen (Alpha)
-    # Weduwen menghitung alpha berdasarkan kemiringan & luas
-    # alpha = 1 - 4.12 / (beta * Q + 7) ... rumit & butuh iterasi Q
-    # Kita gunakan Fixed C dari input user sebagai pendekatan Alpha
     alpha = C
     
-    # Weduwen parameter
-    # t = 0.25 * L * Q^-0.125 * I^-0.25 ... Butuh iterasi circular reference!
-    # Untuk aplikasi simple tanpa iterasi berat, kita pakai pendekatan t Kirpich modifikasi
-    t = 0.06628 * (L**0.77) / (S**0.385) # Fallback ke Kirpich
+    # t Kirpich modifikasi (pendekatan praktis)
+    t = 0.06628 * (L**0.77) / (S**0.385) 
     
-    # Koefisien Pengurangan Area (Beta)
-    # Weduwen: Beta = 120 + ((A + 20) / A)
-    beta = 1.0 # Simplified
+    # Beta Weduwen (Disederhanakan)
+    beta = 1.0 
     
     I = (R24 / 24) * ((24 / t)**(2/3))
     Q = 0.278 * alpha * beta * I * A
@@ -120,15 +88,20 @@ col1, col2 = st.columns([1, 1.5])
 
 with col1:
     st.subheader("📝 Resume Input")
+    
+    # [FIX] PERBAIKAN DI SINI: Menggunakan 'beda_tinggi', bukan 'H'
+    slope_calc = beda_tinggi / (panjang_sungai * 1000)
+    
     st.info(f"""
     - **Luas DAS (A)**: {luas_das} km²
     - **Panjang Sungai (L)**: {panjang_sungai} km
-    - **Slope (S)**: {H/(panjang_sungai*1000):.4f}
+    - **Beda Tinggi (H)**: {beda_tinggi} m
+    - **Slope (S)**: {slope_calc:.4f}
     - **Hujan Max (R24)**: {r24} mm
     - **Koef. C**: {koef_c}
     """)
     
-    # Hitung Ketiga Metode
+    # Hitung Ketiga Metode (Passing 'beda_tinggi' sebagai parameter H)
     q_ras, t_ras, i_ras = hitung_rasional(luas_das, panjang_sungai, beda_tinggi, r24, koef_c)
     q_has, t_has, i_has = hitung_haspers(luas_das, panjang_sungai, beda_tinggi, r24, koef_c)
     q_wed, t_wed, i_wed = hitung_weduwen(luas_das, panjang_sungai, beda_tinggi, r24, koef_c)
