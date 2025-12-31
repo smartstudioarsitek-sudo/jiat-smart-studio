@@ -37,7 +37,6 @@ def analisa_gumbel(df_hujan):
     std = np.std(data, ddof=1) # Standar Deviasi Sampel
     
     # Parameter Gumbel (Yn & Sn - Pendekatan Tabel Soewarno)
-    # Sumber: Tabel Gumbel Standard untuk N=10 s/d 100
     gumbel_table = {
         10: (0.4952, 0.9497), 11: (0.4996, 0.9676), 12: (0.5035, 0.9833),
         13: (0.5070, 0.9971), 14: (0.5100, 1.0095), 15: (0.5128, 1.0206),
