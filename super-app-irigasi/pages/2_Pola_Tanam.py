@@ -1,188 +1,295 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import altair as alt
+import math
 
-# --- 1. KONFIGURASI HALAMAN ---
+# --- 1. CONFIG & CSS ---
 st.set_page_config(page_title="Pola Tanam & NFR", layout="wide", page_icon="🌾")
 
-# --- 2. HEADER STYLE ---
 st.markdown("""
 <style>
-    .hero-box {
-        background: linear-gradient(120deg, #2e7d32 0%, #43a047 50%, #66bb6a 100%);
-        padding: 20px; border-radius: 10px; color: white; text-align: center; margin-bottom: 20px;
+    @media print {
+        [data-testid="stSidebar"] { display: none !important; }
+        [data-testid="stHeader"] { display: none !important; }
+        .block-container { padding-top: 0 !important; }
     }
-    .stExpander { border: 1px solid #ddd; border-radius: 5px; }
+    .metric-box {
+        padding: 15px; background-color: #f1f8e9; 
+        border-left: 5px solid #558b2f; border-radius: 5px;
+        margin-bottom: 10px;
+    }
+    .info-box {
+        background-color: #fff3e0; border: 1px solid #ffe0b2;
+        padding: 10px; border-radius: 5px; font-size: 0.9em;
+    }
 </style>
-<div class="hero-box">
-    <h1 style="margin:0; font-size: 35px;">🌾 Pola Tanam & Kebutuhan Air</h1>
-    <p style="opacity: 0.9;">Analisa NFR dengan Data ETo Penman & Curah Hujan Efektif</p>
-</div>
 """, unsafe_allow_html=True)
 
-# --- 3. FUNGSI DATA DEFAULT & RESET ---
-def get_default_pola():
-    # Cek apakah ada data kiriman dari Modul 1 (Penman)
+# --- 2. RUMUS KP-01 ---
+
+def hitung_lp_vande_goor(eto, p, s=250, t=30):
+    """
+    Menghitung Kebutuhan Air Penyiapan Lahan (LP)
+    Metode: Van de Goor & Zijlstra (Standar KP-01)
+    IR = M * e^k / (e^k - 1)
+    Dimana:
+      M = ETo + P (Perkolasi)
+      k = (M * T) / S
+      S = Kebutuhan air jenuh (biasanya 200-250 mm)
+      T = Jangka waktu penyiapan (biasanya 30 atau 45 hari)
+    """
+    # ETo dan P dalam mm/hari
+    M = eto + p
+    try:
+        if M <= 0: return 0
+        k = (M * t) / s
+        ek = math.exp(k)
+        if ek == 1: return M # Hindari bagi nol
+        LP = M * ek / (ek - 1)
+        return LP
+    except:
+        return 0
+
+def get_kc_padi(umur_bulan, varietas='unggul'):
+    """Standar Kc Padi KP-01 (Nedeco) - Basis Bulanan"""
+    # Biasanya: 1.1, 1.1, 1.05, 0.95 (Panen)
+    if varietas == 'unggul': # Padi 3-4 Bulan
+        if umur_bulan == 1: return 1.10
+        elif umur_bulan == 2: return 1.10
+        elif umur_bulan == 3: return 1.05
+        elif umur_bulan == 4: return 0.95
+        else: return 0
+    else: # Padi Biasa (Varietas Lokal)
+        if umur_bulan == 1: return 1.10
+        elif umur_bulan == 2: return 1.10
+        elif umur_bulan == 3: return 1.05
+        elif umur_bulan == 4: return 0.95 # Asumsi disamakan utk simplifikasi bulanan
+        else: return 0
+
+def get_kc_palawija(umur_bulan):
+    """Standar Kc Palawija (Jagung/Kedelai) KP-01"""
+    # Pola: 0.5 -> 0.75 -> 1.0 -> 0.7
+    if umur_bulan == 1: return 0.60
+    elif umur_bulan == 2: return 0.90
+    elif umur_bulan == 3: return 0.85
+    else: return 0
+
+# --- 3. STATE MANAGEMENT (DATA LOAD) ---
+def load_data():
+    months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
+    
+    # 1. Ambil ETo dari Page 1 (Klimatologi)
     if 'data_eto_transfer' in st.session_state:
-        eto_12 = st.session_state['data_eto_transfer']
-        # Expand 12 bulan jadi 24 periode (Setengah Bulanan)
-        eto_24 = [val for val in eto_12 for _ in range(2)]
-        sumber = "✅ Terhubung: Modul Klimatologi (Penman)"
+        eto_data = st.session_state['data_eto_transfer']
     else:
-        eto_24 = [4.5] * 24 # Dummy default
-        sumber = "⚠️ Default (Data Klimatologi Belum Disimpan)"
+        # Dummy jika belum ada data
+        eto_data = [4.5] * 12
     
-    # Label Periode (Jan-1, Jan-2, dst)
-    periode_labels = []
-    for b in ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agt', 'Sep', 'Okt', 'Nov', 'Des']:
-        periode_labels.extend([f"{b}-1", f"{b}-2"])
-        
-    # Dummy Hujan
-    ch_default = [150, 140, 130, 120, 100, 90, 80, 60, 50, 40, 30, 20, 
-                  10, 5, 10, 20, 40, 60, 100, 150, 200, 220, 240, 250]
-    
-    df = pd.DataFrame({
-        'Periode': periode_labels,
-        'ETo (mm/hr)': eto_24,
-        'CH Rata-rata (mm)': ch_default
-    })
-    return df, sumber
+    # 2. Ambil Hujan dari Mock (jika ada) atau Manual
+    if 'df_hujan_manual' not in st.session_state:
+        st.session_state['df_hujan_manual'] = pd.DataFrame({
+            'Bulan': months,
+            'CH (mm)': [200.0, 180.0, 250.0, 150.0, 100.0, 50.0, 20.0, 10.0, 80.0, 150.0, 220.0, 240.0]
+        })
 
-# Inisialisasi State
-if 'df_pola_tanam' not in st.session_state:
-    df_init, status_init = get_default_pola()
-    st.session_state.df_pola_tanam = df_init
-    st.session_state.status_sumber = status_init
+    return months, eto_data
 
-# --- 4. SIDEBAR PENGATURAN ---
+# --- 4. SIDEBAR INPUT ---
 with st.sidebar:
-    st.header("🔧 Pengaturan Tanam")
+    st.header("🚜 Parameter Pola Tanam")
     
-    # Tombol Reset
-    if st.button("🔄 Reset Data Tabel", type="secondary"):
-        df_new, status_new = get_default_pola()
-        st.session_state.df_pola_tanam = df_new
-        st.session_state.status_sumber = status_new
-        st.rerun()
-        
+    st.subheader("1. Jadwal Tanam")
+    awal_tanam = st.selectbox("Awal Tanam (Bulan)", 
+                              ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'],
+                              index=9) # Default Oktober (Awal Musim Hujan umumnya)
+    
+    pola = st.selectbox("Jenis Pola Tanam", ["Padi - Padi - Palawija", "Padi - Padi - Bero", "Padi - Palawija - Palawija"])
+    
+    st.subheader("2. Faktor Tanah & Air")
+    perkolasi = st.number_input("Perkolasi (mm/hari)", 1.0, 5.0, 2.0, 0.1, help="Lempung: 1-2, Pasir: >3")
+    wlr_val = st.number_input("WLR (mm/hari)", 0.0, 10.0, 3.3, 0.1, help="Penggantian Lapisan Air (50mm/15hari = 3.3)")
+    lp_sat = st.number_input("Air Jenuh (S) mm", 150, 300, 250, help="Air untuk penjenuhan tanah (KP-01: 200-250mm)")
+    
     st.divider()
-    # Parameter Jadwal
-    awal_tanam = st.selectbox("Mulai Tanam (Awal MT-1)", 
-                              ["Okt-1", "Okt-2", "Nov-1", "Nov-2", "Des-1", "Des-2", "Jan-1"],
-                              index=2) # Default Nov-1
-    
-    with st.expander("⚙️ Parameter Kebutuhan Air"):
-        faktor_r80 = st.slider("Probabilitas Hujan (R80)", 50, 90, 80) / 100
-        lp_req = st.number_input("Air Penyiapan Lahan (LP)", value=11.5, help="mm/hari")
-        wlr = st.number_input("Penggantian Air (WLR)", value=1.1, help="mm/hari")
-        eff_irigasi = st.number_input("Efisiensi Irigasi", value=0.65, help="0.65 untuk Tersier")
+    efisiensi = st.slider("Efisiensi Irigasi Total (%)", 40, 90, 65) / 100
 
-# --- 5. INPUT DATA ---
-col1, col2 = st.columns([1, 1.5])
+# --- 5. MAIN LOGIC ---
+months, eto_vals = load_data()
+df_calc = pd.DataFrame({'Bulan': months, 'ETo': eto_vals})
 
-with col1:
-    st.subheader("1. Input Curah Hujan")
-    
-    # Info Status Data
-    st.caption(st.session_state.get('status_sumber', "Status: Menunggu Data"))
-    
-    # Tips Excel
-    st.info("💡 **Tips Excel:** Copy data **Curah Hujan** (1 kolom, 24 baris) dari Excel, klik sel 'CH Rata-rata' pertama, lalu **Ctrl+V**.")
-    
-    edited_df = st.data_editor(
-        st.session_state.df_pola_tanam,
-        height=550,
-        use_container_width=True,
-        column_config={
-            "Periode": st.column_config.TextColumn(disabled=True),
-            "ETo (mm/hr)": st.column_config.NumberColumn(disabled=True, help="Otomatis dari Modul Klimatologi"),
-            "CH Rata-rata (mm)": st.column_config.NumberColumn(required=True, min_value=0)
-        }
-    )
-    st.session_state.df_pola_tanam = edited_df
+# A. Input Hujan (Karena NFR butuh Hujan Efektif)
+st.title("🌾 Pola Tanam & Kebutuhan Air (KP-01)")
 
-# --- 6. ENGINE PERHITUNGAN NFR ---
-hasil_analisa = []
-max_dr = 0
+with st.expander("🌧️ Data Curah Hujan (R80)", expanded=True):
+    st.info("Masukkan Curah Hujan R80 (Probabilitas 80%) atau Rerata.")
+    edited_hujan = st.data_editor(st.session_state['df_hujan_manual'], num_rows="fixed", hide_index=True, use_container_width=True)
+    st.session_state['df_hujan_manual'] = edited_hujan
+    df_calc['CH'] = edited_hujan['CH (mm)']
 
-# Logika Rotasi Periode Tanam
-periode_labels = list(edited_df['Periode'])
-start_idx = periode_labels.index(awal_tanam)
-# Putar urutan index berdasarkan awal tanam (misal mulai Nov-1, maka list dimulai dari index Nov-1)
-rotated_indices = list(range(start_idx, 24)) + list(range(0, start_idx))
+# B. Perhitungan NFR
+# Cari index bulan awal tanam
+bulan_map = {m: i for i, m in enumerate(months)}
+idx_start = bulan_map[awal_tanam]
 
-for i, idx in enumerate(rotated_indices):
-    row = edited_df.iloc[idx]
-    eto = row['ETo (mm/hr)']
-    ch_r80 = row['CH Rata-rata (mm)'] * faktor_r80
-    # Hujan Efektif (Re) untuk Padi (70% probabilitas dan maks limit)
-    # Ini rumus pendekatan umum, bisa disesuaikan
-    ch_eff = min(ch_r80, 0.7 * eto * 15) 
+# Array Hasil
+list_kc = []
+list_kebutuhan = [] # Ini bisa LP, atau ETc
+list_wlr = []
+list_re = []
+list_nfr = []
+list_keterangan = []
+
+# Logic Looping 12 Bulan (Siklus)
+for i in range(12):
+    # Index berputar (Jan..Des..Jan)
+    curr_idx = (idx_start + i) % 12
     
-    # Simulasi Fase Tanam (Padi-Padi-Palawija)
-    # Durasi: LP(3) -> Padi1(6) -> LP2(2) -> Padi2(6) -> Palawija(7)
-    if i < 3: 
-        fase = "Pengolahan Tanah 1"; kc = 0; needs = lp_req; color="red"
-    elif i < 9: 
-        fase = "Padi 1 (Vegetatif-Generatif)"; kc = 1.1; needs = (eto * kc) + wlr; color="blue"
-    elif i < 11: 
-        fase = "Pengolahan Tanah 2"; kc = 0; needs = lp_req; color="orange"
-    elif i < 17: 
-        fase = "Padi 2 (Vegetatif-Generatif)"; kc = 1.15; needs = (eto * kc) + wlr; color="green"
-    else: 
-        fase = "Palawija / Bera"; kc = 0.8; needs = (eto * kc); color="yellow"
+    # Ambil Data Iklim Bulan ini
+    eto_harian = df_calc.loc[curr_idx, 'ETo']
+    ch_bulanan = df_calc.loc[curr_idx, 'CH']
     
-    # Hitung Kebutuhan Bersih (NFR)
-    # Konversi: (mm/hari - mm/hari) * konstanta -> l/s/ha
-    # 1 mm/hari = 0.1157 l/s/ha
-    net_needs_mm = max(0, needs - (ch_eff/15)) # ch_eff dibagi 15 karena satuan curah hujan per periode
-    dr = net_needs_mm * 0.1157 / eff_irigasi
+    # Tentukan Fase Tanam berdasarkan "i" (Bulan ke-berapa sejak start)
+    # Asumsi Pola: Padi (4 bln) - Padi (4 bln) - Palawija (3 bln) - Bero (1 bln)
     
-    if dr > max_dr: max_dr = dr
+    kc = 0
+    jenis_tanaman = ""
+    butuh_air = 0
+    wlr = 0
     
-    hasil_analisa.append({
-        'Periode': row['Periode'], 
-        'Kegiatan': fase, 
-        'Kebutuhan Air (L/s/ha)': round(dr, 3), 
-        'Warna': color,
-        'CH R80 (mm)': round(ch_r80, 1)
+    # --- LOGIKA FASE TANAMAN (CONTOH: PADI-PADI-PALAWIJA) ---
+    if pola == "Padi - Padi - Palawija":
+        # MT 1: PADI (Bulan 0 s/d 3)
+        if i == 0: 
+            jenis_tanaman = "LP Padi I"
+            # Hitung LP Van de Goor
+            butuh_air = hitung_lp_vande_goor(eto_harian, perkolasi, s=lp_sat)
+            kc = 0 # Masa penyiapan lahan belum ada tanaman
+        elif 1 <= i <= 4:
+            jenis_tanaman = "Padi I"
+            umur = i 
+            kc = get_kc_padi(umur)
+            butuh_air = kc * eto_harian + perkolasi # ETc + P
+            if i in [2, 3]: wlr = wlr_val # WLR biasanya 1-2 bulan setelah tanam
+            
+        # MT 2: PADI (Bulan 4 s/d 8)
+        elif i == 5:
+            jenis_tanaman = "LP Padi II"
+            butuh_air = hitung_lp_vande_goor(eto_harian, perkolasi, s=lp_sat)
+        elif 6 <= i <= 9:
+            jenis_tanaman = "Padi II"
+            umur = i - 5
+            kc = get_kc_padi(umur)
+            butuh_air = kc * eto_harian + perkolasi
+            if i in [7, 8]: wlr = wlr_val
+            
+        # MT 3: PALAWIJA (Bulan 9 s/d 11)
+        elif 10 <= i <= 11:
+            jenis_tanaman = "Palawija"
+            umur = i - 9
+            kc = get_kc_palawija(umur)
+            butuh_air = kc * eto_harian # Palawija tidak ada perkolasi (biasanya)
+        else:
+            jenis_tanaman = "Bero"
+            butuh_air = 0
+            
+    # Simpan Logic Sederhana (Bisa dikembangkan untuk pola lain)
+    else:
+        # Default fallback jika pola lain belum diset detail
+        jenis_tanaman = "Custom"
+        kc = 1.0
+        butuh_air = eto_harian
+    
+    # Hitung Hujan Efektif (Re)
+    # KP-01: Re Padi = 70% * CH R80. Re Palawija = 50% * CH.
+    re = 0
+    if "Padi" in jenis_tanaman and "LP" not in jenis_tanaman:
+        re = (0.7 * ch_bulanan) / 30 # mm/hari
+    elif "Palawija" in jenis_tanaman:
+        re = (0.5 * ch_bulanan) / 30
+    elif "LP" in jenis_tanaman:
+        re = (0.7 * ch_bulanan) / 30 # Saat LP masih dianggap genangan
+        
+    # NFR (Net Field Requirement)
+    # NFR = Kebutuhan + WLR - Re
+    nfr = butuh_air + wlr - re
+    if nfr < 0: nfr = 0
+    
+    list_kc.append(kc)
+    list_kebutuhan.append(butuh_air)
+    list_wlr.append(wlr)
+    list_re.append(re)
+    list_nfr.append(nfr)
+    list_keterangan.append(jenis_tanaman)
+
+# Re-mapping hasil ke urutan bulan kalender (Jan-Des)
+final_data = []
+for m_idx in range(12):
+    # Kita harus cari data yang bulannya sesuai dengan m_idx
+    # Karena loop tadi dimulai dari 'idx_start', kita harus urutkan ulang
+    
+    # Cari di langkah ke-berapa (i) bulan m_idx ini diproses?
+    # curr_idx = (idx_start + i) % 12  ==> Kita cari i
+    # i = (m_idx - idx_start) % 12
+    step_i = (m_idx - idx_start) % 12
+    
+    final_data.append({
+        'Bulan': months[m_idx],
+        'Fase': list_keterangan[step_i],
+        'ETo': df_calc.loc[m_idx, 'ETo'],
+        'Kc': list_kc[step_i],
+        'Kebutuhan Air': list_kebutuhan[step_i], # Ini (ETc + P) atau LP
+        'WLR': list_wlr[step_i],
+        'Re': list_re[step_i],
+        'NFR (mm/hr)': list_nfr[step_i],
+        'Q (l/s/ha)': list_nfr[step_i] * 0.1157 / efisiensi # 1/8.64 = 0.1157
     })
 
-df_hasil = pd.DataFrame(hasil_analisa)
+df_final = pd.DataFrame(final_data)
+st.session_state['nfr_global'] = df_final['Q (l/s/ha)'].max()
 
-# --- 7. VISUALISASI HASIL ---
-with col2:
-    st.subheader("2. Grafik Kebutuhan Air (NFR)")
+# --- 6. DISPLAY HASIL ---
+col_res1, col_res2 = st.columns([3, 1])
+
+with col_res1:
+    st.subheader("📊 Tabel Perhitungan NFR")
     
-    # Grafik Bar Chart (DR)
-    chart = alt.Chart(df_hasil).mark_bar().encode(
-        x=alt.X('Periode', sort=periode_labels),
-        y=alt.Y('Kebutuhan Air (L/s/ha)', title='Kebutuhan Air (l/det/ha)'),
-        color=alt.Color('Kegiatan', scale=alt.Scale(scheme='category10')),
-        tooltip=['Periode', 'Kegiatan', 'Kebutuhan Air (L/s/ha)', 'CH R80 (mm)']
-    ).properties(height=400)
-    
-    # Grafik Garis (Curah Hujan)
-    line = alt.Chart(df_hasil).mark_line(color='red', strokeDash=[5,5]).encode(
-        x=alt.X('Periode', sort=periode_labels),
-        y=alt.Y('CH R80 (mm)', axis=alt.Axis(title='Hujan Andalan R80 (mm)', titleColor='red'))
+    # Formatting
+    numeric_cols = ['ETo', 'Kc', 'Kebutuhan Air', 'WLR', 'Re', 'NFR (mm/hr)', 'Q (l/s/ha)']
+    st.dataframe(
+        df_final.style
+        .background_gradient(cmap="Greens", subset=['Q (l/s/ha)'])
+        .format("{:.2f}", subset=numeric_cols),
+        use_container_width=True,
+        height=500
     )
-    
-    combined_chart = alt.layer(chart, line).resolve_scale(y='independent')
-    st.altair_chart(combined_chart, use_container_width=True)
 
-# --- 8. TOMBOL SIMPAN & KIRIM ---
+with col_res2:
+    q_max = df_final['Q (l/s/ha)'].max()
+    bln_max = df_final.loc[df_final['Q (l/s/ha)'].idxmax(), 'Bulan']
+    
+    st.markdown(f"""
+    <div class="metric-box">
+        <b>Kebutuhan Maksimum (NFR):</b><br>
+        <span style="font-size: 28px; font-weight: bold;">{q_max:.3f}</span> l/det/ha<br>
+        <small>Terjadi pada bulan: {bln_max}</small>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.write("#### 📈 Grafik NFR")
+    st.bar_chart(df_final.set_index('Bulan')['Q (l/s/ha)'])
+    
+    with st.expander("ℹ️ Keterangan Rumus KP-01"):
+        st.markdown("""
+        1. **LP (Penyiapan Lahan):** Metode *Van de Goor & Zijlstra*.
+        2. **ETc Padi:** $Kc \\times ETo + Perkolasi$.
+        3. **WLR:** Penggantian air 3.3 mm/hari (50mm/15hari).
+        4. **Re (Hujan Efektif):** Padi (70%), Palawija (50%).
+        """)
+
+# --- 7. TOMBOL CETAK ---
 st.divider()
-col_final1, col_final2 = st.columns([3, 1])
-
-with col_final1:
-    st.dataframe(df_hasil[['Periode', 'Kegiatan', 'CH R80 (mm)', 'Kebutuhan Air (L/s/ha)']].T, use_container_width=True)
-
-with col_final2:
-    st.metric("NFR Maksimum", f"{round(max_dr, 3)} L/det/ha")
-    
-    if st.button("🚀 Kirim Data ke Desain Saluran", type="primary"):
-        # Kunci data ke session state
-        st.session_state['nfr_global'] = round(max_dr, 3)
-        st.toast(f"✅ Sukses! NFR {round(max_dr, 3)} l/s/ha dikunci untuk Desain Saluran.", icon="🏗️")
+import streamlit.components.v1 as components
+components.html(
+    """<button onclick="window.print()" style="background:#558b2f;color:white;border:none;padding:10px 20px;border-radius:5px;font-weight:bold;cursor:pointer;">🖨️ Cetak PDF</button>""", 
+    height=50
+)
