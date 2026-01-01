@@ -25,41 +25,44 @@ st.markdown("""
 # 1. INISIALISASI DATA (MODIFIKASI: AUTO-FILL)
 # ==========================================
 def init_state():
-    # --- [MODIFIKASI] TARIK DATA DARI MODUL LAIN ---
-    # 1. Default Value (Angka asli Kakak)
+    # --- [MODIFIKASI] LOGIKA TARIK DATA DARI PAGE LAIN ---
+    # 1. Siapkan Wadah Default (Angka Manual Asli Kakak)
     eto_default = [4.0, 4.0, 5.0, 6.0, 6.0, 6.0, 6.0, 6.0, 5.0, 5.0, 4.0, 4.0]
-    sumber_data = "Input Manual (Default)"
+    status_sumber = "" # Kosong artinya manual
     
-    # 2. Cek Data Klimatologi (Page 1)
+    # 2. Cek apakah Page 1 (Klimatologi) sudah kirim data?
     if 'data_eto_transfer' in st.session_state:
-        # Jika ada data kiriman dari Page 1, kita pakai itu!
-        data_klimat = st.session_state['data_eto_transfer']
-        if len(data_klimat) == 12: # Pastikan formatnya bulanan
-            eto_default = data_klimat
-            sumber_data = "✅ Otomatis dari Modul Klimatologi"
-        elif len(data_klimat) == 24: # Jika formatnya 15 harian, ambil rata-rata bulanan
-             temp_eto = []
-             for i in range(0, 24, 2):
-                 temp_eto.append((data_klimat[i] + data_klimat[i+1])/2)
-             eto_default = temp_eto
-             sumber_data = "✅ Otomatis dari Modul Klimatologi (Avg)"
+        data_kiriman = st.session_state['data_eto_transfer']
+        
+        # A. Jika formatnya Bulanan (12 Data) -> Langsung Pakai
+        if len(data_kiriman) == 12:
+            eto_default = data_kiriman
+            status_sumber = "✅ Data ETo diambil otomatis dari Modul Klimatologi."
+            
+        # B. Jika formatnya 15 Harian (24 Data) -> Kita Rata-rata jadi Bulanan
+        # (Agar tabel JIAT Kakak tidak error karena barisnya harus 12)
+        elif len(data_kiriman) == 24:
+            eto_rata2 = []
+            for i in range(0, 24, 2):
+                # Rata-rata periode 1 dan 2 di bulan yang sama
+                avg = (data_kiriman[i] + data_kiriman[i+1]) / 2
+                eto_rata2.append(avg)
+            eto_default = eto_rata2
+            status_sumber = "✅ Data ETo (Rerata) diambil dari Modul Pola Tanam."
 
-    # Simpan info sumber data untuk ditampilkan nanti
-    st.session_state['info_sumber_data'] = sumber_data
-
+    # Simpan status untuk ditampilkan di layar
+    st.session_state['info_data_otomatis'] = status_sumber
     # --- [AKHIR MODIFIKASI] ---
 
+    # 3. Buat DataFrame (Sekarang ETo-nya dinamis)
     if 'df_hujan' not in st.session_state:
         st.session_state['df_hujan'] = pd.DataFrame({
             'Bulan': ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'],
             'CH (mm)': [282, 240, 248, 174, 103, 70, 87, 48, 58, 98, 163, 286],
-            'ETo (mm/hari)': eto_default, # <--- NILAI INI SEKARANG DINAMIS
+            'ETo (mm/hari)': eto_default, # <--- INI SUDAH TERISI DATA PAGE SEBELAH
             'Kc': [0.8]*12
         })
-    
-    # Jika user kembali ke halaman ini dan data ETo berubah, tawarkan update
-    # (Kode ini memastikan tabel tidak ter-reset paksa, tapi data baru tersedia)
-    
+        
     if 'df_pipa' not in st.session_state:
         st.session_state['df_pipa'] = pd.DataFrame({
             'Segmen': ['S1', 'S2', 'S3'],
@@ -68,6 +71,7 @@ def init_state():
             'C (Hazen)': [140, 140, 140],
             'Debit (L/s)': [1.96, 1.05, 0.50]
         })
+        
     defaults = {
         'nama_proyek': "JIAT Lampung Timur", 'lokasi': "Desa Hargomulyo", 'tahun': "2025",
         'luas_ha': 2.0, 'perkolasi': 2.0, 'efisiensi': 65,
@@ -82,15 +86,17 @@ def init_state():
 init_state()
 
 # ==========================================
-# 2. SIDEBAR (TETAP SAMA + TOMBOL RESET)
+# 2. SIDEBAR (TAMBAH TOMBOL REFRESH)
 # ==========================================
 with st.sidebar:
     st.title("📂 File Manager")
     
-    # [TAMBAHAN] Tombol Refresh Data
+    # [TAMBAHAN] Tombol Refresh agar data update tanpa restart
     if st.button("🔄 Tarik Ulang Data Klimatologi"):
-        del st.session_state['df_hujan'] # Hapus memori tabel lama
-        st.rerun() # Refresh halaman untuk ambil data baru
+        # Hapus dataframe lama agar init_state jalan lagi & ambil data baru
+        if 'df_hujan' in st.session_state:
+            del st.session_state['df_hujan'] 
+        st.rerun() 
     
     clean_params = {}
     for key, value in st.session_state.items():
@@ -143,14 +149,14 @@ with st.sidebar:
         st.session_state['radius_m'] = st.number_input("Jari-jari Sumur (m)", value=st.session_state['radius_m'])
 
 # ==========================================
-# 3. KONTEN UTAMA (TETAP SAMA)
+# 3. KONTEN UTAMA (TAMPILAN ASLI)
 # ==========================================
 st.title(f"💧 {st.session_state['nama_proyek']}")
 st.markdown(f"**Lokasi:** {st.session_state['lokasi']} | **Tahun:** {st.session_state['tahun']}")
 
-# [MODIFIKASI] Tampilkan Status Data Kecil Saja
-if 'info_sumber_data' in st.session_state and "Otomatis" in st.session_state['info_sumber_data']:
-    st.caption(st.session_state['info_sumber_data'])
+# [TAMBAHAN] Notifikasi Kecil Jika Data Otomatis
+if st.session_state.get('info_data_otomatis'):
+    st.caption(st.session_state['info_data_otomatis'])
 
 st.markdown("---")
 
@@ -169,7 +175,7 @@ with tab1:
         with st.expander("ℹ️ Keterangan"): st.caption("Urutkan dari Sumur ke Lahan.")
 
 # ==========================================
-# 4. ENGINE HITUNGAN (GLOBAL) - TETAP SAMA
+# 4. ENGINE HITUNGAN (LOGIKA ASLI DIPERTAHANKAN)
 # ==========================================
 # 1. Demand
 df_calc = st.session_state['df_hujan'].copy()
@@ -205,12 +211,12 @@ df_pipa_res['V (m/s)'] = v_list
 df_pipa_res['Hf (m)'] = hf_list
 head_total = st.session_state['head_statis_m'] + hf_total + (0.1 * hf_total)
 
-# Hitung daya (Koreksi Kakak dipertahankan)
+# Hitung Daya (Koreksi)
 daya_kw = (9.81 * (q_desain/1000) * head_total) / 0.70  # Daya Poros
 daya_watt = (daya_kw / 0.85) * 1000                     # Daya Listrik
 
 # ==========================================
-# 5. OUTPUT (TETAP SAMA)
+# 5. OUTPUT (LAYOUT ASLI)
 # ==========================================
 
 # --- TAB 2: KEBUTUHAN ---
