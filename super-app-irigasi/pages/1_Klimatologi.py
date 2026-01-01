@@ -112,11 +112,12 @@ with st.sidebar:
     convert_sun = False
     max_sun_hour = 12.0
     
+    # Tampilkan opsi konversi jika file CSV diupload
     if uploaded_file is not None and uploaded_file.name.endswith('.csv'):
         with st.expander("⚙️ Opsi Konversi Satuan", expanded=True):
             st.info("Centang jika data CSV berbeda satuan:")
-            convert_wind = st.checkbox("Angin (m/s) ➡️ km/jam", value=True) # Default True krn sering dipakai
-            convert_sun = st.checkbox("Sinar (Jam) ➡️ Persen (%)", value=True) # Default True
+            convert_wind = st.checkbox("Angin (m/s) ➡️ km/jam", value=True) 
+            convert_sun = st.checkbox("Sinar (Jam) ➡️ Persen (%)", value=True) 
             if convert_sun:
                 max_sun_hour = st.number_input("Max Penyinaran (Jam/Hari)", 8.0, 14.0, 12.0)
 
@@ -131,19 +132,24 @@ with st.sidebar:
                     st.success("✅ JSON Loaded!")
                     st.rerun()
 
-            # B. CSV (SUPER SMART READ)
+            # B. CSV (SUPER SMART READ - FIXED)
             elif uploaded_file.name.endswith('.csv'):
-                # 1. Coba baca comma (Default)
-                df_csv = pd.read_csv(uploaded_file)
-                
-                # 2. Jika kolom cuma 1, kemungkinan separatornya titik koma (;)
-                if df_csv.shape[1] < 2:
+                # 1. Coba baca biasa (Koma)
+                try:
+                    df_csv = pd.read_csv(uploaded_file)
+                    # Jika kolom cuma 1, berarti separatornya salah (kemungkinan titik koma)
+                    if df_csv.shape[1] < 2:
+                        uploaded_file.seek(0)
+                        df_csv = pd.read_csv(uploaded_file, sep=';')
+                except:
+                    # Fallback paksa pakai titik koma
                     uploaded_file.seek(0)
                     df_csv = pd.read_csv(uploaded_file, sep=';')
                 
-                # 3. Filter HANYA kolom Angka (Membuang kolom 'Bulan' otomatis)
+                # 2. Filter HANYA kolom Angka (Membuang kolom 'Bulan' otomatis)
                 df_numeric = df_csv.select_dtypes(include=[np.number])
                 
+                # 3. Cek apakah ada minimal 4 kolom angka
                 if df_numeric.shape[1] >= 4:
                     vals = df_numeric.iloc[:, :4].values # Ambil 4 kolom angka pertama
                     
@@ -160,17 +166,13 @@ with st.sidebar:
                         
                     # 2. Konversi Sinar (Jam -> %)
                     if convert_sun:
-                        # Asumsi: (Jam / 30hari / MaxJam) * 100
-                        # Tapi data tabel biasanya rata-rata jam/hari atau jam total/bulan?
-                        # Kalau input BMKG biasanya Rata-rata Penyinaran (Jam) per hari.
-                        # Jika inputnya Jam Total Bulanan (misal 115), maka dibagi 30 dulu.
+                        # Heuristik: Jika nilai > 24, anggap itu Jam Total Bulanan
+                        # Jika < 24, anggap Jam Harian.
+                        is_monthly_total = np.mean(raw_sun) > 24
                         
-                        # Cek heuristic sederhana:
-                        if np.mean(raw_sun) > 24: 
-                            # Kemungkinan Jam Total Bulanan (misal 100-200 jam)
+                        if is_monthly_total:
                             raw_sun = (raw_sun / 30 / max_sun_hour) * 100
                         else:
-                            # Kemungkinan Jam Harian (misal 4-8 jam)
                             raw_sun = (raw_sun / max_sun_hour) * 100
                             
                         # Cap max 100%
@@ -179,6 +181,7 @@ with st.sidebar:
                     # --- LOGIKA EXPAND (12 -> 24) ---
                     new_suhu, new_rh, new_sun, new_wind = [], [], [], []
                     
+                    # Deteksi 12 Baris (Bulanan)
                     if len(df_csv) == 12:
                         st.toast("ℹ️ Data Bulanan di-expand ke 24 Periode.")
                         for i in range(12):
@@ -187,6 +190,7 @@ with st.sidebar:
                             new_sun.extend([raw_sun[i], raw_sun[i]])
                             new_wind.extend([raw_wind[i], raw_wind[i]])
                             
+                    # Deteksi 24 Baris
                     elif len(df_csv) >= 24:
                         st.toast("ℹ️ Data 24 Periode dimuat.")
                         new_suhu = raw_suhu[:24]
@@ -194,19 +198,19 @@ with st.sidebar:
                         new_sun = raw_sun[:24]
                         new_wind = raw_wind[:24]
                     
-                    # SIMPAN KE STATE
+                    # SIMPAN KE STATE (Otomatis masuk tabel utama)
                     st.session_state['df_iklim_24']['Suhu (°C)'] = new_suhu
                     st.session_state['df_iklim_24']['Kelembaban (%)'] = new_rh
                     st.session_state['df_iklim_24']['Penyinaran (%)'] = new_sun
                     st.session_state['df_iklim_24']['Angin (km/jam)'] = new_wind
                     
-                    st.success("✅ CSV Berhasil Dimuat!")
+                    st.success("✅ CSV Berhasil Dimuat & Dikonversi!")
                     st.rerun()
                 else:
-                    st.error(f"❌ Gagal membaca. Terdeteksi hanya {df_numeric.shape[1]} kolom angka. Pastikan CSV pakai koma (,) atau titik koma (;).")
+                    st.error(f"❌ Gagal membaca kolom angka. Terdeteksi hanya {df_numeric.shape[1]} kolom angka. Pastikan format file benar.")
 
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error membaca file: {e}")
 
     st.divider()
     st.header("Parameter")
