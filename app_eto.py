@@ -6,150 +6,236 @@ import altair as alt
 import json
 
 # --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="ETo Smart Calc", layout="wide", page_icon="☀️")
+st.set_page_config(page_title="ETo Hydro Planner", layout="wide", page_icon="💧")
 
-# --- CSS UI ---
+# --- CSS UI & BRANDING SMARTSTUDIO ---
 st.markdown("""
 <style>
+    /* Footer Branding SmartStudio - Pojok Kanan Bawah */
+    .footer {
+        position: fixed;
+        left: 0;
+        bottom: 0;
+        width: 100%;
+        background-color: transparent;
+        color: #888;
+        text-align: right;
+        padding-right: 25px;
+        padding-bottom: 10px;
+        font-size: 11px;
+        font-family: 'Source Sans Pro', sans-serif;
+        pointer-events: none;
+        z-index: 9999;
+    }
+    .footer span {
+        font-weight: 700;
+        color: #FF4B4B; /* Aksen Merah */
+    }
+    .footer-app-name {
+        font-weight: 600;
+        color: #444;
+        margin-right: 5px;
+    }
+
     @media print {
         [data-testid="stSidebar"] {display: none !important;}
-        .no-print {display: none !important;}
+        .footer {display: none !important;}
     }
-    .box-hasil {padding: 15px; background-color: #fff3cd; border: 1px solid #ffeeba; border-radius: 5px; margin-bottom: 10px;}
+    .box-hasil {
+        padding: 20px; 
+        background: linear-gradient(to right, #f8f9fa, #e9ecef); 
+        border-radius: 12px; 
+        border-left: 5px solid #0068c9;
+        margin-bottom: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 1. RUMUS FAO-56 PENMAN-MONTEITH (ENGINE)
+# 1. ENGINE: PENMAN MODIFIKASI (KP-01)
 # ==========================================
-def calc_eto_fao56(row, lat_deg, elev_m):
-    # Konversi Lintang ke Radian
+
+def calc_ra_daily(lat_deg, month_idx):
+    """Menghitung Radiasi Ekstraterestrial (Ra) mm/hari ekuivalen"""
+    days_cum = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    J = days_cum[month_idx] + 15 
     lat_rad = math.radians(lat_deg)
     
-    # Ambil Data Baris
-    T_max = row['T Max (°C)']
-    T_min = row['T Min (°C)']
-    RH_mean = row['RH Mean (%)']
+    dr = 1 + 0.033 * math.cos(2 * math.pi * J / 365)
+    solar_decl = 0.409 * math.sin((2 * math.pi * J / 365) - 1.39)
+    
+    tan_val = -math.tan(lat_rad) * math.tan(solar_decl)
+    if tan_val < -1: ws = math.pi
+    elif tan_val > 1: ws = 0
+    else: ws = math.acos(tan_val)
+    
+    Gsc = 0.0820
+    # Ra dalam MJ/m2/hari
+    Ra_MJ = (24 * 60 / math.pi) * Gsc * dr * (
+        ws * math.sin(lat_rad) * math.sin(solar_decl) +
+        math.cos(lat_rad) * math.cos(solar_decl) * math.sin(ws)
+    )
+    # Konversi ke mm/hari (1 MJ/m2 = 0.408 mm)
+    return Ra_MJ * 0.408
+
+def calc_penman_modif(row, lat_deg, elev_m, month_idx):
+    """
+    Rumus Penman Modifikasi sesuai Standar KP-01
+    ETo = c * [W * Rn + (1-W) * f(u) * (ea - ed)]
+    """
+    # 1. Data Input
+    T_mean = row['T Mean (°C)']
+    RH = row['RH Mean (%)']
     u2 = row['Angin u2 (m/s)']
     n_sun = row['Sinar (jam)']
+    c_factor = row['Faktor C'] # Angka Koreksi Penman
+
+    # 2. Parameter Uap Air (ea, ed)
+    # Tekanan uap jenuh (ea) dalam mbar
+    ea = 6.11 * math.exp((17.27 * T_mean) / (T_mean + 237.3))
+    # Tekanan uap aktual (ed)
+    ed = ea * (RH / 100)
     
-    # 1. Mean Temperature
-    T_mean = (T_max + T_min) / 2
-    
-    # 2. Slope Vapor Pressure Curve (Delta)
+    # 3. Fungsi Angin f(u)
+    # Rumus umum KP-01: f(u) = 0.27 * (1 + 0.864 * u2)
+    fu = 0.27 * (1 + 0.864 * u2)
+
+    # 4. Faktor Pembobot (Weighting Factor W)
+    # W terkait dengan suhu dan elevasi
+    # Hitung Delta (Slope vapor pressure)
     delta = 4098 * (0.6108 * math.exp(17.27 * T_mean / (T_mean + 237.3))) / ((T_mean + 237.3)**2)
+    # Hitung Gamma (Psychrometric constant)
+    # P = Tekanan atmosfer
+    P = 101.3 * ((293 - 0.0065 * elev_m) / 293)**5.26
+    gamma = 0.665e-3 * P * 10 # dikali 10 agar satuan konsisten mbar jika perlu, tapi W unitless
     
-    # 3. Psychrometric Constant (Gamma)
-    P = 101.3 * ((293 - 0.0065 * elev_m) / 293)**5.26 
-    gamma = 0.665e-3 * P
+    # Rumus W Penman
+    W = delta / (delta + gamma)
+
+    # 5. Radiasi (Rn)
+    # Ra (Ekstraterestrial)
+    Ra = calc_ra_daily(lat_deg, month_idx)
     
-    # 4. Vapor Pressure Deficit (es - ea)
-    es_tmax = 0.6108 * math.exp(17.27 * T_max / (T_max + 237.3))
-    es_tmin = 0.6108 * math.exp(17.27 * T_min / (T_min + 237.3))
-    es = (es_tmax + es_tmin) / 2
-    ea = es * (RH_mean / 100)
+    # Durasi maksimum penyinaran (N)
+    lat_rad = math.radians(lat_deg)
+    ws_val = math.acos(-math.tan(lat_rad) * math.tan(0.409 * math.sin((2*math.pi*(month_idx*30+15)/365)-1.39)))
+    N = (24 / math.pi) * ws_val
     
-    # 5. Solar Radiation (Rs) & Net Radiation (Rn)
-    # Estimasi Ra (Extraterrestrial Radiation) Harian Rata-rata untuk Tropis
-    Ra_list = [15.0, 15.5, 15.7, 15.3, 14.5, 14.0, 14.2, 14.8, 15.4, 15.6, 15.2, 14.8] 
-    # Karena kita hitung per baris (bulan ke-n), kita pakai angka pendekatan Ra = 37 MJ/m2 (Rata2 Khatulistiwa)
-    # Agar lebih presisi, idealnya pakai urutan bulan, tapi untuk simplifikasi kita pakai konstanta rata-rata tropis.
-    Ra = 37.0 
+    # Rs (Radiasi Gelombang Pendek)
+    # KP-01 Indonesia biasanya a=0.25, b=0.54
+    Rs = (0.25 + 0.54 * (n_sun / N)) * Ra
     
-    N = 12.0 # Siang hari di khatulistiwa
-    Rs = (0.25 + 0.50 * (n_sun / N)) * Ra 
+    # Rns (Net Shortwave) - Albedo 0.25 (tanaman hijau)
+    Rns = (1 - 0.25) * Rs
     
-    Rns = (1 - 0.23) * Rs
+    # Rnl (Net Longwave)
+    # Rumus Penman Modif: f(t) * f(ed) * f(n/N)
+    # f(t) = sigma * T^4 (Stefan-Boltzmann) -> diubah ke mm/hari
+    sigma_mm = 2.043e-10 # Konstanta Stefan-Boltzmann dlm mm/hari
+    ft = sigma_mm * ((T_mean + 273.16)**4)
     
-    sigma = 4.903e-9
-    Rnl = sigma * ((T_max + 273.16)**4 + (T_min + 273.16)**4) / 2 * (0.34 - 0.14 * math.sqrt(ea)) * (1.35 * (Rs / (0.75 * Ra)) - 0.35)
+    # f(ed) = 0.34 - 0.044 * sqrt(ed)
+    fed = 0.34 - 0.044 * math.sqrt(ed)
     
+    # f(n/N) = 0.1 + 0.9 * (n/N)
+    f_sun = 0.1 + 0.9 * (n_sun / N)
+    
+    Rnl = ft * fed * f_sun
+    
+    # Rn (Radiasi Bersih)
     Rn = Rns - Rnl
-    G = 0 
+
+    # 6. ETo* (Unadjusted)
+    ETo_star = (W * Rn) + ((1 - W) * fu * (ea - ed))
     
-    # 6. FINAL FORMULA ETo
-    term1 = 0.408 * delta * (Rn - G)
-    term2 = gamma * (900 / (T_mean + 273)) * u2 * (es - ea)
-    div = delta + gamma * (1 + 0.34 * u2)
+    # 7. ETo Final (Adjusted with c)
+    ETo = c_factor * ETo_star
     
-    ETo = (term1 + term2) / div
     return max(0, ETo)
 
 # ==========================================
 # 2. SESSION STATE
 # ==========================================
 if 'df_iklim' not in st.session_state:
+    # Default data KP-01 biasanya butuh T Mean
     st.session_state['df_iklim'] = pd.DataFrame({
         'Bulan': ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'],
-        'T Min (°C)': [24.0]*12,
-        'T Max (°C)': [31.0]*12,
-        'RH Mean (%)': [80.0]*12,
-        'Angin u2 (m/s)': [2.0]*12,
-        'Sinar (jam)': [6.0]*12
+        'T Mean (°C)': [26.5]*12,
+        'RH Mean (%)': [85.0]*12,
+        'Angin u2 (m/s)': [1.5]*12,
+        'Sinar (jam)': [5.0]*12,
+        'Faktor C': [1.1]*12 # Default angka koreksi Penman Modif (biasanya 1.1)
     })
+
 if 'params_loc' not in st.session_state:
-    st.session_state['params_loc'] = {'nama': 'Stasiun Branti', 'lat': -5.4, 'elev': 100}
+    st.session_state['params_loc'] = {'nama': 'Bendung Argoguruh', 'lat': -5.4, 'elev': 100}
 
 # ==========================================
 # 3. SIDEBAR
 # ==========================================
 with st.sidebar:
-    st.title("⚙️ Lokasi Stasiun")
-    st.session_state['params_loc']['nama'] = st.text_input("Nama Stasiun", st.session_state['params_loc']['nama'])
+    st.title("⚙️ Lokasi Studi")
+    st.session_state['params_loc']['nama'] = st.text_input("Nama Lokasi/Bendung", st.session_state['params_loc']['nama'])
     
     st.markdown("---")
     st.info("Parameter Geografis:")
-    st.session_state['params_loc']['lat'] = st.number_input("Lintang (Latitude)", value=st.session_state['params_loc']['lat'], step=0.1)
-    st.session_state['params_loc']['elev'] = st.number_input("Elevasi (MDPL)", value=st.session_state['params_loc']['elev'], step=10)
+    st.session_state['params_loc']['lat'] = st.number_input("Lintang (LS = negatif)", value=st.session_state['params_loc']['lat'], step=0.1)
+    st.session_state['params_loc']['elev'] = st.number_input("Elevasi (m dpl)", value=st.session_state['params_loc']['elev'], step=10)
     
     st.markdown("---")
-    st.subheader("📂 File Manager")
+    st.caption("Konfigurasi Data")
     
-    # Save
-    data_save = {'loc': st.session_state['params_loc'], 'iklim': st.session_state['df_iklim'].to_dict(orient='records')}
-    st.download_button("💾 Simpan Data", json.dumps(data_save), "data_iklim_eto.json", "application/json")
-    
-    # Load
-    upload = st.file_uploader("📂 Buka Data", type=['json'])
-    if upload:
-        try:
-            d = json.load(upload)
-            st.session_state['params_loc'] = d['loc']
-            st.session_state['df_iklim'] = pd.DataFrame(d['iklim'])
-            st.success("Data Loaded!")
-        except:
-            st.error("File Salah!")
+    # Reset Button
+    if st.button("🔄 Reset Data Default"):
+        st.session_state['df_iklim'] = pd.DataFrame({
+            'Bulan': ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'],
+            'T Mean (°C)': [26.5]*12,
+            'RH Mean (%)': [85.0]*12,
+            'Angin u2 (m/s)': [1.5]*12,
+            'Sinar (jam)': [5.0]*12,
+            'Faktor C': [1.1]*12
+        })
+        st.rerun()
 
 # ==========================================
-# 4. MAIN CONTENT
+# 4. MAIN LAYOUT
 # ==========================================
-st.title("☀️ ETo Smart Calculator")
-st.markdown("Metode: **FAO-56 Penman-Monteith**")
+st.title("🌊 Hydro Planner")
+st.markdown(f"**Modul Evapotranspirasi (ETo)** | Metode: **Penman Modifikasi (KP-01)**")
 st.markdown("---")
 
-col1, col2 = st.columns([1.5, 1])
+col1, col2 = st.columns([1.6, 1])
 
 with col1:
-    st.subheader("1. Input Data Iklim")
-    st.caption("Edit data di bawah ini:")
+    st.subheader("1. Input Data Klimatologi")
+    st.caption("Sesuaikan **Faktor C** (Angka Koreksi) sesuai karakteristik bulan basah/kering wilayah studi.")
     
     edited_df = st.data_editor(
         st.session_state['df_iklim'],
         column_config={
-            "T Min (°C)": st.column_config.NumberColumn(format="%.1f"),
-            "T Max (°C)": st.column_config.NumberColumn(format="%.1f"),
-            "Angin u2 (m/s)": st.column_config.NumberColumn(format="%.2f"),
+            "Bulan": st.column_config.TextColumn(disabled=True),
+            "T Mean (°C)": st.column_config.NumberColumn(format="%.1f", max_value=45, min_value=10),
+            "RH Mean (%)": st.column_config.NumberColumn(format="%.0f", max_value=100, min_value=0),
+            "Angin u2 (m/s)": st.column_config.NumberColumn(format="%.2f", min_value=0, help="Kecepatan angin pada ketinggian 2m"),
+            "Sinar (jam)": st.column_config.NumberColumn(format="%.1f", min_value=0, max_value=12),
+            "Faktor C": st.column_config.NumberColumn(format="%.2f", min_value=0.1, max_value=2.0, help="Angka Koreksi Penman (KP-01)"),
         },
         height=460,
         use_container_width=True,
-        key='editor_iklim'
+        key='editor_kp01'
     )
-    st.session_state['df_iklim'] = edited_df
+    
+    if not edited_df.equals(st.session_state['df_iklim']):
+         st.session_state['df_iklim'] = edited_df
+         st.rerun()
 
-# HITUNG
+# --- PROSES HITUNG ---
 results = []
+lat = st.session_state['params_loc']['lat']
+elev = st.session_state['params_loc']['elev']
+
 for idx, row in st.session_state['df_iklim'].iterrows():
-    eto = calc_eto_fao56(row, st.session_state['params_loc']['lat'], st.session_state['params_loc']['elev'])
+    eto = calc_penman_modif(row, lat, elev, idx)
     results.append(eto)
 
 df_result = st.session_state['df_iklim'].copy()
@@ -157,21 +243,58 @@ df_result['ETo (mm/hari)'] = results
 eto_avg = sum(results) / 12
 
 with col2:
-    st.subheader("2. Hasil ETo")
-    st.metric("Rata-rata Tahunan", f"{eto_avg:.2f} mm/hari")
+    st.subheader("2. Hasil Analisis")
     
-    # Tabel Hasil (Tanpa Background Gradient biar gak error)
+    # Summary Box
+    st.markdown(f"""
+    <div class="box-hasil">
+        <div style="font-size:12px; color:#666; margin-bottom:5px;">Rata-rata ETo Tahunan</div>
+        <div style="font-size:28px; font-weight:bold; color:#2c3e50;">{eto_avg:.2f} <span style="font-size:14px;">mm/hari</span></div>
+        <div style="font-size:10px; color:#888; margin-top:5px;">*Metode Penman Modifikasi</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Tabel Hasil Ringkas
     st.dataframe(
-        df_result[['Bulan', 'ETo (mm/hari)']].style.format({"ETo (mm/hari)": "{:.2f}"}),
+        df_result[['Bulan', 'Faktor C', 'ETo (mm/hari)']].style.format({"ETo (mm/hari)": "{:.2f}", "Faktor C": "{:.1f}"})
+                                              .background_gradient(cmap='Blues', subset=['ETo (mm/hari)']),
         use_container_width=True,
-        height=460
+        height=300
     )
 
-# GRAFIK
+# --- GRAFIK ---
 st.markdown("---")
-st.subheader("3. Grafik Pola Evapotranspirasi")
-chart = alt.Chart(df_result).mark_bar(color='orange').encode(
-    x=alt.X('Bulan', sort=None), y='ETo (mm/hari)', tooltip=['Bulan', alt.Tooltip('ETo (mm/hari)', format='.2f')]
-).properties(height=300)
-line = alt.Chart(df_result).mark_rule(color='red').encode(y=alt.datum(eto_avg))
-st.altair_chart((chart + line).interactive(), use_container_width=True)
+st.subheader("3. Grafik Hidrologi")
+
+# Grafik kombinasi Bar & Line
+base = alt.Chart(df_result).encode(x=alt.X('Bulan', sort=None))
+
+# Bar ETo
+bar = base.mark_bar(color='#4facfe', cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+    y=alt.Y('ETo (mm/hari)', title='Evapotranspirasi (mm/hr)'),
+    tooltip=['Bulan', alt.Tooltip('ETo (mm/hari)', format='.2f')]
+)
+
+# Line Koreksi C (Opsional, untuk melihat tren faktor koreksi)
+line_c = base.mark_line(color='#FF4B4B', strokeDash=[5,5]).encode(
+    y=alt.Y('Faktor C', scale=alt.Scale(domain=[0.5, 1.5]), title='Faktor Koreksi C'),
+    tooltip=['Bulan', 'Faktor C']
+)
+
+# Layering Chart: Sumbu Y Kiri (ETo) dan Kanan (Faktor C - optional visual)
+# Untuk kesederhanaan, kita plot ETo saja dengan Rule rata-rata
+rule = base.mark_rule(color='#FF6B6B').encode(
+    y=alt.datum(eto_avg),
+    tooltip=[alt.Tooltip(value=f"Rata-rata: {eto_avg:.2f}")]
+)
+
+st.altair_chart((bar + rule).interactive(), use_container_width=True)
+
+# ==========================================
+# FOOTER
+# ==========================================
+st.markdown("""
+<div class="footer">
+    <span class="footer-app-name">HYDRO PLANNER</span> | by <span>SmartStudio</span>
+</div>
+""", unsafe_allow_html=True)
