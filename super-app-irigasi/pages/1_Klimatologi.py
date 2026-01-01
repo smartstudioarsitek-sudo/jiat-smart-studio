@@ -5,7 +5,7 @@ import numpy as np
 # --- 1. CONFIG ---
 st.set_page_config(page_title="Analisa Klimatologi", layout="wide", page_icon="🌦️")
 
-# --- 2. RUMUS ---
+# --- 2. RUMUS PENMAN ---
 def hitung_penman_modifikasi(temp, hum, sun, wind, c_factor=1.1):
     def to_float(arr): return np.array([float(x) for x in arr])
     try:
@@ -27,7 +27,7 @@ def hitung_penman_modifikasi(temp, hum, sun, wind, c_factor=1.1):
         return ETo
     except: return np.zeros(len(temp))
 
-# --- 3. INIT ---
+# --- 3. INIT STATE ---
 def init_state():
     periods = [f"{m}-{p}" for m in ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'] for p in [1, 2]]
     if 'df_iklim_24' not in st.session_state:
@@ -39,67 +39,76 @@ def init_state():
 
 init_state()
 
-# --- 4. SIDEBAR ---
+# --- 4. SIDEBAR (EXCEL UPLOADER) ---
 with st.sidebar:
     st.header("📂 Data Input")
-    uploaded_file = st.file_uploader("Upload CSV (Format: Bulan;Suhu;RH;Sinar;Angin)", type=["csv"])
+    st.info("Sekarang mendukung file Excel (.xlsx)!")
     
-    if uploaded_file and st.button("🔄 PAKSA BACA DATA", type="primary"):
+    # Uploader khusus Excel
+    uploaded_file = st.file_uploader("Upload File Excel", type=["xlsx", "xls"])
+    
+    if uploaded_file and st.button("🔄 BACA FILE EXCEL", type="primary"):
         try:
-            # 1. BACA MANUAL (Delimiter Titik Koma, Desimal Titik)
-            # engine='python' lebih toleran terhadap error encoding
-            df = pd.read_csv(uploaded_file, sep=";", decimal=".", engine='python')
+            # BACA EXCEL LANGSUNG
+            # Engine openpyxl adalah standar untuk .xlsx
+            df = pd.read_excel(uploaded_file)
             
-            # 2. MAPPING KOLOM BY INDEX (Urutan Kolom di CSV Wajib: Bulan, Suhu, RH, Sinar, Angin)
-            # Kita abaikan nama kolom, kita ambil berdasarkan posisinya (0,1,2,3,4)
-            # Col 0: Bulan (Abaikan)
-            # Col 1: Suhu
-            # Col 2: RH
-            # Col 3: Sinar
-            # Col 4: Angin
-            
+            # Validasi Kolom: Minimal 5 Kolom (Bulan, Suhu, RH, Sinar, Angin)
             if df.shape[1] >= 5:
-                # Paksa jadi angka (kalau ada error jadi NaN, lalu diisi 0)
+                # Ambil data berdasarkan urutan kolom (Index 1, 2, 3, 4)
+                # Kita abaikan nama headernya, yang penting urutannya benar
+                
+                # Col 0: Bulan (Abaikan)
+                # Col 1: Suhu
+                # Col 2: RH
+                # Col 3: Sinar
+                # Col 4: Angin
+                
+                # Paksa jadi angka (kalau ada teks aneh jadi 0/NaN)
                 raw_suhu = pd.to_numeric(df.iloc[:, 1], errors='coerce').fillna(27.0).values
                 raw_rh   = pd.to_numeric(df.iloc[:, 2], errors='coerce').fillna(80.0).values
                 raw_sun  = pd.to_numeric(df.iloc[:, 3], errors='coerce').fillna(50.0).values
                 raw_wind = pd.to_numeric(df.iloc[:, 4], errors='coerce').fillna(1.5).values
                 
-                # Expand 12 -> 24
+                # Expand 12 Bulan -> 24 Periode
                 new_suhu, new_rh, new_sun, new_wind = [], [], [], []
-                for i in range(12):
+                
+                # Ambil max 12 data (jaga-jaga kalau excelnya kepanjangan)
+                limit = min(len(df), 12)
+                
+                for i in range(limit):
                     new_suhu.extend([raw_suhu[i]]*2)
                     new_rh.extend([raw_rh[i]]*2)
                     new_sun.extend([raw_sun[i]]*2)
                     new_wind.extend([raw_wind[i]]*2)
 
-                # Update State
+                # Masukkan ke Tabel Aplikasi
                 st.session_state['df_iklim_24']['Suhu (°C)'] = new_suhu
                 st.session_state['df_iklim_24']['Kelembaban (%)'] = new_rh
                 st.session_state['df_iklim_24']['Penyinaran (%)'] = new_sun
                 st.session_state['df_iklim_24']['Angin (m/s)'] = new_wind
                 
-                st.success("✅ BERHASIL! Data masuk.")
+                st.success("✅ MANTAP! Excel berhasil dibaca.")
                 st.rerun()
             else:
-                st.error(f"❌ Jumlah kolom kurang. Terbaca {df.shape[1]} kolom, butuh minimal 5 (Bulan + 4 Data).")
-                st.write("Preview Data yang terbaca:", df.head())
+                st.error(f"❌ Jumlah kolom kurang. Terbaca {df.shape[1]} kolom. Pastikan format Excel sesuai.")
                 
         except Exception as e:
-            st.error(f"Gagal baca: {e}")
+            st.error(f"Gagal baca Excel: {e}")
+            st.caption("Tips: Pastikan file tidak dipassword dan formatnya .xlsx standar.")
 
     st.divider()
     c_factor = st.number_input("Faktor Koreksi (c)", 0.8, 1.4, 0.9, 0.1)
 
-# --- 5. MAIN ---
+# --- 5. MAIN CONTENT ---
 st.title("🌦️ Klimatologi")
-st.caption("Mode: Input Manual / CSV -> Hitung ETo")
+st.caption("Mode: Input Excel (.xlsx) -> Hitung ETo")
 
-# Table
+# Table Input
 edited_df = st.data_editor(st.session_state['df_iklim_24'], height=400, hide_index=True)
 st.session_state['df_iklim_24'] = edited_df
 
-# Calc
+# Proses Hitung
 suhu = edited_df['Suhu (°C)'].tolist()
 hum = edited_df['Kelembaban (%)'].tolist()
 sun = edited_df['Penyinaran (%)'].tolist()
@@ -107,15 +116,15 @@ wind = [x * 3.6 for x in edited_df['Angin (m/s)'].tolist()] # Konversi m/s ke km
 
 eto = hitung_penman_modifikasi(suhu, hum, sun, wind, c_factor)
 
-# Result
+# Table Hasil
 df_res = edited_df[['Periode']].copy()
 df_res['ETo'] = np.round(eto, 2)
 st.session_state['data_eto_transfer'] = df_res['ETo'].tolist()
 
 c1, c2 = st.columns([2, 1])
 with c1:
-    st.dataframe(df_res.style.background_gradient(cmap="Oranges"), height=400)
-    if st.button("🚀 KIRIM DATA ETo", type="primary"):
+    st.dataframe(df_res.style.background_gradient(cmap="Oranges"), height=400, use_container_width=True)
+    if st.button("🚀 KIRIM DATA ETo", type="primary", use_container_width=True):
         st.session_state['data_eto_manual'] = df_res['ETo'].tolist()
         st.success("✅ Data Terkirim!")
 
