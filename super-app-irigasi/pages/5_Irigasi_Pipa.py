@@ -42,8 +42,12 @@ def init_state():
             'Debit (L/s)': [1.96, 1.05, 0.50]
         })
 
+    # Cek apakah nama proyek sudah ada? Jika belum, pakai default
+    if 'nama_proyek' not in st.session_state: st.session_state['nama_proyek'] = "JIAT Lampung Timur"
+    if 'lokasi' not in st.session_state: st.session_state['lokasi'] = "Desa Hargomulyo"
+    
     defaults = {
-        'nama_proyek': "JIAT Lampung Timur", 'lokasi': "Desa Hargomulyo", 'tahun': "2025",
+        'tahun': "2025",
         'luas_ha': 2.0, 'efisiensi': 65, 'head_statis_m': 63, 'safety_factor': 80,
         'tebal_akuifer_m': 20, 'k_perm': 4.32, 'drawdown_izin_m': 10, 'radius_m': 0.15
     }
@@ -52,9 +56,17 @@ def init_state():
 
 init_state()
 
-# --- SIDEBAR ---
+# --- SIDEBAR (UPDATE FITUR EDIT NAMA) ---
 with st.sidebar:
-    st.title("📂 Link Data")
+    st.title("🗂️ Info Proyek")
+    
+    # Input Nama Proyek (Realtime Update)
+    st.session_state['nama_proyek'] = st.text_input("Nama Proyek:", value=st.session_state['nama_proyek'])
+    st.session_state['lokasi'] = st.text_input("Lokasi:", value=st.session_state['lokasi'])
+    
+    st.divider()
+    
+    st.header("📥 Link Data")
     
     # 1. AMBIL ETo
     if st.button("🌦️ Ambil Data ETo"):
@@ -70,22 +82,18 @@ with st.sidebar:
             st.rerun()
         else: st.error("⚠️ Data Klimatologi kosong!")
 
-    # 2. AMBIL Q DESAIN (UPDATE LOGIC)
+    # 2. AMBIL Q DESAIN
     if st.button("🌾 Ambil Q Desain"):
         if 'data_nfr_manual' in st.session_state:
             raw_data = st.session_state['data_nfr_manual']
-            
-            # Cek Tipe Data
             if isinstance(raw_data, list) and len(raw_data) == 24:
-                # KASUS 1: Data List Lengkap (Naik Turun)
                 st.session_state['df_neraca_24']['Q Req (L/s/ha)'] = raw_data
                 st.success("✅ Q Pola Tanam (Full Pattern) Masuk!")
             else:
-                # KASUS 2: Data Single/Scalar (Flat)
                 try:
                     val = float(raw_data)
                     st.session_state['df_neraca_24']['Q Req (L/s/ha)'] = [val] * 24
-                    st.warning("⚠️ Data hanya nilai Max (Flat). Update Page Pola Tanam untuk hasil detail.")
+                    st.warning("⚠️ Data hanya nilai Max (Flat).")
                 except:
                     st.error("Format data salah.")
             st.rerun()
@@ -130,6 +138,7 @@ daya_kw = (9.81 * (q_desain/1000) * head_total) / 0.70
 daya_watt = (daya_kw / 0.85) * 1000
 
 # --- UI CONTENT ---
+# Judul Mengambil dari Session State (Yang diinput di Sidebar)
 st.title(f"💧 {st.session_state['nama_proyek']}")
 st.caption(f"Lokasi: {st.session_state['lokasi']} | Mode: 15 Harian")
 
