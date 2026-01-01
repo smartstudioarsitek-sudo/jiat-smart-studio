@@ -91,7 +91,7 @@ def init_state():
 
 init_state()
 
-# --- 4. SIDEBAR (SMART UPLOAD & CONVERT) ---
+# --- 4. SIDEBAR (TOOLS) ---
 with st.sidebar:
     st.header("📂 File & Tools")
     
@@ -107,7 +107,6 @@ with st.sidebar:
     # --- UPLOAD SECTION ---
     uploaded_file = st.file_uploader("Upload Data (JSON / CSV)", type=["json", "csv"])
     
-    # KONFIGURASI KONVERSI
     convert_wind = False
     convert_sun = False
     max_sun_hour = 12.0
@@ -120,10 +119,8 @@ with st.sidebar:
             if convert_sun:
                 max_sun_hour = st.number_input("Max Penyinaran (Jam/Hari)", 8.0, 14.0, 12.0)
 
-    # LOGIKA PROSES FILE (DENGAN ERROR HANDLING LEBIH BAIK)
     if uploaded_file is not None:
         try:
-            # A. JSON
             if uploaded_file.name.endswith('.json'):
                 data_load = json.load(uploaded_file)
                 if 'df_iklim_data' in data_load:
@@ -132,9 +129,7 @@ with st.sidebar:
                     st.success("✅ JSON Loaded!")
                     st.rerun()
 
-            # B. CSV (SMART READ)
             elif uploaded_file.name.endswith('.csv'):
-                # Tombol Eksekusi Manual
                 if st.button("🔄 Proses & Masukkan ke Tabel", type="primary"):
                     try:
                         df_csv = pd.read_csv(uploaded_file)
@@ -149,46 +144,29 @@ with st.sidebar:
                     
                     if df_numeric.shape[1] >= 4:
                         vals = df_numeric.iloc[:, :4].values
+                        raw_suhu, raw_rh, raw_sun, raw_wind = vals[:, 0], vals[:, 1], vals[:, 2], vals[:, 3]
                         
-                        raw_suhu = vals[:, 0]
-                        raw_rh = vals[:, 1]
-                        raw_sun = vals[:, 2]
-                        raw_wind = vals[:, 3]
-                        
-                        # KONVERSI
                         if convert_wind: raw_wind = raw_wind * 3.6
                         if convert_sun:
-                            if np.mean(raw_sun) > 24: 
-                                raw_sun = (raw_sun / 30 / max_sun_hour) * 100
-                            else: 
-                                raw_sun = (raw_sun / max_sun_hour) * 100
+                            if np.mean(raw_sun) > 24: raw_sun = (raw_sun / 30 / max_sun_hour) * 100
+                            else: raw_sun = (raw_sun / max_sun_hour) * 100
                             raw_sun = np.where(raw_sun > 100, 100, raw_sun)
 
-                        # EXPAND
                         new_suhu, new_rh, new_sun, new_wind = [], [], [], []
-                        
                         if len(df_csv) == 12:
                             for i in range(12):
-                                new_suhu.extend([raw_suhu[i], raw_suhu[i]])
-                                new_rh.extend([raw_rh[i], raw_rh[i]])
-                                new_sun.extend([raw_sun[i], raw_sun[i]])
-                                new_wind.extend([raw_wind[i], raw_wind[i]])
-                                
+                                new_suhu.extend([raw_suhu[i]]*2); new_rh.extend([raw_rh[i]]*2)
+                                new_sun.extend([raw_sun[i]]*2); new_wind.extend([raw_wind[i]]*2)
                         elif len(df_csv) >= 24:
-                            new_suhu = raw_suhu[:24]
-                            new_rh = raw_rh[:24]
-                            new_sun = raw_sun[:24]
-                            new_wind = raw_wind[:24]
+                            new_suhu, new_rh, new_sun, new_wind = raw_suhu[:24], raw_rh[:24], raw_sun[:24], raw_wind[:24]
                         
-                        # UPDATE STATE
                         st.session_state['df_iklim_24']['Suhu (°C)'] = new_suhu
                         st.session_state['df_iklim_24']['Kelembaban (%)'] = new_rh
                         st.session_state['df_iklim_24']['Penyinaran (%)'] = new_sun
                         st.session_state['df_iklim_24']['Angin (km/jam)'] = new_wind
-                        
                         st.rerun()
                     else:
-                        st.error("❌ Format CSV Salah! Tidak ditemukan 4 kolom angka.")
+                        st.error("❌ Format CSV Salah!")
 
         except Exception as e:
             st.error(f"Error: {e}")
@@ -198,36 +176,29 @@ with st.sidebar:
     def_c = st.session_state.get('temp_c_factor', 1.1)
     c_factor = st.number_input("Faktor Koreksi (c)", 0.8, 1.4, def_c, 0.1)
     
-    # --- SAVE BUTTON YANG LEBIH AMAN ---
+    # --- [FIXED] SAVE BUTTON YANG LEBIH AMAN ---
     try:
-        # 1. Konversi DataFrame ke List of Dict (Aman JSON)
-        df_safe = st.session_state['df_iklim_24'].astype(float).to_dict(orient='records')
-        
-        # 2. Siapkan Dictionary Data
+        # Kita copy dataframe, lalu konversi HANYA kolom numeric
+        df_temp = st.session_state['df_iklim_24'].copy()
+        cols_num = ['Suhu (°C)', 'Kelembaban (%)', 'Penyinaran (%)', 'Angin (km/jam)']
+        for col in cols_num:
+            df_temp[col] = df_temp[col].astype(float)
+            
         data_save = {
-            'df_iklim_data': df_safe,
+            'df_iklim_data': df_temp.to_dict(orient='records'),
             'c_factor': float(c_factor)
         }
         
-        # 3. Dump ke JSON String dulu (Biar kalau error ketahuan di sini)
         json_str = json.dumps(data_save, indent=2)
-        
-        # 4. Masukkan ke Tombol
-        st.download_button(
-            label="💾 Simpan Data (.json)",
-            data=json_str,
-            file_name="klimatologi_save.json",
-            mime="application/json"
-        )
+        st.download_button("💾 Simpan Data (.json)", json_str, "klimatologi_save.json", "application/json")
     except Exception as e:
-        st.error(f"Gagal menyiapkan tombol save: {e}")
+        st.error(f"Error tombol save: {e}")
 
 # --- 5. MAIN CONTENT ---
 st.title("🌦️ Klimatologi (Sistem 15 Harian)")
 st.caption("Metode Penman Modifikasi (KP-01) - 24 Periode")
 
-# A. Input Data
-st.subheader("1. Input Data Iklim (24 Periode)")
+st.subheader("1. Input Data Iklim")
 edited_df = st.data_editor(st.session_state['df_iklim_24'], height=400, use_container_width=True, hide_index=True)
 st.session_state['df_iklim_24'] = edited_df
 
@@ -255,12 +226,7 @@ try:
         st.info("👇 Kirim data ke Irigasi Pipa")
         if st.button("🚀 KIRIM DATA ETo (24 Periode)", type="primary", use_container_width=True):
             st.session_state['data_eto_manual'] = df_hasil['ETo (mm/hari)'].tolist()
-            st.markdown(f"""
-            <div class="success-box">
-                <b>✅ Terkirim!</b><br>
-                Silakan buka Page <b>Irigasi Pipa</b> dan klik tombol <b>'Ambil Data ETo'</b>.
-            </div>
-            """, unsafe_allow_html=True)
+            st.success("✅ Terkirim! Buka Page Irigasi Pipa untuk mengambil data.")
     
     with col2:
         rata_eto = np.mean(eto_result)
