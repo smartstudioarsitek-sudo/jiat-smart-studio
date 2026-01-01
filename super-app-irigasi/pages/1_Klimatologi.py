@@ -199,3 +199,19 @@ components.html(
     """<button onclick="window.print()" style="background:#ff9800;color:white;border:none;padding:10px 20px;border-radius:5px;font-weight:bold;cursor:pointer;">🖨️ Cetak PDF</button>""", 
     height=50
 )
+# ... (kode sebelumnya tetap sama)
+
+# --- BAGIAN BAWAH PAGE KLIMATOLOGI ---
+st.divider()
+st.subheader("📤 Kirim Data ke Modul Lain")
+
+col_kirim1, col_kirim2 = st.columns([3, 1])
+with col_kirim1:
+    st.info("Klik tombol di kanan untuk mengirim data ETo ini ke halaman Pola Tanam & Irigasi Pipa.")
+
+with col_kirim2:
+    if st.button("🚀 KIRIM DATA ETo", type="primary", use_container_width=True):
+        # Simpan ke Session State (Kotak Penyimpanan Sementara)
+        st.session_state['data_eto_manual'] = df_hasil['ETo (mm/hari)'].tolist()
+        st.success("✅ Data Berhasil Dikirim!")
+        st.caption("Silakan buka halaman Pola Tanam atau Irigasi Pipa dan klik 'Ambil Data'.")
