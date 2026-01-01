@@ -189,11 +189,11 @@ with tab1:
         edited_pipa = st.data_editor(st.session_state['df_pipa'], height=350, use_container_width=True)
         st.session_state['df_pipa'] = edited_pipa
 
-# --- TAB 2: HASIL DEBIT (LENGKAP INFO) ---
+# --- TAB 2: HASIL DEBIT (FIX ERROR FORMATTING) ---
 with tab2:
     st.subheader("Analisa Neraca Air & Kebutuhan")
     
-    # 1. SCORECARD RINGKASAN (Mirip Laporan)
+    # 1. SCORECARD RINGKASAN
     col_sum1, col_sum2 = st.columns(2)
     with col_sum1:
         st.markdown(f"""
@@ -233,9 +233,16 @@ with tab2:
     st.altair_chart((bar+line).interactive(), use_container_width=True)
     st.caption("Garis Merah = Batas Aman Pengambilan Air (Safe Yield).")
 
-    # 3. TABEL DATA DETAIL
+    # 3. TABEL DATA DETAIL (FIX: Filter kolom numeric saja)
     st.write("#### 📋 Data Detail Per Periode")
-    st.dataframe(df_calc.style.format("{:.3f}"), use_container_width=True)
+    
+    # [FIX ERROR DISINI] Hanya format kolom angka
+    numeric_cols_calc = df_calc.select_dtypes(include=[np.number]).columns
+    
+    st.dataframe(
+        df_calc.style.format("{:.3f}", subset=numeric_cols_calc), 
+        use_container_width=True
+    )
 
 # --- TAB 3: PIPA & HIDROLIKA ---
 with tab3:
