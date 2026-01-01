@@ -293,3 +293,18 @@ components.html(
     """<button onclick="window.print()" style="background:#558b2f;color:white;border:none;padding:10px 20px;border-radius:5px;font-weight:bold;cursor:pointer;">🖨️ Cetak PDF</button>""", 
     height=50
 )
+
+st.divider()
+st.subheader("📤 Kirim Data ke Irigasi Pipa")
+
+col_kirim1, col_kirim2 = st.columns([3, 1])
+with col_kirim1:
+    st.info("Klik tombol ini agar Debit Kebutuhan (NFR Max) bisa dipakai di halaman Irigasi Pipa.")
+
+with col_kirim2:
+    if st.button("🚀 KIRIM Q DESAIN", type="primary", use_container_width=True):
+        # Simpan Nilai Max ke Session State
+        q_max_kirim = df_res['Q (l/s/ha)'].max()
+        st.session_state['data_nfr_manual'] = q_max_kirim
+        
+        st.success(f"✅ Data Q ({q_max_kirim:.3f}) Terkirim!")
