@@ -222,3 +222,13 @@ if stats:
         </ul>
     </div>
     """, unsafe_allow_html=True)
+st.markdown("""
+<div style="background-color: #fce4ec; padding: 15px; border-radius: 5px; border-left: 5px solid #e91e63; margin-bottom: 20px;">
+    <strong>ℹ️ METODOLOGI: Analisa Frekuensi & Intensitas</strong><br>
+    <ul>
+        <li><strong>Distribusi Probabilitas:</strong> Gumbel & Log Pearson Type III</li>
+        <li><strong>Uji Keselarasan:</strong> Chi-Square / Smirnov-Kolmogorov (Otomatis via parameter statistik)</li>
+        <li><strong>Intensitas Hujan:</strong> Rumus Mononobe</li>
+    </ul>
+</div>
+""", unsafe_allow_html=True)
