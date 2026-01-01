@@ -148,39 +148,43 @@ def init_state():
 
 init_state()
 
-# --- 4. SIDEBAR (PARAMETER LOKASI) ---
+# --- 4. SIDEBAR (PARAMETER LOKASI & KALIBRASI) ---
 with st.sidebar:
     st.header("⚙️ Parameter Lokasi")
-    st.info("Input Lintang diperlukan untuk perhitungan Radiasi (Ra) yang akurat.")
     
-    lat_input = st.number_input("Lintang (Latitude)", value=-6.2, step=0.1, help="Gunakan minus (-) untuk Lintang Selatan (LS). Contoh: Jakarta -6.2")
-    elev_input = st.number_input("Elevasi (m dpl)", value=10.0, step=10.0, help="Ketinggian dari permukaan laut.")
-    c_factor = st.number_input("Faktor Koreksi (c)", value=1.1, step=0.1, min_value=0.5, max_value=1.5, help="Angka koreksi Penman Modifikasi (Biasanya 0.9 - 1.2)")
+    lat_input = st.number_input("Lintang (Latitude)", value=-6.2, step=0.1, help="Gunakan minus (-) untuk LS.")
+    elev_input = st.number_input("Elevasi (m dpl)", value=10.0, step=10.0)
+
+    st.divider()
+    st.header("🎚️ Kalibrasi (KP-01)")
+    
+    # PANDUAN FAKTOR C (Baru)
+    st.info("💡 **Tips Faktor C:**\n- Basah/Hujan (RH>80%): **0.8 - 0.9**\n- Sedang (RH 60-80%): **0.9 - 1.0**\n- Kering/Panas (RH<60%): **1.0 - 1.1**")
+    
+    # Default saya turunkan ke 0.9 (Aman untuk Indonesia)
+    c_factor = st.number_input("Faktor Koreksi (c)", value=0.90, step=0.05, min_value=0.5, max_value=1.5)
 
     st.divider()
     st.header("📂 Data Input")
     uploaded_file = st.file_uploader("Upload Excel / CSV", type=["xlsx", "csv"])
     
+    # ... (Sisa kode logika upload file biarkan sama) ...
     if uploaded_file and st.button("🔄 PROSES FILE", type="primary"):
-        # ... (Logika upload file sama seperti sebelumnya) ...
+        # Copy-paste logika baca file dari kode sebelumnya di sini
         try:
             if uploaded_file.name.endswith('.xlsx'):
                 df_up = pd.read_excel(uploaded_file)
             else:
                 df_up = pd.read_csv(uploaded_file, sep=None, engine='python')
                 
-            # Ambil 4 kolom pertama angka
             df_num = df_up.select_dtypes(include=[np.number])
             if df_num.shape[1] >= 4:
                 vals = df_num.iloc[:, :4].values
-                # Logic expand 12 to 24 rows if needed
                 if len(vals) == 12:
                     new_vals = np.repeat(vals, 2, axis=0)
                 else:
-                    new_vals = vals[:24] # Cut if too long, or take as is
+                    new_vals = vals[:24]
                 
-                # Update Session
-                # Pastikan panjang data sesuai (max 24)
                 limit = min(len(new_vals), 24)
                 st.session_state['df_iklim_24'].iloc[:limit, 1] = new_vals[:limit, 0] # Suhu
                 st.session_state['df_iklim_24'].iloc[:limit, 2] = new_vals[:limit, 1] # RH
@@ -257,3 +261,4 @@ st.info("""
 **ℹ️ Note Akurasi Tinggi:** Berbeda dengan tabel Ra statis, modul ini menghitung **Radiasi Ekstraterestrial (Ra)** secara dinamis berdasarkan input **Lintang (Latitude)** dan **Tanggal (Periode)**. 
 Ini memastikan nilai radiasi sesuai dengan posisi matahari sebenarnya terhadap lokasi bendung/irigasi Anda (Standar Engineering).
 """)
+
