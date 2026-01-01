@@ -45,7 +45,7 @@ def hitung_penman_modifikasi(temp, hum, sun, wind, c_factor=1.1):
         # 3. Fungsi Angin f(u) KP-01
         fu = 0.27 * (1 + u_km_day / 100)
         
-        # 4. Radiasi (Ra) - Expand 12 bulan jadi 24 periode jika perlu
+        # 4. Radiasi
         ra_bulanan = [15.8, 16.0, 15.8, 15.3, 14.4, 13.9, 14.1, 14.8, 15.6, 16.0, 15.9, 15.7]
         if len(T) == 24:
             Ra = []
@@ -91,7 +91,7 @@ def init_state():
 
 init_state()
 
-# --- 4. SIDEBAR (SMART UPLOAD) ---
+# --- 4. SIDEBAR (SMART UPLOAD & CONVERT) ---
 with st.sidebar:
     st.header("📂 File & Tools")
     
@@ -107,18 +107,18 @@ with st.sidebar:
     # --- UPLOAD SECTION ---
     uploaded_file = st.file_uploader("Upload Data (JSON / CSV)", type=["json", "csv"])
     
-    # KONFIGURASI KONVERSI (Muncul jika upload CSV)
+    # KONFIGURASI KONVERSI
     convert_wind = False
     convert_sun = False
     max_sun_hour = 12.0
     
     if uploaded_file is not None and uploaded_file.name.endswith('.csv'):
         with st.expander("⚙️ Opsi Konversi Satuan", expanded=True):
-            st.caption("Centang jika satuan data CSV Anda berbeda:")
-            convert_wind = st.checkbox("Angin m/s ➡️ km/jam")
-            convert_sun = st.checkbox("Sinar Jam/Bulan ➡️ Persen (%)")
+            st.info("Centang jika data CSV berbeda satuan:")
+            convert_wind = st.checkbox("Angin (m/s) ➡️ km/jam", value=True) # Default True krn sering dipakai
+            convert_sun = st.checkbox("Sinar (Jam) ➡️ Persen (%)", value=True) # Default True
             if convert_sun:
-                max_sun_hour = st.number_input("Max Penyinaran (Jam/Hari)", 8.0, 14.0, 12.0, help="Biasanya 12 jam (Astronomi) atau 8 jam (Efektif).")
+                max_sun_hour = st.number_input("Max Penyinaran (Jam/Hari)", 8.0, 14.0, 12.0)
 
     if uploaded_file is not None:
         try:
@@ -131,15 +131,23 @@ with st.sidebar:
                     st.success("✅ JSON Loaded!")
                     st.rerun()
 
-            # B. CSV (SMART READ)
+            # B. CSV (SUPER SMART READ)
             elif uploaded_file.name.endswith('.csv'):
-                # Baca CSV tanpa peduli nama header (header=0, tapi kita pakai iloc)
+                # 1. Coba baca comma (Default)
                 df_csv = pd.read_csv(uploaded_file)
                 
-                if df_csv.shape[1] >= 4:
-                    vals = df_csv.iloc[:, :4].values # Ambil 4 kolom pertama
+                # 2. Jika kolom cuma 1, kemungkinan separatornya titik koma (;)
+                if df_csv.shape[1] < 2:
+                    uploaded_file.seek(0)
+                    df_csv = pd.read_csv(uploaded_file, sep=';')
+                
+                # 3. Filter HANYA kolom Angka (Membuang kolom 'Bulan' otomatis)
+                df_numeric = df_csv.select_dtypes(include=[np.number])
+                
+                if df_numeric.shape[1] >= 4:
+                    vals = df_numeric.iloc[:, :4].values # Ambil 4 kolom angka pertama
                     
-                    # Mapping Kolom: 0=Suhu, 1=RH, 2=Sinar, 3=Angin
+                    # Mapping: Urutan di CSV Angka harus: Suhu, RH, Sinar, Angin
                     raw_suhu = vals[:, 0]
                     raw_rh = vals[:, 1]
                     raw_sun = vals[:, 2]
@@ -149,31 +157,38 @@ with st.sidebar:
                     # 1. Konversi Angin (m/s -> km/jam)
                     if convert_wind:
                         raw_wind = raw_wind * 3.6
-                        st.toast("💨 Angin dikonversi (x 3.6)")
                         
-                    # 2. Konversi Sinar (Jam/Bulan -> %)
+                    # 2. Konversi Sinar (Jam -> %)
                     if convert_sun:
-                        # Asumsi rata-rata 30 hari per bulan
-                        # Rumus: (Jam_Total / 30hari / Max_Jam) * 100
-                        raw_sun = (raw_sun / 30 / max_sun_hour) * 100
+                        # Asumsi: (Jam / 30hari / MaxJam) * 100
+                        # Tapi data tabel biasanya rata-rata jam/hari atau jam total/bulan?
+                        # Kalau input BMKG biasanya Rata-rata Penyinaran (Jam) per hari.
+                        # Jika inputnya Jam Total Bulanan (misal 115), maka dibagi 30 dulu.
+                        
+                        # Cek heuristic sederhana:
+                        if np.mean(raw_sun) > 24: 
+                            # Kemungkinan Jam Total Bulanan (misal 100-200 jam)
+                            raw_sun = (raw_sun / 30 / max_sun_hour) * 100
+                        else:
+                            # Kemungkinan Jam Harian (misal 4-8 jam)
+                            raw_sun = (raw_sun / max_sun_hour) * 100
+                            
                         # Cap max 100%
                         raw_sun = np.where(raw_sun > 100, 100, raw_sun)
-                        st.toast("☀️ Sinar dikonversi ke %")
 
                     # --- LOGIKA EXPAND (12 -> 24) ---
                     new_suhu, new_rh, new_sun, new_wind = [], [], [], []
                     
                     if len(df_csv) == 12:
-                        st.info("ℹ️ Data Bulanan (12) di-expand ke 24 Periode.")
+                        st.toast("ℹ️ Data Bulanan di-expand ke 24 Periode.")
                         for i in range(12):
-                            # Duplikasi ke periode 1 & 2
                             new_suhu.extend([raw_suhu[i], raw_suhu[i]])
                             new_rh.extend([raw_rh[i], raw_rh[i]])
                             new_sun.extend([raw_sun[i], raw_sun[i]])
                             new_wind.extend([raw_wind[i], raw_wind[i]])
                             
                     elif len(df_csv) >= 24:
-                        st.info("ℹ️ Data 24 Periode dimuat.")
+                        st.toast("ℹ️ Data 24 Periode dimuat.")
                         new_suhu = raw_suhu[:24]
                         new_rh = raw_rh[:24]
                         new_sun = raw_sun[:24]
@@ -185,10 +200,10 @@ with st.sidebar:
                     st.session_state['df_iklim_24']['Penyinaran (%)'] = new_sun
                     st.session_state['df_iklim_24']['Angin (km/jam)'] = new_wind
                     
-                    st.success("✅ CSV Berhasil Dimuat & Dikonversi!")
+                    st.success("✅ CSV Berhasil Dimuat!")
                     st.rerun()
                 else:
-                    st.error("❌ CSV harus punya minimal 4 kolom (Suhu, RH, Sinar, Angin)")
+                    st.error(f"❌ Gagal membaca. Terdeteksi hanya {df_numeric.shape[1]} kolom angka. Pastikan CSV pakai koma (,) atau titik koma (;).")
 
         except Exception as e:
             st.error(f"Error: {e}")
