@@ -1,5 +1,8 @@
 streamlit
 pandas
 numpy
+openpyxl
+xlrd
+scipy
 altair
 matplotlib
