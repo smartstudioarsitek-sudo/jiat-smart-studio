@@ -75,7 +75,7 @@ with st.sidebar:
     
     st.divider()
     
-    # Upload & Proses (SMART CSV READER)
+    # Upload & Proses (SMART CSV READER V2)
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
     
     convert_wind = False
@@ -91,22 +91,29 @@ with st.sidebar:
 
         if st.button("🔄 Proses & Masukkan ke Tabel", type="primary"):
             try:
-                # 1. SMART READ (Coba Koma, Coba Titik Koma)
+                # 1. SUPER SMART READ (Auto-Detect Separator & Encoding)
                 df_csv = None
+                
+                # Opsi kombinasi (Pemisah Koma/TitikKoma, Desimal Titik/Koma, Encoding UTF8/Windows)
                 file_opts = [
-                    {'sep': ',', 'dec': '.'}, 
-                    {'sep': ';', 'dec': '.'}, # Ini yang cocok buat file Kakak
-                    {'sep': ';', 'dec': ','}
+                    # Format Kakak (Titik Koma + Desimal Titik + Encoding Windows) -> INI YANG AKAN BERHASIL
+                    {'sep': ';', 'dec': '.', 'enc': 'cp1252'},
+                    # Format Standard
+                    {'sep': ',', 'dec': '.', 'enc': 'utf-8'},
+                    {'sep': ';', 'dec': ',', 'enc': 'utf-8'},
+                    {'sep': ';', 'dec': '.', 'enc': 'utf-8'},
                 ]
                 
                 for opt in file_opts:
                     try:
                         uploaded_file.seek(0)
-                        temp_df = pd.read_csv(uploaded_file, sep=opt['sep'], decimal=opt['dec'])
-                        # Cek apakah kolomnya cukup?
+                        # Coba baca dengan parameter tertentu
+                        temp_df = pd.read_csv(uploaded_file, sep=opt['sep'], decimal=opt['dec'], encoding=opt['enc'])
+                        
+                        # Cek apakah berhasil dapat 4 kolom angka?
                         if temp_df.select_dtypes(include=[np.number]).shape[1] >= 4:
                             df_csv = temp_df
-                            break
+                            break # Berhenti loop kalau sudah ketemu yang cocok
                     except: pass
                 
                 # 2. PROSES DATA
@@ -115,10 +122,9 @@ with st.sidebar:
                     vals = df_numeric.iloc[:, :4].values
                     r_suhu, r_rh, r_sun, r_wind = vals[:,0], vals[:,1], vals[:,2], vals[:,3]
                     
-                    # Logika Konversi
-                    # Note: Jika data Kakak m/s, tapi rumus butuh km/jam, kita kali 3.6 di sini
+                    # Konversi
                     if convert_wind: r_wind_km = r_wind * 3.6
-                    else: r_wind_km = r_wind * 3.6 # Asumsi input m/s, dikonversi ke km/jam utk Rumus Penman
+                    else: r_wind_km = r_wind * 3.6 # Asumsi input m/s, dikonversi ke km/jam utk Rumus
                     
                     if convert_sun:
                         if np.mean(r_sun) > 24: r_sun = (r_sun / 30 / max_sun_hour) * 100
@@ -128,7 +134,7 @@ with st.sidebar:
                     n_suhu, n_rh, n_sun, n_wind = [], [], [], []
                     if len(df_csv) == 12:
                         for i in range(12):
-                            n_suhu.extend([r_suhu[i]]*2); n_rh.extend([r_rh[i]]*2); n_sun.extend([r_sun[i]]*2); n_wind.extend([r_wind[i]]*2) # Simpan m/s di tabel visual
+                            n_suhu.extend([r_suhu[i]]*2); n_rh.extend([r_rh[i]]*2); n_sun.extend([r_sun[i]]*2); n_wind.extend([r_wind[i]]*2) 
                     elif len(df_csv) >= 24:
                         n_suhu, n_rh, n_sun, n_wind = r_suhu[:24], r_rh[:24], r_sun[:24], r_wind[:24]
                     
@@ -138,19 +144,18 @@ with st.sidebar:
                     st.session_state['df_iklim_24']['Angin (m/s)'] = n_wind
                     st.success("✅ Data Berhasil Masuk!")
                     st.rerun()
-                else: st.error("❌ Format CSV Salah (Minimal 4 kolom angka)")
+                else: st.error("❌ Format CSV Salah (Minimal 4 kolom angka). Coba hapus simbol derajat (°) di header CSV jika masih gagal.")
             except Exception as e: st.error(f"Error: {e}")
 
     st.divider()
     st.header("Parameter")
-    c_factor = st.number_input("Faktor Koreksi (c)", 0.8, 1.4, 0.9, 0.1) # Default 0.9 biar ETo ga ketinggian
+    c_factor = st.number_input("Faktor Koreksi (c)", 0.8, 1.4, 0.9, 0.1)
 
 # --- 5. MAIN CONTENT ---
 st.title("🌦️ Klimatologi (Sistem 15 Harian)")
 st.caption("Metode Penman Modifikasi (KP-01) - 24 Periode")
 
 st.subheader("1. Input Data Iklim")
-# Hapus use_container_width agar log bersih
 edited_df = st.data_editor(st.session_state['df_iklim_24'], height=400, hide_index=True) 
 st.session_state['df_iklim_24'] = edited_df
 
@@ -174,7 +179,6 @@ try:
     col1, col2 = st.columns([2, 1])
     with col1:
         num_cols = df_hasil.select_dtypes(include=[np.number]).columns
-        # Hapus use_container_width di sini juga
         st.dataframe(df_hasil.style.background_gradient(cmap="Oranges", subset=['ETo (mm/hari)']).format("{:.2f}", subset=num_cols), height=400)
         
         st.divider()
