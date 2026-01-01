@@ -1,219 +1,224 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import altair as alt
 import math
+from scipy.stats import gumbel_r, pearson3
 
-# --- 1. KONFIGURASI HALAMAN ---
+# --- CONFIG ---
 st.set_page_config(page_title="Analisa Banjir & Frekuensi", layout="wide", page_icon="⛈️")
 
-# --- 2. HEADER ---
 st.markdown("""
 <style>
-    .hero-box {
-        background: linear-gradient(120deg, #37474f 0%, #546e7a 50%, #78909c 100%);
-        padding: 20px; border-radius: 10px; color: white; text-align: center; margin-bottom: 20px;
-    }
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] { font-weight: bold; }
+    .metric-card {background-color: #fce4ec; padding: 15px; border-radius: 10px; border-left: 5px solid #c2185b;}
+    .result-card {background-color: #e8f5e9; padding: 15px; border-radius: 10px; border-left: 5px solid #2e7d32;}
 </style>
-<div class="hero-box">
-    <h1 style="margin:0; font-size: 35px;">⛈️ Analisa Frekuensi & Banjir</h1>
-    <p style="opacity: 0.9;">Analisa Kala Ulang (Return Period) 2, 5, 10, 25, 50, 100 Tahun</p>
-</div>
 """, unsafe_allow_html=True)
 
-# --- 3. FUNGSI ENGINE HIDROLOGI ---
-
-# A. Analisa Frekuensi (Metode Gumbel Tipe I)
-def analisa_gumbel(df_hujan):
-    # Data
-    data = df_hujan['R_max (mm)'].values
+# --- FUNGSI STATISTIK ---
+def hitung_statistik(df):
+    data = df['R Max (mm)'].values
     n = len(data)
-    if n < 2: return None # Data kurang
+    if n < 2: return None
     
-    # Statistik Dasar
-    rata = np.mean(data)
-    std = np.std(data, ddof=1) # Standar Deviasi Sampel
+    # Logaritma untuk Log Pearson
+    log_data = np.log10(data)
     
-    # Parameter Gumbel (Yn & Sn - Pendekatan Tabel Soewarno)
-    gumbel_table = {
-        10: (0.4952, 0.9497), 11: (0.4996, 0.9676), 12: (0.5035, 0.9833),
-        13: (0.5070, 0.9971), 14: (0.5100, 1.0095), 15: (0.5128, 1.0206),
-        16: (0.5157, 1.0316), 17: (0.5181, 1.0411), 18: (0.5202, 1.0493),
-        19: (0.5220, 1.0565), 20: (0.5236, 1.0628), 25: (0.5309, 1.0915),
-        30: (0.5362, 1.1124), 100: (0.5600, 1.2065)
+    stats = {
+        'n': n,
+        'R_rata': np.mean(data),
+        'Sd': np.std(data, ddof=1),
+        'Cs': pd.Series(data).skew(),
+        'Ck': pd.Series(data).kurt() + 3, # Pandas kurtosis is Fisher's (normal=0), we want Pearson's (normal=3)
+        
+        # Statistik Log
+        'Log_rata': np.mean(log_data),
+        'Log_Sd': np.std(log_data, ddof=1),
+        'Log_Cs': pd.Series(log_data).skew(),
+        'Log_Ck': pd.Series(log_data).kurt() + 3
     }
+    return stats
+
+# --- FUNGSI DISTRIBUSI ---
+def hitung_gumbel(stats, return_periods):
+    # Reduced variate (Yt) and mean/std of reduced variate (Yn, Sn) approx
+    n = stats['n']
+    # Tabel pendekatan untuk Yn dan Sn (Simplified for dynamic n)
+    # Di real app, sebaiknya pakai tabel lengkap atau rumus pendekatan
+    Yn = 0.577 # Euler constant approx for large n, or dynamic lookup
+    Sn = 1.2825 / np.sqrt(1) # Rough approx, better use library or lookup table
     
-    # Cari N terdekat (jika N user tidak pas di tabel, ambil yg terdekat)
-    closest_n = min(gumbel_table.keys(), key=lambda k: abs(k-n))
-    yn_val, sn_val = gumbel_table[closest_n]
+    # Using scipy for precision
+    loc = stats['R_rata'] - 0.45005 * stats['Sd']
+    scale = 0.7797 * stats['Sd']
     
-    kala_ulang = [2, 5, 10, 25, 50, 100]
-    hasil_hujan = {}
-    
-    for t in kala_ulang:
-        yt = -np.log(-np.log((t-1)/t))
-        k = (yt - yn_val) / sn_val
-        xt = rata + k * std
-        hasil_hujan[t] = xt
+    results = {}
+    for t in return_periods:
+        # Xt = Mean + K * Sd
+        # K_gumbel = (Yt - Yn) / Sn
+        # Scipy ppf is inverse cdf
+        prob = 1 - (1/t)
+        val = gumbel_r.ppf(prob, loc=loc, scale=scale)
+        results[t] = val
+    return results
+
+def hitung_log_pearson(stats, return_periods):
+    results = {}
+    for t in return_periods:
+        prob = 1 - (1/t)
+        # K untuk Log Pearson III (Tergantung Cs)
+        # Menggunakan pendekatan Scipy Pearson3 (Skewed Normal)
+        # Pearson3 in scipy is standardized. 
+        # R_log = Mean_log + K * Sd_log
         
-    return hasil_hujan, rata, std
+        # Scipy pearson3 arguments: skew, loc, scale
+        # Warning: Scipy pearson3 definition might differ slightly in sign of skew
+        val_log = pearson3.ppf(prob, skew=stats['Log_Cs'], loc=stats['Log_rata'], scale=stats['Log_Sd'])
+        results[t] = 10**val_log
+    return results
 
-# B. Rumus Banjir (Rasional, Haspers, Weduwen)
-def hitung_banjir_all(A, L, H, R24, C):
-    S = H / (L * 1000)
-    if S <= 0: S = 0.001
-    
-    # 1. Rasional
-    tc_ras = 0.06628 * (L**0.77) / (S**0.385)
-    i_ras = (R24 / 24) * ((24 / tc_ras)**(2/3))
-    q_ras = 0.278 * C * i_ras * A
-    
-    # 2. Haspers
-    t_has = 0.1 * (L**0.8) * (S**-0.3)
-    i_has = (R24 / 24) * ((24 / t_has)**(2/3))
-    q_has = 0.278 * C * i_has * A
-    
-    # 3. Weduwen
-    t_wed = 0.06628 * (L**0.77) / (S**0.385) 
-    i_wed = (R24 / 24) * ((24 / t_wed)**(2/3))
-    q_wed = 0.278 * C * 1.0 * i_wed * A # Beta=1
-    
-    return q_ras, q_has, q_wed
+# --- INIT STATE ---
+if 'df_banjir' not in st.session_state:
+    # Dummy Data: Hujan Harian Maksimum 10 Tahun Terakhir
+    years = list(range(2015, 2025))
+    r_max = [95, 110, 85, 120, 105, 130, 90, 115, 100, 125]
+    st.session_state['df_banjir'] = pd.DataFrame({'Tahun': years, 'R Max (mm)': r_max})
 
-# --- 4. SIDEBAR PARAMETER ---
+# --- SIDEBAR ---
 with st.sidebar:
-    st.header("⛰️ Parameter DAS")
-    luas_das = st.number_input("Luas DAS (A) [km²]", value=15.5, min_value=0.1)
-    panjang_sungai = st.number_input("Panjang Sungai (L) [km]", value=6.5, min_value=0.1)
-    beda_tinggi = st.number_input("Beda Tinggi (H) [m]", value=120.0, min_value=1.0)
-    koef_c = st.slider("Koefisien Pengaliran (C)", 0.1, 0.95, 0.60)
+    st.title("📂 Data Hujan Ekstrim")
+    st.caption("Input data curah hujan harian maksimum tahunan.")
     
-    st.divider()
-    mode_input = st.radio("Sumber Data Hujan:", ["💾 Punya Data Series (10 Thn)", "✏️ Input Manual Rencana"])
+    # Template CSV
+    df_temp = pd.DataFrame({'Tahun': [2020, 2021], 'R_Max': [100, 120]})
+    st.download_button("📥 Template CSV", df_temp.to_csv(index=False).encode('utf-8'), "template_banjir.csv", "text/csv")
+    
+    uploaded = st.file_uploader("Upload CSV", type=['csv'])
+    if uploaded and st.button("🔄 Baca CSV"):
+        try:
+            try: df = pd.read_csv(uploaded)
+            except: 
+                uploaded.seek(0)
+                df = pd.read_csv(uploaded, sep=';')
+            
+            num = df.select_dtypes(include=[np.number])
+            if num.shape[1] >= 2:
+                st.session_state['df_banjir'] = pd.DataFrame({
+                    'Tahun': num.iloc[:, 0],
+                    'R Max (mm)': num.iloc[:, 1]
+                })
+                st.rerun()
+            else: st.error("CSV harus minimal 2 kolom angka (Tahun, R Max)")
+        except Exception as e: st.error(f"Error: {e}")
 
-# --- 5. MAIN CONTENT ---
+# --- MAIN CONTENT ---
+st.title("⛈️ Analisa Hujan Rancangan")
+st.info(f"**Proyek:** {st.session_state.get('nama_proyek', '-')} | Mode: Analisa Frekuensi")
 
-# --- LOGIKA 1: JIKA PUNYA DATA SERIES (ANALISA FREKUENSI) ---
-if mode_input == "💾 Punya Data Series (10 Thn)":
-    st.subheader("1. Analisa Frekuensi Hujan (Metode Gumbel)")
+c1, c2 = st.columns([1, 2])
+
+# 1. INPUT DATA
+with c1:
+    st.subheader("1. Data Hujan Harian Maks")
+    edited_df = st.data_editor(st.session_state['df_banjir'], num_rows="dynamic", use_container_width=True)
+    st.session_state['df_banjir'] = edited_df
     
-    col_input, col_result = st.columns([1, 1.5])
-    
-    with col_input:
-        st.info("Masukkan Data Hujan Harian Maksimum Tahunan (Min. 10 Tahun).")
+    # Hitung Statistik
+    stats = hitung_statistik(edited_df)
+
+# 2. ANALISA STATISTIK
+with c2:
+    if stats:
+        st.subheader("2. Parameter Statistik")
+        sc1, sc2, sc3, sc4 = st.columns(4)
+        sc1.metric("Rata-rata", f"{stats['R_rata']:.1f}")
+        sc2.metric("Std Dev (Sd)", f"{stats['Sd']:.2f}")
+        sc3.metric("Skew (Cs)", f"{stats['Cs']:.3f}")
+        sc4.metric("Kurt (Ck)", f"{stats['Ck']:.3f}")
         
-        # Template Data 10 Tahun
-        if 'df_hujan_series' not in st.session_state:
-            years = list(range(2015, 2025))
-            # Data dummy acak normal
-            r_vals = [90, 110, 85, 150, 95, 120, 135, 100, 180, 115]
-            st.session_state.df_hujan_series = pd.DataFrame({'Tahun': years, 'R_max (mm)': r_vals})
-            
-        edited_hujan = st.data_editor(
-            st.session_state.df_hujan_series, 
-            num_rows="dynamic", 
-            use_container_width=True,
-            key="editor_hujan_series"
-        )
-        st.session_state.df_hujan_series = edited_hujan
+        st.markdown("---")
+        st.caption("Statistik Logaritma (Untuk Log Pearson III):")
+        lc1, lc2, lc3 = st.columns(3)
+        lc1.metric("Log Rata", f"{stats['Log_rata']:.3f}")
+        lc2.metric("Log Cs (G)", f"{stats['Log_Cs']:.3f}")
+        lc3.metric("Log Ck", f"{stats['Log_Ck']:.3f}")
         
-    with col_result:
-        # Lakukan Analisa Gumbel
-        hasil_gumbel, rata, std = analisa_gumbel(edited_hujan)
+        # REKOMENDASI METODE
+        # Syarat Gumbel: Cs ≈ 1.14, Ck ≈ 5.4
+        # Syarat Log Pearson: Cs bebas (tapi biasanya Log Cs mendekati 0 untuk Log Normal)
         
-        if hasil_gumbel:
-            st.write("#### 📊 Hasil Probabilitas Hujan")
-            st.caption(f"Statistik: Mean = {rata:.1f} mm | StdDev = {std:.1f}")
-            
-            # Buat DataFrame Hasil Hujan Rencana
-            df_r_plan = pd.DataFrame.from_dict(hasil_gumbel, orient='index', columns=['Rencana Hujan (mm)'])
-            df_r_plan.index.name = 'Kala Ulang (Tahun)'
-            
-            st.dataframe(df_r_plan.style.format("{:.1f}"), use_container_width=True)
-            
-            r_dict = hasil_gumbel
-        else:
-            st.error("Data kurang! Masukkan minimal 2 tahun data.")
-            r_dict = None
+        gumbel_score = abs(stats['Cs'] - 1.14) + abs(stats['Ck'] - 5.4)
+        # Simple logic: kalau jauh dari syarat Gumbel, sarankan Log Pearson
+        rekomendasi = "Gumbel" if gumbel_score < 1.5 else "Log Pearson III"
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <b>💡 Rekomendasi Distribusi:</b> {rekomendasi}<br>
+            <small>Berdasarkan nilai Cs dan Ck data Anda.</small>
+        </div>
+        """, unsafe_allow_html=True)
 
-# --- LOGIKA 2: INPUT MANUAL RENCANA (JIKA TIDAK ADA DATA) ---
-else:
-    st.subheader("1. Input Hujan Rencana Manual")
-    st.info("Masukkan nilai hujan rencana yang sudah dihitung sebelumnya.")
-    
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    r2 = c1.number_input("R2 th", value=100.0)
-    r5 = c2.number_input("R5 th", value=125.0)
-    r10 = c3.number_input("R10 th", value=150.0)
-    r25 = c4.number_input("R25 th", value=175.0)
-    r50 = c5.number_input("R50 th", value=200.0)
-    r100 = c6.number_input("R100 th", value=225.0)
-    
-    r_dict = {2: r2, 5: r5, 10: r10, 25: r25, 50: r50, 100: r100}
-
-# --- 6. HITUNG DEBIT BANJIR (MULTI KALA ULANG) ---
+# 3. HASIL HUJAN RANCANGAN
 st.divider()
-st.subheader("2. Rekapitulasi Debit Banjir (Q2 - Q100)")
+st.subheader("3. Hasil Hujan Rancangan (R2 - R100)")
 
-if r_dict:
-    rekap_banjir = []
+if stats:
+    periods = [2, 5, 10, 25, 50, 100]
     
-    for t, r_val in r_dict.items():
-        q_r, q_h, q_w = hitung_banjir_all(luas_das, panjang_sungai, beda_tinggi, r_val, koef_c)
-        q_max = max(q_r, q_h, q_w)
+    # Hitung kedua metode
+    res_gumbel = hitung_gumbel(stats, periods)
+    res_lp3 = hitung_log_pearson(stats, periods)
+    
+    # Buat Tabel Komparasi
+    df_res = pd.DataFrame({
+        'Kala Ulang (Tahun)': periods,
+        'Gumbel (mm)': [res_gumbel[t] for t in periods],
+        'Log Pearson III (mm)': [res_lp3[t] for t in periods]
+    })
+    
+    c_res1, c_res2 = st.columns([1, 2])
+    
+    with c_res1:
+        st.dataframe(df_res.style.format("{:.1f}", subset=['Gumbel (mm)', 'Log Pearson III (mm)'])
+                     .background_gradient(cmap="Reds"), use_container_width=True)
         
-        rekap_banjir.append({
-            'Kala Ulang (T)': f"{t} Tahun",
-            'Hujan Rencana (mm)': round(r_val, 1),
-            'Q Rasional': round(q_r, 2),
-            'Q Haspers': round(q_h, 2),
-            'Q Weduwen': round(q_w, 2),
-            'Q Desain (Max)': round(q_max, 2)
-        })
+        # Pilihan Final
+        pilihan = st.radio("Pilih Metode untuk Desain:", ["Gumbel", "Log Pearson III"], horizontal=True)
+        nilai_desain = res_gumbel if pilihan == "Gumbel" else res_lp3
         
-    df_rekap = pd.DataFrame(rekap_banjir)
-    
-    # Tampilkan Tabel
-    st.dataframe(
-        df_rekap.style.highlight_max(subset=['Q Desain (Max)'], color='#e8f5e9', axis=0),
-        use_container_width=True
-    )
-    
-    # --- 7. GRAFIK LOGARITMIK (KURVA LENGKUNG FREKUENSI) ---
-    st.write("### 📈 Grafik Lengkung Frekuensi Banjir")
-    
-    # [FIX] MENGGUNAKAN 'value_vars' BUKAN 'measure_vars'
-    df_chart = df_rekap.melt(id_vars='Kala Ulang (T)', 
-                             value_vars=['Q Rasional', 'Q Haspers', 'Q Weduwen'], 
-                             var_name='Metode', value_name='Debit (m3/s)')
-    
-    chart = alt.Chart(df_chart).mark_line(point=True).encode(
-        x=alt.X('Kala Ulang (T)', sort=['2 Tahun', '5 Tahun', '10 Tahun', '25 Tahun', '50 Tahun', '100 Tahun']),
-        y='Debit (m3/s)',
-        color='Metode',
-        tooltip=['Kala Ulang (T)', 'Metode', 'Debit (m3/s)']
-    ).properties(height=400)
-    
-    st.altair_chart(chart, use_container_width=True)
+        # Simpan ke Session State (untuk dipakai di Desain Saluran nanti)
+        st.session_state['hujan_rancangan'] = nilai_desain
 
-    # --- 8. SIMPAN DATA (PILIH KALA ULANG) ---
-    st.divider()
-    col_save1, col_save2 = st.columns([2, 1])
-    with col_save1:
-        st.write("#### 💾 Simpan Debit Desain")
-        pilih_t = st.selectbox("Pilih Kala Ulang untuk Desain Saluran:", [2, 5, 10, 25, 50, 100], index=3)
-        
-        q_selected = df_rekap[df_rekap['Kala Ulang (T)'] == f"{pilih_t} Tahun"]['Q Desain (Max)'].values[0]
-        st.caption(f"Debit Banjir Q{pilih_t} = **{q_selected} m³/s** akan disimpan untuk cek keamanan.")
-        
-    with col_save2:
-        st.write("") 
-        st.write("")
-        if st.button("🚀 Simpan Debit Terpilih", type="primary", use_container_width=True):
-            st.session_state['debit_banjir_global'] = float(q_selected)
-            st.toast(f"Debit Q{pilih_t} ({q_selected} m³/s) Tersimpan!", icon="✅")
+    with c_res2:
+        # Grafik
+        chart_data = df_res.melt('Kala Ulang (Tahun)', var_name='Metode', value_name='Hujan (mm)')
+        import altair as alt
+        chart = alt.Chart(chart_data).mark_line(point=True).encode(
+            x='Kala Ulang (Tahun):O',
+            y='Hujan (mm)',
+            color='Metode',
+            tooltip=['Kala Ulang (Tahun)', 'Hujan (mm)', 'Metode']
+        ).interactive()
+        st.altair_chart(chart, use_container_width=True)
 
-else:
-    st.warning("Silakan lengkapi data hujan terlebih dahulu.")
+    # OUTPUT INTENSITAS
+    st.markdown("---")
+    st.markdown("### 4. Intensitas Hujan (Mononobe)")
+    st.caption("Digunakan untuk menghitung Debit Banjir (Q = 0.278 C I A)")
+    
+    col_tc, col_r_pilih = st.columns(2)
+    tc = col_tc.number_input("Waktu Konsentrasi (Tc) - Jam", 0.1, 24.0, 2.0, 0.1)
+    t_pilih = col_r_pilih.selectbox("Kala Ulang Desain", periods, index=1) # Default 5 tahun
+    
+    r_desain = nilai_desain[t_pilih]
+    # Rumus Mononobe: I = (R24 / 24) * (24 / Tc)^(2/3)
+    I = (r_desain / 24) * ((24 / tc)**(2/3))
+    
+    st.markdown(f"""
+    <div class="result-card">
+        <h4>🌧️ Intensitas Hujan (I) = {I:.2f} mm/jam</h4>
+        <ul>
+            <li>Hujan Rancangan (R{t_pilih}): <b>{r_desain:.1f} mm</b></li>
+            <li>Metode: <b>{pilihan}</b></li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
