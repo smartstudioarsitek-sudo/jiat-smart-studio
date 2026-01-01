@@ -1,231 +1,231 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import altair as alt
 
-# --- 1. KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Debit Andalan (Mock)", layout="wide", page_icon="🌊")
+# --- CONFIG ---
+st.set_page_config(page_title="Metode FJ. Mock", layout="wide", page_icon="💧")
 
-# --- 2. HEADER ---
 st.markdown("""
 <style>
-    .hero-box {
-        background: linear-gradient(120deg, #0277bd 0%, #039be5 50%, #4fc3f7 100%);
-        padding: 20px; border-radius: 10px; color: white; text-align: center; margin-bottom: 20px;
+    .metric-box {
+        padding: 15px; background-color: #e3f2fd; 
+        border-left: 5px solid #2196f3; border-radius: 5px;
+        margin-bottom: 10px;
     }
-    .stExpander { border: 1px solid #ddd; border-radius: 5px; }
 </style>
-<div class="hero-box">
-    <h1 style="margin:0; font-size: 35px;">🌊 Analisa Debit Andalan</h1>
-    <p style="opacity: 0.9;">Metode F.J. Mock (Water Balance)</p>
-</div>
 """, unsafe_allow_html=True)
 
-# --- 3. FUNGSI DATA DEFAULT ---
+# --- FUNGSI UTAMA: HANDLING DATA INPUT ---
 def get_default_mock():
-    # Cek Data ETo dari Modul 1
-    if 'data_eto_transfer' in st.session_state:
-        eto_12 = st.session_state['data_eto_transfer']
-        sumber = "✅ Terhubung: Modul Klimatologi (Penman)"
-        link_status = True
-    else:
-        eto_12 = [4.5, 4.6, 4.5, 4.4, 4.2, 4.0, 3.8, 3.9, 4.2, 4.5, 4.6, 4.4] 
-        sumber = "⚠️ Warning: Data ETo Belum Ada (Menggunakan Data Dummy)."
-        link_status = False
+    # 1. Default Data (Dummy)
+    default_eto = [4.14, 4.20, 4.30, 4.10, 3.90, 3.80, 3.90, 4.20, 4.50, 4.60, 4.30, 4.10]
     
-    # Data Hujan & Hari Hujan Default
-    ch_dummy = [350, 300, 280, 200, 150, 100, 50, 20, 80, 150, 250, 300]
-    hh_dummy = [20, 18, 16, 12, 10, 8, 4, 2, 6, 10, 15, 18]
+    # 2. Cek apakah ada kiriman dari Page 1 (Klimatologi)?
+    status_msg = "⚠️ Menggunakan Data Dummy (Belum ada link)"
     
+    # Cek 'data_eto_manual' (dari tombol kirim) ATAU 'data_eto_transfer' (auto)
+    source_data = st.session_state.get('data_eto_manual') or st.session_state.get('data_eto_transfer')
+    
+    if source_data:
+        # A. Jika datanya pas 12 Bulan -> Pakai langsung
+        if len(source_data) == 12:
+            default_eto = source_data
+            status_msg = "✅ Data ETo Terhubung (12 Bulan)"
+            
+        # B. Jika datanya 24 Periode (15 Harian) -> Rata-rata jadi 12 Bulan
+        elif len(source_data) == 24:
+            # Teknik: Ambil rata-rata per 2 data (Jan-1 & Jan-2 = Jan)
+            temp_12 = []
+            for i in range(0, 24, 2):
+                avg = (source_data[i] + source_data[i+1]) / 2
+                temp_12.append(avg)
+            default_eto = temp_12
+            status_msg = "✅ Data ETo Terhubung (Konversi 24 -> 12 Bulan)"
+
+    # 3. Buat DataFrame Awal
     df = pd.DataFrame({
-        'Bulan': ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agt', 'Sep', 'Okt', 'Nov', 'Des'],
-        'Curah Hujan (mm)': ch_dummy,
-        'Hari Hujan (hari)': hh_dummy,
-        'ETo (mm/hari)': eto_12
+        'Bulan': ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'],
+        'Curah Hujan (mm)': [346, 303, 360, 243, 142, 91, 74, 57, 102, 219, 311, 311], # Data hujan dummy
+        'Hari Hujan': [18, 16, 17, 13, 9, 6, 4, 3, 6, 12, 16, 18],
+        'ETo (mm/hari)': default_eto # <--- INI SUDAH AMAN (PASTI 12 DATA)
     })
-    return df, sumber, link_status
-
-# Inisialisasi State
-if 'df_mock' not in st.session_state:
-    df_init, status_init, link_init = get_default_mock()
-    st.session_state.df_mock = df_init
-    st.session_state.status_mock = status_init
-    st.session_state.link_ok = link_init
-
-# Cek Ulang Link (Refresh Logic)
-if 'data_eto_transfer' in st.session_state and not st.session_state.get('link_ok', False):
-    st.session_state.df_mock['ETo (mm/hari)'] = st.session_state['data_eto_transfer']
-    st.session_state.status_mock = "✅ Terhubung: Modul Klimatologi (Penman)"
-    st.session_state.link_ok = True
-    st.toast("Data ETo berhasil disinkronisasi!", icon="🔗")
-
-# --- 4. SIDEBAR PARAMETER ---
-with st.sidebar:
-    st.header("🔧 Parameter DAS")
     
-    if st.button("🔄 Reset Data Tabel", type="secondary"):
-        df_new, stat_new, link_new = get_default_mock()
-        st.session_state.df_mock = df_new
-        st.session_state.status_mock = stat_new
-        st.session_state.link_ok = link_new
-        st.rerun()
+    return df, status_msg
 
-    st.divider()
-    luas_das = st.number_input("Luas DAS (km²)", value=500.0, step=10.0)
+# --- FUNGSI HITUNG FJ MOCK ---
+def hitung_fj_mock(df_input, luas_das, params):
+    # Unpack Parameter
+    sm = params['sm']      # Soil Moisture Capacity
+    pf = params['pf']      # Percentage Factor
+    i_ws = params['i']     # Infiltrasi
+    k = params['k']        # Resesi Aliran Tanah
     
-    with st.expander("⚙️ Kalibrasi Mock", expanded=True):
-        m = st.slider("Faktor Lahan Terbuka (m)", 0, 50, 30) / 100
-        smc = st.number_input("Soil Moisture Cap. (SMC)", value=200.0)
-        i_coeff = st.number_input("Koef. Infiltrasi (I)", value=0.4, max_value=1.0)
-        k_rec = st.number_input("Faktor Resesi (k)", value=0.6, max_value=1.0)
-
-# --- 5. INPUT DATA (LABEL LEBIH JELAS) ---
-col1, col2 = st.columns([1, 1.5])
-
-with col1:
-    st.subheader("1. Input Data Hidrologi")
+    results = []
     
-    if st.session_state.get('link_ok', False):
-        st.success(st.session_state.status_mock)
-    else:
-        st.warning(st.session_state.status_mock)
+    # Inisialisasi awal (biasanya asumsi tanah jenuh di akhir tahun sebelumnya)
+    vt_prev = sm # Volume tanah bulan lalu (awal asumsi penuh)
+    
+    for idx, row in df_input.iterrows():
+        ch = row['Curah Hujan (mm)']
+        hh = row['Hari Hujan']
+        eto = row['ETo (mm/hari)']
+        nd = 30 # Jumlah hari rata-rata
         
-    # INFO PENTING soal Hujan Bulanan
-    st.info("ℹ️ **Catatan:** Masukkan **TOTAL curah hujan** selama satu bulan (akumulasi), BUKAN hujan harian maksimum.")
-    
-    edited_df = st.data_editor(
-        st.session_state.df_mock,
-        height=480,
-        use_container_width=True,
-        key="editor_mock_jelas_v3", 
-        column_config={
-            "Bulan": st.column_config.TextColumn(
-                "📅 Bulan", disabled=True
-            ),
-            "ETo (mm/hari)": st.column_config.NumberColumn(
-                "🔒 ETo (Link)", 
-                help="Otomatis dari Modul Klimatologi",
-                disabled=True, 
-                format="%.2f"
-            ),
-            # LABEL DIPERJELAS DI SINI
-            "Curah Hujan (mm)": st.column_config.NumberColumn(
-                "✏️ Tot. Hujan Bulanan (mm)", 
-                help="Masukkan jumlah total hujan dalam satu bulan (mm/bulan).",
-                required=True, min_value=0
-            ),
-            "Hari Hujan (hari)": st.column_config.NumberColumn(
-                "✏️ Hari Hujan", 
-                help="Jumlah hari terjadinya hujan dalam bulan tersebut.",
-                required=True, min_value=0, max_value=31
-            )
-        }
-    )
-    st.session_state.df_mock = edited_df
-
-# --- 6. ENGINE MOCK ---
-def hitung_mock(df, luas, m_fac, smc_val, i_val, k_val):
-    # Loop Pemanasan
-    vn_prev = smc_val 
-    for idx, row in df.iterrows():
-        days = 30
-        eto_bulan = row['ETo (mm/hari)'] * days 
-        rain = row['Curah Hujan (mm)']
-        ws_pot = rain - eto_bulan
-        if ws_pot > 0:
-            delta_s = min(ws_pot, smc_val - vn_prev)
-        else:
-            delta_s = ws_pot
-            if (vn_prev + delta_s) < 0: delta_s = -vn_prev
-        vn = vn_prev + delta_s
-        vn_prev = vn
-
-    # Loop Real
-    vg_prev = 100 
-    final_data = []
-    
-    for idx, row in df.iterrows():
-        days = 30
-        eto_bulan = row['ETo (mm/hari)'] * days
-        rain = row['Curah Hujan (mm)']
-        ws_pot = rain - eto_bulan
+        # 1. Evapotranspirasi Terbatas (Et)
+        # Delta S (Exposed Surface) -> Mock: m = 10% - 50%
+        # Rumus Mock untuk m: Jumlah hari hujan / Hari sebulan? Atau exposed surface 
+        # Simplifikasi Mock: Et = ETo * faktor (tergantung vegetasi/lahan)
+        # Kita pakai pendekatan standard Mock:
+        # E_pot = ETo * nd
+        # dE = E_pot * (m/20) * (18 - hh) ... ini variasi. 
+        # Kita pakai simple: Et = ETo * 30 (Potential) -> Actual tergantung air tanah later.
         
-        if ws_pot > 0:
-            e_act = eto_bulan
-            delta_s = min(ws_pot, smc_val - vn_prev)
-            ws = ws_pot - delta_s
+        # Et Mock Standard: 
+        # E = ETo * (d/30) * m ... agak kompleks variannya.
+        # Kita pakai pendekatan: Evapotranspirasi Aktual (Ea)
+        # Ea = ETo * 30 jika CH > ETo*30. Jika tidak, Ea = CH + dSm
+        
+        et_pot = eto * 30
+        
+        # 2. Water Balance Surface
+        # dS = CH - Et
+        ds = ch - et_pot
+        
+        # 3. Soil Moisture (Sm)
+        if ds > 0:
+            # Surplus
+            ss = ds # Kandungan air tanah sementara
         else:
-            delta_s = ws_pot
-            if (vn_prev + delta_s) < 0: delta_s = -vn_prev
-            e_act = rain - delta_s
+            # Defisit
+            ss = ds # Negatif
+            
+        # Hitung Volume Tanah (Vt)
+        vt_curr = vt_prev + ss
+        if vt_curr > sm:
+            ws = vt_curr - sm # Water Surplus
+            vt_curr = sm      # Mentok di kapasitas lapang
+        elif vt_curr < 0:
+            ws = 0
+            vt_curr = 0 # Kering
+        else:
             ws = 0
             
-        vn = vn_prev + delta_s
-        infil = ws * i_val
-        dro = ws - infil
+        # 4. Infiltrasi (I)
+        # I = ws * pf (Percentage Factor infiltration)
+        inf = ws * pf
         
-        vg = k_val * vg_prev + 0.5 * (1 + k_val) * infil
-        dvg = vg - vg_prev
-        baseflow = infil - dvg
+        # 5. Volume Aliran Tanah (Vn)
+        # Vn = k * Vn-1 + 0.5 * (1+k) * I
+        # Asumsi Vn bulan pertama = I
+        if idx == 0:
+            vn = inf # Simplifikasi awal
+        else:
+            vn_prev = results[-1]['Vn']
+            vn = k * vn_prev + 0.5 * (1 + k) * inf
+            
+        # 6. Base Flow (BF)
+        bf = vn
         
-        tro_mm = baseflow + dro
-        q_m3s = (tro_mm / 1000) * (luas * 1000000) / (days * 86400)
-        q_m3s = max(0, q_m3s)
+        # 7. Direct Runoff (DRO)
+        # DRO = ws - I
+        dro = ws - inf
         
-        final_data.append({
+        # 8. Total Runoff (TRO)
+        tro_mm = bf + dro
+        
+        # 9. Debit (Q) m3/s
+        # Q = (TRO / 1000) * (Luas_DAS_km2 * 10^6) / (30 * 24 * 3600)
+        q_m3s = (tro_mm / 1000) * (luas_das * 1e6) / (30 * 86400)
+        
+        res_row = {
             'Bulan': row['Bulan'],
-            'Hujan (mm)': rain,
-            'E.Act (mm)': round(e_act, 1),
-            'Surplus (mm)': round(ws, 1),
-            'Baseflow (mm)': round(baseflow, 1),
-            'Debit (m³/s)': round(q_m3s, 3)
-        })
-        vn_prev = vn
-        vg_prev = vg
+            'CH': ch,
+            'Et': et_pot,
+            'dS': ds,
+            'Vt': vt_curr,
+            'WS': ws,
+            'Infiltrasi': inf,
+            'Vn': vn,
+            'BaseFlow': bf,
+            'DRO': dro,
+            'TRO (mm)': tro_mm,
+            'Q (m3/s)': q_m3s
+        }
+        results.append(res_row)
+        vt_prev = vt_curr # Update untuk bulan depan
         
-    return pd.DataFrame(final_data)
+    return pd.DataFrame(results)
 
-# Hitung
-df_hasil_mock = hitung_mock(edited_df, luas_das, m, smc, i_coeff, k_rec)
+# --- SIDEBAR INPUT ---
+with st.sidebar:
+    st.header("⚙️ Parameter Mock")
+    
+    luas_das = st.number_input("Luas DAS (km²)", value=150.0)
+    
+    st.subheader("Kalibrasi")
+    sm_cap = st.number_input("Soil Moisture (SMC) mm", 50, 500, 200, help="Kapasitas kelembaban tanah")
+    pf_val = st.slider("Faktor Infiltrasi (PF)", 0.0, 1.0, 0.4, help="Persentase air surplus yang masuk ke tanah")
+    k_val  = st.slider("Faktor Resesi (k)", 0.0, 1.0, 0.6, help="Konstanta resesi aliran air tanah")
+    i_val  = st.number_input("Infiltrasi Koef (i)", 0.0, 1.0, 0.5)
 
-# --- 7. VISUALISASI ---
+    params = {'sm': sm_cap, 'pf': pf_val, 'k': k_val, 'i': i_val}
+    
+    if st.button("🔄 Tarik Ulang Data ETo"):
+        st.rerun()
+
+# --- MAIN CONTENT ---
+st.title("💧 Analisa Ketersediaan Air (FJ. Mock)")
+st.caption("Analisa Debit Andalan Sungai Bulanan")
+
+# 1. LOAD DATA
+df_input, status = get_default_mock()
+
+if "✅" in status:
+    st.success(status)
+else:
+    st.warning(status)
+
+st.subheader("1. Input Data Bulanan")
+edited_df = st.data_editor(df_input, use_container_width=True, hide_index=True)
+
+# 2. PROSES
+df_mock = hitung_fj_mock(edited_df, luas_das, params)
+
+# 3. OUTPUT
+st.subheader("2. Hasil Analisa (Debit Andalan)")
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    # Format Table
+    st.dataframe(
+        df_mock.style.format({
+            'Et': "{:.1f}", 'Vt': "{:.1f}", 'WS': "{:.1f}", 
+            'TRO (mm)': "{:.1f}", 'Q (m3/s)': "{:.3f}"
+        }),
+        use_container_width=True,
+        height=400
+    )
+
 with col2:
-    st.subheader("2. Grafik Debit Andalan")
+    q_avg = df_mock['Q (m3/s)'].mean()
+    q_min = df_mock['Q (m3/s)'].min()
+    q_max = df_mock['Q (m3/s)'].max()
     
-    chart = alt.Chart(df_hasil_mock).mark_area(
-        line={'color':'#0288d1'},
-        color=alt.Gradient(
-            gradient='linear', stops=[alt.GradientStop(color='white', offset=0), alt.GradientStop(color='#03a9f4', offset=1)],
-            x1=1, x2=1, y1=1, y2=0
-        )
-    ).encode(
-        x=alt.X('Bulan', sort=None),
-        y=alt.Y('Debit (m³/s)'),
-        tooltip=['Bulan', 'Debit (m³/s)', 'Hujan (mm)']
-    ).properties(height=350)
-    
-    st.altair_chart(chart, use_container_width=True)
-    
-    # Ringkasan Angka
-    q_avg = df_hasil_mock['Debit (m³/s)'].mean()
-    c1, c2 = st.columns(2)
-    c1.metric("Q Rata-rata", f"{q_avg:.2f} m³/s")
-    c2.metric("Q Andalan (80%)", f"{df_hasil_mock['Debit (m³/s)'].quantile(0.2):.2f} m³/s", help="Estimasi Q80")
+    st.markdown(f"""
+    <div class="metric-box">
+        <b>Debit Rata-rata</b><br>
+        <h2>{q_avg:.3f} m³/s</h2>
+    </div>
+    <div class="metric-box" style="background-color:#e8f5e9; border-left-color:#4caf50;">
+        <b>Debit Minimum</b><br>
+        <h2>{q_min:.3f} m³/s</h2>
+    </div>
+    """, unsafe_allow_html=True)
 
-# --- 8. TABEL DETAIL & EXPORT ---
+st.write("#### 📈 Grafik Hidrograf")
+st.line_chart(df_mock.set_index('Bulan')['Q (m3/s)'])
+
+# Cetak
+import streamlit.components.v1 as components
 st.divider()
-st.subheader("3. Hasil Analisa & Ekspor")
-
-col_res1, col_res2 = st.columns([3, 1])
-
-with col_res1:
-    st.dataframe(df_hasil_mock, use_container_width=True, height=300)
-
-with col_res2:
-    st.write("### 💾 Simpan Data")
-    st.caption("Simpan hasil perhitungan Debit Andalan ini untuk digunakan pada modul Irigasi Pipa/Pompa.")
-    
-    if st.button("🚀 Simpan Hasil Debit", type="primary", use_container_width=True):
-        st.session_state['data_debit_mock'] = df_hasil_mock['Debit (m³/s)'].tolist()
-        st.session_state['data_debit_bulan'] = df_hasil_mock['Bulan'].tolist()
-        st.toast("✅ Data Debit Berhasil Disimpan! Siap dipakai di Modul Pipa.", icon="🌊")
+components.html("""<button onclick="window.print()" style="background:gray;color:white;border:none;padding:10px;">🖨️ Cetak Laporan</button>""", height=50)
