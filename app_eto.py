@@ -8,7 +8,7 @@ import json
 # ==========================================
 # KONFIGURASI HALAMAN
 # ==========================================
-st.set_page_config(page_title="Hydro Planner - ETo", layout="wide", page_icon="💧")
+st.set_page_config(page_title="ETo Calculator (Hydro Planner) - ETo", layout="wide", page_icon="💧")
 
 # ==========================================
 # CSS UI & BRANDING SMARTSTUDIO
@@ -325,8 +325,9 @@ st.altair_chart((bar + rule).interactive(), use_container_width=True)
 # ==========================================
 st.markdown("""
 <div class="footer">
-    <span class="footer-app-name">HYDRO PLANNER</span> | 
-    <span class="footer-email">smartstudioarsitek@gmail.com</span> | 
+    <span class="footer-app-name">ETo Calculator (Hydro Planner)</span> | 
+    <span class="footer-email">smartstudioarsitek@gmail.com-donasi:dana dan gopay 081271859610</span> | 
     by <span>SmartStudio</span>
 </div>
 """, unsafe_allow_html=True)
+
