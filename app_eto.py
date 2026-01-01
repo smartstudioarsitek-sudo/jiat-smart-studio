@@ -1,16 +1,3 @@
-# Masukkan ini di paling atas kode app.py, setelah import streamlit
-import streamlit as st
-
-# ... library lain ...
-
-# Konfigurasi Sembunyikan Menu Default & Footer Streamlit
-st.markdown("""
-<style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-</style>
-""", unsafe_allow_html=True)
 
 import streamlit as st
 import pandas as pd
@@ -239,7 +226,7 @@ with st.sidebar:
 # ==========================================
 # 4. MAIN LAYOUT
 # ==========================================
-st.title("🌊 HYDRO PLANNER")
+st.title("ETo Calculator (Hydro Planner")
 st.markdown(f"**Modul Evapotranspirasi (ETo)** | Metode: **Penman Modifikasi (KP-01)**")
 st.markdown("---")
 
@@ -340,10 +327,11 @@ st.altair_chart((bar + rule).interactive(), use_container_width=True)
 st.markdown("""
 <div class="footer">
     <span class="footer-app-name">ETo Calculator (Hydro Planner)</span> | 
-    <span class="footer-email">smartstudioarsitek@gmail.com-donasi:dana dan gopay 081271859610</span> | 
+    <span class="footer-email">donasi untuk pengembangan dan maintance : dana dan gopay 081271859610-smartstudioarsitek@gmail.com</span> | 
     by <span>SmartStudio</span>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
