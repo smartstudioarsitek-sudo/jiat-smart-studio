@@ -5,10 +5,14 @@ import math
 import altair as alt
 import json
 
-# --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="ETo Hydro Planner", layout="wide", page_icon="💧")
+# ==========================================
+# KONFIGURASI HALAMAN
+# ==========================================
+st.set_page_config(page_title="Hydro Planner - ETo", layout="wide", page_icon="💧")
 
-# --- CSS UI & BRANDING SMARTSTUDIO ---
+# ==========================================
+# CSS UI & BRANDING SMARTSTUDIO
+# ==========================================
 st.markdown("""
 <style>
     /* Footer Branding SmartStudio - Pojok Kanan Bawah */
@@ -17,19 +21,25 @@ st.markdown("""
         left: 0;
         bottom: 0;
         width: 100%;
-        background-color: transparent;
-        color: #888;
+        background-color: rgba(255, 255, 255, 0.9); /* Sedikit transparan */
+        color: #666;
         text-align: right;
-        padding-right: 25px;
-        padding-bottom: 10px;
+        padding-right: 20px;
+        padding-bottom: 5px;
+        padding-top: 5px;
         font-size: 11px;
         font-family: 'Source Sans Pro', sans-serif;
-        pointer-events: none;
+        border-top: 1px solid #eee;
         z-index: 9999;
     }
     .footer span {
         font-weight: 700;
         color: #FF4B4B; /* Aksen Merah */
+    }
+    .footer-email {
+        color: #555;
+        font-style: italic;
+        margin-right: 10px;
     }
     .footer-app-name {
         font-weight: 600;
@@ -37,16 +47,21 @@ st.markdown("""
         margin-right: 5px;
     }
 
+    /* Print settings */
     @media print {
         [data-testid="stSidebar"] {display: none !important;}
         .footer {display: none !important;}
+        .no-print {display: none !important;}
     }
+
+    /* Styling Box Hasil */
     .box-hasil {
         padding: 20px; 
         background: linear-gradient(to right, #f8f9fa, #e9ecef); 
         border-radius: 12px; 
         border-left: 5px solid #0068c9;
         margin-bottom: 20px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -101,15 +116,13 @@ def calc_penman_modif(row, lat_deg, elev_m, month_idx):
     fu = 0.27 * (1 + 0.864 * u2)
 
     # 4. Faktor Pembobot (Weighting Factor W)
-    # W terkait dengan suhu dan elevasi
-    # Hitung Delta (Slope vapor pressure)
+    # Hitung Delta
     delta = 4098 * (0.6108 * math.exp(17.27 * T_mean / (T_mean + 237.3))) / ((T_mean + 237.3)**2)
     # Hitung Gamma (Psychrometric constant)
-    # P = Tekanan atmosfer
     P = 101.3 * ((293 - 0.0065 * elev_m) / 293)**5.26
-    gamma = 0.665e-3 * P * 10 # dikali 10 agar satuan konsisten mbar jika perlu, tapi W unitless
+    gamma = 0.665e-3 * P * 10 # dikali 10 agar satuan konsisten mbar
     
-    # Rumus W Penman
+    # Rumus W
     W = delta / (delta + gamma)
 
     # 5. Radiasi (Rn)
@@ -118,28 +131,25 @@ def calc_penman_modif(row, lat_deg, elev_m, month_idx):
     
     # Durasi maksimum penyinaran (N)
     lat_rad = math.radians(lat_deg)
-    ws_val = math.acos(-math.tan(lat_rad) * math.tan(0.409 * math.sin((2*math.pi*(month_idx*30+15)/365)-1.39)))
+    # Hitung sudut jam matahari terbenam
+    val_acos = -math.tan(lat_rad) * math.tan(0.409 * math.sin((2*math.pi*(month_idx*30+15)/365)-1.39))
+    # Clip value untuk menghindari domain error acos
+    val_acos = max(-1.0, min(1.0, val_acos))
+    ws_val = math.acos(val_acos)
+    
     N = (24 / math.pi) * ws_val
     
-    # Rs (Radiasi Gelombang Pendek)
-    # KP-01 Indonesia biasanya a=0.25, b=0.54
+    # Rs (Radiasi Gelombang Pendek) - KP-01: a=0.25, b=0.54
     Rs = (0.25 + 0.54 * (n_sun / N)) * Ra
     
-    # Rns (Net Shortwave) - Albedo 0.25 (tanaman hijau)
+    # Rns (Net Shortwave) - Albedo 0.25
     Rns = (1 - 0.25) * Rs
     
     # Rnl (Net Longwave)
-    # Rumus Penman Modif: f(t) * f(ed) * f(n/N)
-    # f(t) = sigma * T^4 (Stefan-Boltzmann) -> diubah ke mm/hari
     sigma_mm = 2.043e-10 # Konstanta Stefan-Boltzmann dlm mm/hari
     ft = sigma_mm * ((T_mean + 273.16)**4)
-    
-    # f(ed) = 0.34 - 0.044 * sqrt(ed)
     fed = 0.34 - 0.044 * math.sqrt(ed)
-    
-    # f(n/N) = 0.1 + 0.9 * (n/N)
     f_sun = 0.1 + 0.9 * (n_sun / N)
-    
     Rnl = ft * fed * f_sun
     
     # Rn (Radiasi Bersih)
@@ -157,14 +167,13 @@ def calc_penman_modif(row, lat_deg, elev_m, month_idx):
 # 2. SESSION STATE
 # ==========================================
 if 'df_iklim' not in st.session_state:
-    # Default data KP-01 biasanya butuh T Mean
     st.session_state['df_iklim'] = pd.DataFrame({
         'Bulan': ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'],
         'T Mean (°C)': [26.5]*12,
         'RH Mean (%)': [85.0]*12,
         'Angin u2 (m/s)': [1.5]*12,
         'Sinar (jam)': [5.0]*12,
-        'Faktor C': [1.1]*12 # Default angka koreksi Penman Modif (biasanya 1.1)
+        'Faktor C': [1.1]*12 # Default angka koreksi Penman Modif
     })
 
 if 'params_loc' not in st.session_state:
@@ -183,10 +192,26 @@ with st.sidebar:
     st.session_state['params_loc']['elev'] = st.number_input("Elevasi (m dpl)", value=st.session_state['params_loc']['elev'], step=10)
     
     st.markdown("---")
-    st.caption("Konfigurasi Data")
+    st.subheader("📂 File Manager")
     
-    # Reset Button
-    if st.button("🔄 Reset Data Default"):
+    # Save Feature
+    data_save = {'loc': st.session_state['params_loc'], 'iklim': st.session_state['df_iklim'].to_dict(orient='records')}
+    st.download_button("💾 Simpan Data (JSON)", json.dumps(data_save), "data_eto_kp01.json", "application/json")
+    
+    # Load Feature
+    upload = st.file_uploader("📂 Buka Data", type=['json'])
+    if upload:
+        try:
+            d = json.load(upload)
+            st.session_state['params_loc'] = d['loc']
+            st.session_state['df_iklim'] = pd.DataFrame(d['iklim'])
+            st.success("Data Berhasil Dimuat!")
+            st.rerun()
+        except:
+            st.error("Format File Salah!")
+
+    st.markdown("---")
+    if st.button("🔄 Reset ke Default"):
         st.session_state['df_iklim'] = pd.DataFrame({
             'Bulan': ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'],
             'T Mean (°C)': [26.5]*12,
@@ -200,7 +225,7 @@ with st.sidebar:
 # ==========================================
 # 4. MAIN LAYOUT
 # ==========================================
-st.title("🌊 Hydro Planner")
+st.title("🌊 HYDRO PLANNER")
 st.markdown(f"**Modul Evapotranspirasi (ETo)** | Metode: **Penman Modifikasi (KP-01)**")
 st.markdown("---")
 
@@ -262,32 +287,37 @@ with col2:
         height=300
     )
 
-# --- GRAFIK ---
+# ==========================================
+# 5. GRAFIK (Fixed Schema)
+# ==========================================
 st.markdown("---")
 st.subheader("3. Grafik Hidrologi")
 
-# Grafik kombinasi Bar & Line
-base = alt.Chart(df_result).encode(x=alt.X('Bulan', sort=None))
+# Menyiapkan data agar chart stabil
+df_chart = df_result.copy()
+df_chart['Rata-rata'] = eto_avg  # Kolom helper untuk garis rata-rata
 
-# Bar ETo
+# Base Chart
+base = alt.Chart(df_chart).encode(
+    x=alt.X('Bulan', sort=None) 
+)
+
+# 1. Bar Chart (ETo Bulanan)
 bar = base.mark_bar(color='#4facfe', cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
     y=alt.Y('ETo (mm/hari)', title='Evapotranspirasi (mm/hr)'),
-    tooltip=['Bulan', alt.Tooltip('ETo (mm/hari)', format='.2f')]
+    tooltip=[
+        alt.Tooltip('Bulan', title='Bulan'),
+        alt.Tooltip('ETo (mm/hari)', format='.2f', title='ETo (mm)')
+    ]
 )
 
-# Line Koreksi C (Opsional, untuk melihat tren faktor koreksi)
-line_c = base.mark_line(color='#FF4B4B', strokeDash=[5,5]).encode(
-    y=alt.Y('Faktor C', scale=alt.Scale(domain=[0.5, 1.5]), title='Faktor Koreksi C'),
-    tooltip=['Bulan', 'Faktor C']
+# 2. Rule Chart (Garis Rata-rata)
+rule = base.mark_rule(color='#FF6B6B', strokeDash=[5, 5]).encode(
+    y='Rata-rata',
+    tooltip=[alt.Tooltip('Rata-rata', format='.2f', title='Rata-rata Tahunan')]
 )
 
-# Layering Chart: Sumbu Y Kiri (ETo) dan Kanan (Faktor C - optional visual)
-# Untuk kesederhanaan, kita plot ETo saja dengan Rule rata-rata
-rule = base.mark_rule(color='#FF6B6B').encode(
-    y=alt.datum(eto_avg),
-    tooltip=[alt.Tooltip(value=f"Rata-rata: {eto_avg:.2f}")]
-)
-
+# Render Grafik
 st.altair_chart((bar + rule).interactive(), use_container_width=True)
 
 # ==========================================
@@ -295,6 +325,8 @@ st.altair_chart((bar + rule).interactive(), use_container_width=True)
 # ==========================================
 st.markdown("""
 <div class="footer">
-    <span class="footer-app-name">HYDRO PLANNER</span> | by <span>SmartStudio</span>
+    <span class="footer-app-name">HYDRO PLANNER</span> | 
+    <span class="footer-email">smartstudioarsitek@gmail.com</span> | 
+    by <span>SmartStudio</span>
 </div>
 """, unsafe_allow_html=True)
