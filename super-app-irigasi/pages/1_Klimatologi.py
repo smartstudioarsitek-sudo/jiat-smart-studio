@@ -91,7 +91,7 @@ def init_state():
 
 init_state()
 
-# --- 4. SIDEBAR (SMART UPLOAD & CONVERT) ---
+# --- 4. SIDEBAR (MANUAL TRIGGER IMPORT) ---
 with st.sidebar:
     st.header("📂 File & Tools")
     
@@ -107,13 +107,14 @@ with st.sidebar:
     # --- UPLOAD SECTION ---
     uploaded_file = st.file_uploader("Upload Data (JSON / CSV)", type=["json", "csv"])
     
-    # KONFIGURASI KONVERSI
+    # VARIABLE KONFIGURASI
     convert_wind = False
     convert_sun = False
     max_sun_hour = 12.0
     
-    # Tampilkan opsi konversi jika file CSV diupload
+    # JIKA CSV DI-UPLOAD
     if uploaded_file is not None and uploaded_file.name.endswith('.csv'):
+        # 1. Tampilkan Opsi Konversi
         with st.expander("⚙️ Opsi Konversi Satuan", expanded=True):
             st.info("Centang jika data CSV berbeda satuan:")
             convert_wind = st.checkbox("Angin (m/s) ➡️ km/jam", value=True) 
@@ -121,96 +122,80 @@ with st.sidebar:
             if convert_sun:
                 max_sun_hour = st.number_input("Max Penyinaran (Jam/Hari)", 8.0, 14.0, 12.0)
 
-    if uploaded_file is not None:
-        try:
-            # A. JSON
-            if uploaded_file.name.endswith('.json'):
-                data_load = json.load(uploaded_file)
-                if 'df_iklim_data' in data_load:
-                    st.session_state['df_iklim_24'] = pd.DataFrame(data_load['df_iklim_data'])
-                    st.session_state['temp_c_factor'] = data_load.get('c_factor', 1.1)
-                    st.success("✅ JSON Loaded!")
-                    st.rerun()
-
-            # B. CSV (SUPER SMART READ - FIXED)
-            elif uploaded_file.name.endswith('.csv'):
-                # 1. Coba baca biasa (Koma)
+        # 2. TOMBOL EKSEKUSI (INI YANG KAKAK MINTA)
+        if st.button("🔄 Proses & Masukkan ke Tabel", type="primary"):
+            try:
+                # A. BACA FILE (Coba Koma dulu, lalu Titik Koma)
                 try:
                     df_csv = pd.read_csv(uploaded_file)
-                    # Jika kolom cuma 1, berarti separatornya salah (kemungkinan titik koma)
                     if df_csv.shape[1] < 2:
                         uploaded_file.seek(0)
                         df_csv = pd.read_csv(uploaded_file, sep=';')
                 except:
-                    # Fallback paksa pakai titik koma
                     uploaded_file.seek(0)
                     df_csv = pd.read_csv(uploaded_file, sep=';')
                 
-                # 2. Filter HANYA kolom Angka (Membuang kolom 'Bulan' otomatis)
+                # B. FILTER KOLOM ANGKA
                 df_numeric = df_csv.select_dtypes(include=[np.number])
                 
-                # 3. Cek apakah ada minimal 4 kolom angka
                 if df_numeric.shape[1] >= 4:
-                    vals = df_numeric.iloc[:, :4].values # Ambil 4 kolom angka pertama
+                    vals = df_numeric.iloc[:, :4].values
                     
-                    # Mapping: Urutan di CSV Angka harus: Suhu, RH, Sinar, Angin
                     raw_suhu = vals[:, 0]
                     raw_rh = vals[:, 1]
                     raw_sun = vals[:, 2]
                     raw_wind = vals[:, 3]
                     
-                    # --- LOGIKA KONVERSI ---
-                    # 1. Konversi Angin (m/s -> km/jam)
-                    if convert_wind:
-                        raw_wind = raw_wind * 3.6
-                        
-                    # 2. Konversi Sinar (Jam -> %)
+                    # C. KONVERSI
+                    if convert_wind: raw_wind = raw_wind * 3.6
                     if convert_sun:
-                        # Heuristik: Jika nilai > 24, anggap itu Jam Total Bulanan
-                        # Jika < 24, anggap Jam Harian.
-                        is_monthly_total = np.mean(raw_sun) > 24
-                        
-                        if is_monthly_total:
+                        if np.mean(raw_sun) > 24: # Asumsi jam bulanan
                             raw_sun = (raw_sun / 30 / max_sun_hour) * 100
-                        else:
+                        else: # Asumsi jam harian
                             raw_sun = (raw_sun / max_sun_hour) * 100
-                            
-                        # Cap max 100%
                         raw_sun = np.where(raw_sun > 100, 100, raw_sun)
 
-                    # --- LOGIKA EXPAND (12 -> 24) ---
+                    # D. EXPAND (12 -> 24)
                     new_suhu, new_rh, new_sun, new_wind = [], [], [], []
                     
-                    # Deteksi 12 Baris (Bulanan)
                     if len(df_csv) == 12:
-                        st.toast("ℹ️ Data Bulanan di-expand ke 24 Periode.")
                         for i in range(12):
                             new_suhu.extend([raw_suhu[i], raw_suhu[i]])
                             new_rh.extend([raw_rh[i], raw_rh[i]])
                             new_sun.extend([raw_sun[i], raw_sun[i]])
                             new_wind.extend([raw_wind[i], raw_wind[i]])
+                        st.toast("✅ Data Bulanan berhasil di-expand!")
                             
-                    # Deteksi 24 Baris
                     elif len(df_csv) >= 24:
-                        st.toast("ℹ️ Data 24 Periode dimuat.")
                         new_suhu = raw_suhu[:24]
                         new_rh = raw_rh[:24]
                         new_sun = raw_sun[:24]
                         new_wind = raw_wind[:24]
+                        st.toast("✅ Data 24 Periode berhasil dimuat!")
                     
-                    # SIMPAN KE STATE (Otomatis masuk tabel utama)
+                    # E. UPDATE STATE & RERUN (KUNCI AGAR TABEL BERUBAH)
                     st.session_state['df_iklim_24']['Suhu (°C)'] = new_suhu
                     st.session_state['df_iklim_24']['Kelembaban (%)'] = new_rh
                     st.session_state['df_iklim_24']['Penyinaran (%)'] = new_sun
                     st.session_state['df_iklim_24']['Angin (km/jam)'] = new_wind
                     
-                    st.success("✅ CSV Berhasil Dimuat & Dikonversi!")
-                    st.rerun()
+                    st.rerun() # <--- INI YANG BIKIN INSTANT UPDATE
+                    
                 else:
-                    st.error(f"❌ Gagal membaca kolom angka. Terdeteksi hanya {df_numeric.shape[1]} kolom angka. Pastikan format file benar.")
+                    st.error("❌ Format CSV Salah! Tidak ditemukan 4 kolom angka.")
 
-        except Exception as e:
-            st.error(f"Error membaca file: {e}")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    # JIKA JSON (PROJECT SAVE)
+    elif uploaded_file is not None and uploaded_file.name.endswith('.json'):
+        if st.button("📂 Load Data JSON"):
+            data_load = json.load(uploaded_file)
+            if 'df_iklim_data' in data_load:
+                st.session_state['df_iklim_24'] = pd.DataFrame(data_load['df_iklim_data'])
+                st.session_state['temp_c_factor'] = data_load.get('c_factor', 1.1)
+                st.success("✅ Data Project Dimuat!")
+                st.rerun()
 
     st.divider()
     st.header("Parameter")
@@ -222,52 +207,4 @@ with st.sidebar:
         'df_iklim_data': st.session_state['df_iklim_24'].to_dict(orient='records'),
         'c_factor': c_factor
     }
-    st.download_button("💾 Simpan Data (.json)", json.dumps(data_save, indent=2), "klimatologi_save.json", "application/json")
-
-# --- 5. MAIN CONTENT ---
-st.title("🌦️ Klimatologi (Sistem 15 Harian)")
-st.caption("Metode Penman Modifikasi (KP-01) - 24 Periode")
-
-# A. Input Data
-st.subheader("1. Input Data Iklim (24 Periode)")
-edited_df = st.data_editor(st.session_state['df_iklim_24'], height=400, use_container_width=True, hide_index=True)
-st.session_state['df_iklim_24'] = edited_df
-
-# B. Proses Hitung
-try:
-    suhu = edited_df['Suhu (°C)'].tolist()
-    hum = edited_df['Kelembaban (%)'].tolist()
-    sun = edited_df['Penyinaran (%)'].tolist()
-    wind = edited_df['Angin (km/jam)'].tolist()
-
-    eto_result = hitung_penman_modifikasi(suhu, hum, sun, wind, c_factor=c_factor)
-    
-    df_hasil = edited_df[['Periode']].copy()
-    df_hasil['ETo (mm/hari)'] = np.round(eto_result, 2)
-    st.session_state['data_eto_transfer'] = df_hasil['ETo (mm/hari)'].tolist()
-    
-    st.subheader("2. Hasil Perhitungan")
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        numeric_cols = df_hasil.select_dtypes(include=[np.number]).columns
-        st.dataframe(df_hasil.style.background_gradient(cmap="Oranges", subset=['ETo (mm/hari)']).format("{:.2f}", subset=numeric_cols), use_container_width=True, height=400)
-        
-        st.divider()
-        st.info("👇 Kirim data ke Irigasi Pipa")
-        if st.button("🚀 KIRIM DATA ETo (24 Periode)", type="primary", use_container_width=True):
-            st.session_state['data_eto_manual'] = df_hasil['ETo (mm/hari)'].tolist()
-            st.success("✅ Terkirim! Buka Page Irigasi Pipa untuk mengambil data.")
-    
-    with col2:
-        rata_eto = np.mean(eto_result)
-        st.markdown(f"""<div class="metric-card"><h4>Rata-rata ETo</h4><h2 style="margin:0;">{rata_eto:.2f} <span style="font-size:16px">mm/hari</span></h2></div>""", unsafe_allow_html=True)
-        st.bar_chart(df_hasil.set_index('Periode')['ETo (mm/hari)'])
-
-except Exception as e:
-    st.error(f"⚠️ Error: {e}")
-
-# Cetak
-st.divider()
-import streamlit.components.v1 as components
-components.html("""<button onclick="window.print()" style="background:#ff9800;color:white;border:none;padding:10px 20px;border-radius:5px;font-weight:bold;cursor:pointer;">🖨️ Cetak PDF</button>""", height=50)
+    st.download_
