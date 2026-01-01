@@ -12,8 +12,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ... lanjut ke kode aplikasi ...
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -346,5 +344,6 @@ st.markdown("""
     by <span>SmartStudio</span>
 </div>
 """, unsafe_allow_html=True)
+
 
 
