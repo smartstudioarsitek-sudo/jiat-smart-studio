@@ -5,49 +5,69 @@ import json
 # --- CONFIG ---
 st.set_page_config(page_title="Hydro Planner", page_icon="💧", layout="wide")
 
-# --- CSS CANTIK (DENGAN GOOGLE FONTS) ---
+# --- CSS PREMUIUM (GOOGLE FONTS & LAYOUT) ---
 st.markdown("""
 <style>
-    /* Import Font Keren */
-    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&family=Pacifico&display=swap');
+    /* Import Font */
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;700;800&family=Pacifico&display=swap');
 
-    .branding-tag {
-        font-family: 'Pacifico', cursive; /* Font tulisan tangan manis */
-        font-size: 18px;
-        color: #ff7675; /* Warna agak pink/salmon biar manis kontras sama biru */
+    /* Container Judul agar bisa di-center */
+    .title-container {
         text-align: center;
-        margin-bottom: -10px;
+        margin-bottom: 20px;
+        margin-top: 10px;
     }
-    
+
+    /* Wrapper judul agar posisi signature bisa relatif terhadap teks ini */
+    .title-wrapper {
+        display: inline-block;
+        position: relative;
+    }
+
+    /* Judul Utama */
     .main-title {
         font-family: 'Poppins', sans-serif;
-        font-size: 55px;
+        font-size: 60px; /* Sedikit diperbesar biar gagah */
         font-weight: 800;
-        /* Efek Gradasi Air */
-        background: -webkit-linear-gradient(45deg, #0984e3, #00cec9);
+        background: -webkit-linear-gradient(45deg, #0984e3, #00cec9); /* Gradasi Laut */
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        text-align: center;
-        line-height: 1.2;
-        margin-top: 0px;
+        line-height: 1; /* Rapat biar signature pas */
+        margin: 0;
+        padding: 0;
     }
 
+    /* Signature "by Smart Studio" */
+    .branding-tag {
+        font-family: 'Pacifico', cursive;
+        font-size: 14px; /* Lebih kecil & manis */
+        color: #ff7675; /* Warna Salmon */
+        position: absolute;
+        bottom: -8px; /* Tempel di bawah */
+        right: 0; /* Tempel di kanan akhir huruf R */
+        text-shadow: 1px 1px 0px #fff; /* Outline tipis biar baca */
+        white-space: nowrap;
+    }
+
+    /* Sub-Judul */
     .sub-title {
         font-family: 'Poppins', sans-serif;
-        font-size: 18px;
+        font-size: 16px;
         color: #636e72;
         text-align: center;
         font-weight: 400;
-        letter-spacing: 1px;
-        margin-bottom: 30px;
+        letter-spacing: 2px; /* Spasi antar huruf biar modern */
+        margin-top: 15px;
+        text-transform: uppercase;
     }
 
+    /* Card Project */
     .project-card {
         padding: 25px; 
         background-color: #ffffff; 
-        border-radius: 15px; 
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05); /* Bayangan halus */
-        border: 1px solid #dfe6e9; 
+        border-radius: 12px; 
+        box-shadow: 0 4px 20px rgba(0,0,0,0.08); 
+        border: 1px solid #f1f2f6; 
         margin-bottom: 20px;
     }
     
@@ -56,6 +76,8 @@ st.markdown("""
         border-radius: 8px; 
         font-weight: bold; 
         height: 50px;
+        border: none;
+        transition: 0.3s;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -95,17 +117,18 @@ if 'lokasi' not in st.session_state: st.session_state['lokasi'] = "-"
 if 'tahun' not in st.session_state: st.session_state['tahun'] = 2026
 
 # ==========================================
-# TAMPILAN HEADER BARU
+# TAMPILAN HEADER BARU (LAYOUT PREMUIUM)
 # ==========================================
 
-# 1. Branding Kecil nan Manis
-st.markdown('<div class="branding-tag">by Smart Studio</div>', unsafe_allow_html=True)
-
-# 2. Judul Besar Gradasi (Bisa Kakak ganti teksnya disini)
-st.markdown('<div class="main-title">HYDRO PLANNER</div>', unsafe_allow_html=True)
-
-# 3. Sub-Judul Deskriptif
-st.markdown('<div class="sub-title">Integrated Irrigation & Drainage Engineering Suite</div>', unsafe_allow_html=True)
+st.markdown("""
+<div class="title-container">
+    <div class="title-wrapper">
+        <div class="main-title">HYDRO PLANNER</div>
+        <div class="branding-tag">by Smart Studio</div>
+    </div>
+    <div class="sub-title">Integrated Irrigation & Drainage Engineering Suite</div>
+</div>
+""", unsafe_allow_html=True)
 
 # --- BAGIAN 1: IDENTITAS PROYEK ---
 st.markdown("### 1️⃣ Identitas Proyek")
