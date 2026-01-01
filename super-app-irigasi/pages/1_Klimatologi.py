@@ -1,24 +1,4 @@
 import streamlit as st
-import sys
-import subprocess
-import importlib.util
-
-# --- 0. AUTO-INSTALLER (JURUS PAMUNGKAS) ---
-# Kode ini akan memaksa aplikasi menginstall openpyxl jika belum ada
-def install_package(package):
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-        return True
-    except:
-        return False
-
-# Cek apakah openpyxl ada? Kalau tidak, install paksa!
-if importlib.util.find_spec("openpyxl") is None:
-    st.warning("⚙️ Sedang menginstall 'openpyxl' otomatis... Mohon tunggu sebentar.")
-    install_package("openpyxl")
-    st.success("✅ Instalasi Berhasil! Silakan tekan Rerun.")
-    st.rerun()
-
 import pandas as pd
 import numpy as np
 
@@ -61,14 +41,12 @@ init_state()
 # --- 4. SIDEBAR ---
 with st.sidebar:
     st.header("📂 Data Input")
-    
-    # Upload File
     uploaded_file = st.file_uploader("Upload File (Excel .xlsx / CSV)", type=["xlsx", "xls", "csv"])
     
     if uploaded_file and st.button("🔄 PROSES FILE", type="primary"):
         df = None
         try:
-            # BACA FILE (Auto Engine)
+            # BACA FILE (Otomatis Engine)
             if uploaded_file.name.endswith(('.xlsx', '.xls')):
                 df = pd.read_excel(uploaded_file)
             else:
@@ -79,9 +57,7 @@ with st.sidebar:
 
             # VALIDASI & AMBIL DATA
             if df is not None:
-                # Cari kolom angka
                 df_numeric = df.select_dtypes(include=[np.number])
-                
                 if df_numeric.shape[1] >= 4:
                     vals = df_numeric.iloc[:, :4].values
                     raw_suhu = vals[:, 0]
@@ -111,7 +87,7 @@ with st.sidebar:
                 st.error("❌ Gagal membaca file.")
                 
         except Exception as e:
-            st.error(f"Error System: {e}")
+            st.error(f"Error: {e}. (Pastikan requirements.txt sudah ada openpyxl)")
 
     st.divider()
     c_factor = st.number_input("Faktor Koreksi (c)", 0.8, 1.4, 0.9, 0.1)
@@ -126,7 +102,6 @@ st.session_state['df_iklim_24'] = edited_df
 suhu = edited_df['Suhu (°C)'].tolist()
 hum = edited_df['Kelembaban (%)'].tolist()
 sun = edited_df['Penyinaran (%)'].tolist()
-# Konversi m/s ke km/jam
 wind = [x * 3.6 for x in edited_df['Angin (m/s)'].tolist()]
 
 eto = hitung_penman_modifikasi(suhu, hum, sun, wind, c_factor)
