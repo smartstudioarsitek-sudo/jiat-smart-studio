@@ -3,6 +3,7 @@ import pandas as pd
 import math
 import altair as alt
 import json
+import numpy as np # Tambahkan numpy untuk deteksi tipe data
 
 st.set_page_config(page_title="JIAT Smart Studio", layout="wide", page_icon="💧")
 
@@ -183,7 +184,14 @@ with tab3:
     head_total = st.session_state['head_statis_m'] + hf_total + (0.1 * hf_total)
     daya_kw = (9.81 * (q_desain/1000) * head_total) / 0.70  
     
-    st.dataframe(df_res.style.format("{:.3f}"), use_container_width=True)
+    # --- [FIX CRASH ERROR] ---
+    # Filter hanya kolom ANGKA untuk diformat desimal
+    numeric_cols = df_res.select_dtypes(include=[np.number]).columns
+    
+    st.dataframe(
+        df_res.style.format("{:.3f}", subset=numeric_cols), # <--- PERBAIKAN DI SINI
+        use_container_width=True
+    )
     
     # Cek V
     aman = True
