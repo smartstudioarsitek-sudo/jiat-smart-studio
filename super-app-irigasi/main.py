@@ -3,15 +3,60 @@ import pandas as pd
 import json
 
 # --- CONFIG ---
-st.set_page_config(page_title="JIAT Smart Studio", page_icon="💧", layout="wide")
+st.set_page_config(page_title="Hydro Planner", page_icon="💧", layout="wide")
 
-# --- CSS ---
+# --- CSS CANTIK (DENGAN GOOGLE FONTS) ---
 st.markdown("""
 <style>
-    .main-header {font-size: 40px; font-weight: bold; color: #0d47a1; text-align: center; margin-bottom: 10px;}
-    .sub-header {font-size: 18px; color: #555; text-align: center; margin-bottom: 30px;}
-    .project-card {padding: 20px; background-color: #e3f2fd; border-radius: 10px; border: 1px solid #bbdefb; margin-bottom: 20px;}
-    .stButton button {width: 100%; border-radius: 5px; font-weight: bold;}
+    /* Import Font Keren */
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&family=Pacifico&display=swap');
+
+    .branding-tag {
+        font-family: 'Pacifico', cursive; /* Font tulisan tangan manis */
+        font-size: 18px;
+        color: #ff7675; /* Warna agak pink/salmon biar manis kontras sama biru */
+        text-align: center;
+        margin-bottom: -10px;
+    }
+    
+    .main-title {
+        font-family: 'Poppins', sans-serif;
+        font-size: 55px;
+        font-weight: 800;
+        /* Efek Gradasi Air */
+        background: -webkit-linear-gradient(45deg, #0984e3, #00cec9);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-align: center;
+        line-height: 1.2;
+        margin-top: 0px;
+    }
+
+    .sub-title {
+        font-family: 'Poppins', sans-serif;
+        font-size: 18px;
+        color: #636e72;
+        text-align: center;
+        font-weight: 400;
+        letter-spacing: 1px;
+        margin-bottom: 30px;
+    }
+
+    .project-card {
+        padding: 25px; 
+        background-color: #ffffff; 
+        border-radius: 15px; 
+        box-shadow: 0 4px 15px rgba(0,0,0,0.05); /* Bayangan halus */
+        border: 1px solid #dfe6e9; 
+        margin-bottom: 20px;
+    }
+    
+    .stButton button {
+        width: 100%; 
+        border-radius: 8px; 
+        font-weight: bold; 
+        height: 50px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -50,11 +95,17 @@ if 'lokasi' not in st.session_state: st.session_state['lokasi'] = "-"
 if 'tahun' not in st.session_state: st.session_state['tahun'] = 2026
 
 # ==========================================
-# TAMPILAN DASHBOARD
+# TAMPILAN HEADER BARU
 # ==========================================
 
-st.markdown('<div class="main-header">💧 JIAT Smart Studio</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Super App Perencanaan Jaringan Irigasi Air Tanah (KP-01)</div>', unsafe_allow_html=True)
+# 1. Branding Kecil nan Manis
+st.markdown('<div class="branding-tag">by Smart Studio</div>', unsafe_allow_html=True)
+
+# 2. Judul Besar Gradasi (Bisa Kakak ganti teksnya disini)
+st.markdown('<div class="main-title">HYDRO PLANNER</div>', unsafe_allow_html=True)
+
+# 3. Sub-Judul Deskriptif
+st.markdown('<div class="sub-title">Integrated Irrigation & Drainage Engineering Suite</div>', unsafe_allow_html=True)
 
 # --- BAGIAN 1: IDENTITAS PROYEK ---
 st.markdown("### 1️⃣ Identitas Proyek")
@@ -102,10 +153,16 @@ with c_right:
 # STATUS DATA
 st.divider()
 st.caption("Status Data di Memori (RAM):")
-cols = st.columns(4)
-modules = [('df_iklim_24', 'Klimatologi'), ('data_nfr_manual', 'Pola Tanam'), ('df_pipa', 'Irigasi Pipa')]
+cols = st.columns(5)
+modules = [
+    ('df_iklim_24', 'Klimatologi'), 
+    ('data_nfr_manual', 'Pola Tanam'), 
+    ('df_mock_input', 'Ketersediaan Air'),
+    ('hujan_rancangan', 'Analisa Banjir'),
+    ('df_pipa', 'Desain Pipa')
+]
 
 for i, (key, label) in enumerate(modules):
     with cols[i]:
-        if key in st.session_state: st.success(f"✅ {label}: Ada")
-        else: st.warning(f"⬜ {label}: Kosong")
+        if key in st.session_state: st.success(f"✅ {label}")
+        else: st.markdown(f"⬜ {label}")
