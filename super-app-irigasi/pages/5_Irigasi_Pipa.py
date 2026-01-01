@@ -208,3 +208,19 @@ with tab4:
         else: st.error(f"**Demand:** {q_desain:.2f} L/s (DEFISIT)")
     
     st.success(f"**Rekomendasi Pompa:** Q={q_desain:.2f} L/s, H={head_total:.2f} m, P={daya_kw:.2f} kW")
+# ==========================================
+# 2. SIDEBAR (HANYA LINK DATA)
+# ==========================================
+with st.sidebar:
+    # TAMPILKAN INFO SAJA (Bukan Input)
+    st.title("🗂️ Info Proyek")
+    st.info(f"""
+    **Proyek:** {st.session_state.get('nama_proyek', '-')}
+    **Lokasi:** {st.session_state.get('lokasi', '-')}
+    """)
+    st.caption("✏️ Edit nama proyek di Halaman Utama (Home)")
+    
+    st.divider()
+    
+    st.header("📥 Link Data")
+    # ... (Lanjutkan tombol Ambil Data ETo & Q Desain seperti biasa) ...
