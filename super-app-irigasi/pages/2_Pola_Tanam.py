@@ -191,3 +191,14 @@ with c2:
     
     # Simple Table samping grafik (Sesuai screenshot)
     st.dataframe(df_res[['Periode', 'NFR (L/s/ha)']], use_container_width=True, height=400)
+
+st.markdown("""
+<div style="background-color: #e8f5e9; padding: 15px; border-radius: 5px; border-left: 5px solid #2e7d32; margin-bottom: 20px;">
+    <strong>ℹ️ METODOLOGI: Neraca Air Irigasi (Standar KP-01)</strong><br>
+    <ul>
+        <li><strong>Penyiapan Lahan (LP):</strong> Metode Van de Goor & Zijlstra</li>
+        <li><strong>Kebutuhan Tanaman (ETc):</strong> Kc × ETo</li>
+        <li><strong>Curah Hujan Efektif (Re):</strong> R80 (Padi) & R50 (Palawija)</li>
+    </ul>
+</div>
+""", unsafe_allow_html=True)
