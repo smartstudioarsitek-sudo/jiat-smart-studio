@@ -119,3 +119,10 @@ with c1:
 with c2:
     st.metric("Rata-rata ETo", f"{np.mean(eto):.2f} mm/hari")
     st.bar_chart(df_res.set_index('Periode')['ETo'])
+st.markdown("""
+<div style="background-color: #e3f2fd; padding: 15px; border-radius: 5px; border-left: 5px solid #2196f3; margin-bottom: 20px;">
+    <strong>ℹ️ METODOLOGI: Penman Modifikasi (Standar KP-01)</strong><br>
+    Perhitungan Evapotranspirasi Potensial (ETo) menggunakan data klimatologi rata-rata.<br>
+    <em>Rumus: ETo = c × [W•Rn + (1-W)•f(u)•(ea-ed)]</em>
+</div>
+""", unsafe_allow_html=True)
