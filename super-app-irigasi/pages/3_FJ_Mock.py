@@ -167,3 +167,10 @@ with c2:
     st.write("Grafik Hidrograf")
     st.area_chart(df_res.set_index('Bulan')['Debit (m³/s)'])
     st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown("""
+<div style="background-color: #fff3e0; padding: 15px; border-radius: 5px; border-left: 5px solid #ff9800; margin-bottom: 20px;">
+    <strong>ℹ️ METODOLOGI: Ketersediaan Air (Dr. F.J. Mock)</strong><br>
+    Analisa debit andalan sungai/DAS berdasarkan data curah hujan bulanan, evapotranspirasi, dan karakteristik tanah (Soil Storage).
+</div>
+""", unsafe_allow_html=True)
