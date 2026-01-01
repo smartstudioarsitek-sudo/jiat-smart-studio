@@ -76,7 +76,6 @@ def init_data_24_periode():
 
     # Default Hujan (Rata-rata)
     if 'df_hujan_24' not in st.session_state:
-        # Dummy data hujan rata-rata
         ch_pola = [120, 120, 110, 110, 150, 150, 90, 90, 60, 60, 30, 30, 15, 15, 10, 10, 50, 50, 90, 90, 130, 130, 140, 140]
         st.session_state['df_hujan_24'] = pd.DataFrame({
             'Periode': periods, 
@@ -85,11 +84,11 @@ def init_data_24_periode():
         
     return periods, eto_24
 
-# --- 4. SIDEBAR (UPLOAD CSV HUJAN) ---
+# --- 4. SIDEBAR (UPLOAD CSV HUJAN FIX ENCODING) ---
 with st.sidebar:
     st.header("📂 File & Tools")
     
-    # Template CSV Download
+    # Template CSV
     df_template = pd.DataFrame({'Bulan': ['Jan', 'Feb', 'Mar'], 'Curah Hujan': [200, 150, 100]})
     csv_template = df_template.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Template CSV Hujan", data=csv_template, file_name="template_hujan.csv", mime="text/csv")
@@ -102,46 +101,66 @@ with st.sidebar:
     if uploaded_file is not None:
         if st.button("🔄 Proses & Masukkan ke Tabel", type="primary"):
             try:
-                # 1. Baca CSV (Cek Separator)
+                # 1. BACA CSV (ROBUST MODE: Auto Detect Encoding & Separator)
+                df_csv = None
+                
+                # Coba baca standar UTF-8 (Linux/Mac/Modern Excel)
                 try:
+                    uploaded_file.seek(0)
                     df_csv = pd.read_csv(uploaded_file)
-                    if df_csv.shape[1] < 2:
+                except UnicodeDecodeError:
+                    # Gagal? Coba baca standar Windows (ANSI/CP1252)
+                    try:
+                        uploaded_file.seek(0)
+                        df_csv = pd.read_csv(uploaded_file, encoding='cp1252')
+                    except:
+                        pass
+                
+                # Cek Separator (Koma vs Titik Koma)
+                if df_csv is not None and df_csv.shape[1] < 2:
+                    # Kemungkinan separatornya titik koma (;)
+                    try:
                         uploaded_file.seek(0)
                         df_csv = pd.read_csv(uploaded_file, sep=';')
-                except:
-                    uploaded_file.seek(0)
-                    df_csv = pd.read_csv(uploaded_file, sep=';')
+                    except UnicodeDecodeError:
+                        uploaded_file.seek(0)
+                        df_csv = pd.read_csv(uploaded_file, sep=';', encoding='cp1252')
                 
-                # 2. Cari Kolom Angka (Curah Hujan)
-                df_numeric = df_csv.select_dtypes(include=[np.number])
-                
-                if df_numeric.shape[1] >= 1:
-                    raw_hujan = df_numeric.iloc[:, 0].values # Ambil kolom angka pertama
+                # 2. PROSES DATA
+                if df_csv is not None:
+                    # Cari Kolom Angka (Curah Hujan)
+                    df_numeric = df_csv.select_dtypes(include=[np.number])
                     
-                    new_hujan = []
-                    
-                    # 3. LOGIKA EXPAND (12 -> 24)
-                    if len(raw_hujan) == 12:
-                        for val in raw_hujan:
-                            new_hujan.extend([val, val]) # Duplikasi
-                        st.toast("✅ Data Bulanan (12) di-expand ke 24 Periode!")
+                    if df_numeric.shape[1] >= 1:
+                        raw_hujan = df_numeric.iloc[:, 0].values # Ambil kolom angka pertama
                         
-                    elif len(raw_hujan) >= 24:
-                        new_hujan = raw_hujan[:24]
-                        st.toast("✅ Data 24 Periode dimuat!")
-                    
-                    else:
-                        st.error("❌ Jumlah baris data aneh (harus 12 atau 24).")
-                        new_hujan = None
+                        new_hujan = []
+                        
+                        # LOGIKA EXPAND (12 -> 24)
+                        if len(raw_hujan) == 12:
+                            for val in raw_hujan:
+                                new_hujan.extend([val, val]) # Duplikasi
+                            st.toast("✅ Data Bulanan (12) di-expand ke 24 Periode!")
+                            
+                        elif len(raw_hujan) >= 24:
+                            new_hujan = raw_hujan[:24]
+                            st.toast("✅ Data 24 Periode dimuat!")
+                        
+                        else:
+                            st.error(f"❌ Jumlah baris data aneh: {len(raw_hujan)}. Harus 12 atau 24.")
+                            new_hujan = None
 
-                    # 4. Update Session State
-                    if new_hujan is not None:
-                        st.session_state['df_hujan_24']['CH Rata-rata (mm)'] = new_hujan
-                        st.rerun()
+                        # Update Session State
+                        if new_hujan is not None:
+                            st.session_state['df_hujan_24']['CH Rata-rata (mm)'] = new_hujan
+                            st.rerun()
+                    else:
+                        st.error("❌ Tidak ditemukan kolom angka di CSV.")
                 else:
-                    st.error("❌ Tidak ditemukan kolom angka di CSV.")
+                    st.error("❌ Gagal membaca file. Format tidak dikenali.")
+                    
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error System: {e}")
 
     st.divider()
     
@@ -200,7 +219,7 @@ with st.expander("🌧️ Input Curah Hujan (Manual / CSV)", expanded=True):
         ch_rata_list = edited_hujan['CH Rata-rata (mm)'].tolist()
         r80_list = [x * faktor_r80 for x in ch_rata_list]
 
-# B. Engine Hitungan (Pakai R80 Hasil Hitungan)
+# B. Engine Hitungan
 idx_start = periods.index(awal_tanam_label)
 jml_per_lp = int(durasi_lp / 15) 
 
@@ -272,30 +291,4 @@ with col1:
         df_res.style.background_gradient(cmap="Greens", subset=['NFR (L/s/ha)'])
         .format({
             "CH Rata2": "{:.1f}", "R80 (Calc)": "{:.1f}", 
-            "ETo": "{:.2f}", "Re": "{:.2f}", "NFR (L/s/ha)": "{:.3f}"
-        }), 
-        use_container_width=True, 
-        height=500
-    )
-    
-    st.divider()
-    st.info("👇 Kirim Data Lengkap (24 Periode) ke Irigasi Pipa")
-    if st.button("🚀 KIRIM POLA TANAM (FULL)", type="primary", use_container_width=True):
-        data_full = df_res['NFR (L/s/ha)'].tolist()
-        st.session_state['data_nfr_manual'] = data_full 
-        
-        st.markdown(f"""
-        <div class="success-box">
-            <b>✅ Data Terkirim!</b><br>
-            Data 24 Periode (naik-turun) sudah dikirim. Silakan 'Ambil Data' di Page Irigasi Pipa.
-        </div>
-        """, unsafe_allow_html=True)
-
-with col2:
-    q_max = df_res['NFR (L/s/ha)'].max()
-    st.markdown(f"""<div class="metric-box"><b>NFR Max:</b><br><h2>{q_max:.3f} l/s/ha</h2></div>""", unsafe_allow_html=True)
-    st.line_chart(df_res.set_index('Periode')['NFR (L/s/ha)'])
-
-st.divider()
-import streamlit.components.v1 as components
-components.html("""<button onclick="window.print()" style="background:#558b2f;color:white;border:none;padding:10px;">🖨️ Cetak</button>""", height=50)
+            "ETo": "{:.2f}", "Re": "{:.2f}", "NFR (L/s/
