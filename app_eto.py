@@ -226,7 +226,7 @@ with st.sidebar:
 # ==========================================
 # 4. MAIN LAYOUT
 # ==========================================
-st.title("ETo Calculator (Hydro Planner")
+st.title("ETo Calculator (Hydro Planner)")
 st.markdown(f"**Modul Evapotranspirasi (ETo)** | Metode: **Penman Modifikasi (KP-01)**")
 st.markdown("---")
 
@@ -331,6 +331,7 @@ st.markdown("""
     by <span>SmartStudio</span>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
