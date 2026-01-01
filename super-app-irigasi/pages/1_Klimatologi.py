@@ -24,62 +24,42 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. RUMUS PENMAN MODIFIKASI ---
+# --- 2. RUMUS ---
 def hitung_penman_modifikasi(temp, hum, sun, wind, c_factor=1.1):
     def to_float(arr): return np.array([float(x) for x in arr])
-
     try:
         T = to_float(temp)
         RH = to_float(hum)
         n = to_float(sun)
         u_km_jam = to_float(wind)
         u_km_day = u_km_jam * 24 
-
-        # 1. Tekanan Uap
         ea = 6.11 * np.exp((17.27 * T) / (T + 237.3))
         ed = ea * (RH / 100)
-        
-        # 2. Faktor Pembobot (W)
         W = 0.4025 + 0.013 * T - 0.0001 * (T**2)
-        
-        # 3. Fungsi Angin f(u) KP-01
         fu = 0.27 * (1 + u_km_day / 100)
-        
-        # 4. Radiasi
         ra_bulanan = [15.8, 16.0, 15.8, 15.3, 14.4, 13.9, 14.1, 14.8, 15.6, 16.0, 15.9, 15.7]
         if len(T) == 24:
             Ra = []
             for val in ra_bulanan: Ra.extend([val, val])
             Ra = np.array(Ra)
-        else:
-            Ra = np.array(ra_bulanan)
-
-        # Hitung
+        else: Ra = np.array(ra_bulanan)
         Rs = (0.25 + 0.54 * (n/100)) * Ra
         Rns = (1 - 0.20) * Rs
-        
-        # Rnl
         func_t = 11.0 + 0.22 * T 
         func_ed = 0.34 - 0.044 * np.sqrt(ed)
         func_n = 0.1 + 0.9 * (n/100)
         Rnl = func_t * func_ed * func_n
-        
         Rn = Rns - Rnl
-        
-        # 5. ETo
         ETo_star = W * Rn + (1 - W) * fu * (ea - ed)
         ETo = c_factor * ETo_star
         return ETo
-        
-    except Exception as e:
-        return np.zeros(len(temp))
+    except: return np.zeros(len(temp))
 
-# --- 3. STATE MANAGEMENT ---
+# --- 3. STATE ---
 def init_state():
     months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
     periods = []
     for m in months: periods.extend([f"{m}-1", f"{m}-2"])
-
     if 'df_iklim_24' not in st.session_state:
         st.session_state['df_iklim_24'] = pd.DataFrame({
             'Periode': periods,
@@ -88,111 +68,71 @@ def init_state():
             'Penyinaran (%)': [50.0]*24,
             'Angin (km/jam)': [10.0]*24
         })
-
 init_state()
 
-# --- 4. SIDEBAR (TOOLS) ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.header("📂 File & Tools")
     
     # Template
-    df_template = pd.DataFrame({
-        'Suhu': [27.5, 28.0], 'RH': [80, 82], 'Sinar': [50, 60], 'Angin': [10, 12]
-    })
-    csv_template = df_template.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Template CSV", data=csv_template, file_name="template_iklim.csv", mime="text/csv")
-
-    st.divider()
-
-    # --- UPLOAD SECTION ---
-    uploaded_file = st.file_uploader("Upload Data (JSON / CSV)", type=["json", "csv"])
+    df_template = pd.DataFrame({'Suhu': [27.5, 28.0], 'RH': [80, 82], 'Sinar': [50, 60], 'Angin': [10, 12]})
+    st.download_button("📥 Template CSV", df_template.to_csv(index=False).encode('utf-8'), "template_iklim.csv", "text/csv")
     
+    st.divider()
+    
+    # Upload & Proses
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
     convert_wind = False
     convert_sun = False
     max_sun_hour = 12.0
     
-    if uploaded_file is not None and uploaded_file.name.endswith('.csv'):
-        with st.expander("⚙️ Opsi Konversi Satuan", expanded=True):
-            st.info("Centang jika data CSV berbeda satuan:")
-            convert_wind = st.checkbox("Angin (m/s) ➡️ km/jam", value=True) 
-            convert_sun = st.checkbox("Sinar (Jam) ➡️ Persen (%)", value=True) 
-            if convert_sun:
-                max_sun_hour = st.number_input("Max Penyinaran (Jam/Hari)", 8.0, 14.0, 12.0)
-
     if uploaded_file is not None:
-        try:
-            if uploaded_file.name.endswith('.json'):
-                data_load = json.load(uploaded_file)
-                if 'df_iklim_data' in data_load:
-                    st.session_state['df_iklim_24'] = pd.DataFrame(data_load['df_iklim_data'])
-                    st.session_state['temp_c_factor'] = data_load.get('c_factor', 1.1)
-                    st.success("✅ JSON Loaded!")
-                    st.rerun()
+        with st.expander("⚙️ Opsi Konversi Satuan", expanded=True):
+            convert_wind = st.checkbox("Angin m/s ➡️ km/jam", value=True) 
+            convert_sun = st.checkbox("Sinar Jam ➡️ Persen (%)", value=True) 
+            if convert_sun: max_sun_hour = st.number_input("Max Jam/Hari", 8.0, 14.0, 12.0)
 
-            elif uploaded_file.name.endswith('.csv'):
-                if st.button("🔄 Proses & Masukkan ke Tabel", type="primary"):
-                    try:
-                        df_csv = pd.read_csv(uploaded_file)
-                        if df_csv.shape[1] < 2:
-                            uploaded_file.seek(0)
-                            df_csv = pd.read_csv(uploaded_file, sep=';')
-                    except:
+        if st.button("🔄 Proses & Masukkan ke Tabel", type="primary"):
+            try:
+                try:
+                    df_csv = pd.read_csv(uploaded_file)
+                    if df_csv.shape[1] < 2: 
                         uploaded_file.seek(0)
                         df_csv = pd.read_csv(uploaded_file, sep=';')
+                except:
+                    uploaded_file.seek(0)
+                    df_csv = pd.read_csv(uploaded_file, sep=';')
+                
+                df_numeric = df_csv.select_dtypes(include=[np.number])
+                
+                if df_numeric.shape[1] >= 4:
+                    vals = df_numeric.iloc[:, :4].values
+                    r_suhu, r_rh, r_sun, r_wind = vals[:,0], vals[:,1], vals[:,2], vals[:,3]
                     
-                    df_numeric = df_csv.select_dtypes(include=[np.number])
+                    if convert_wind: r_wind = r_wind * 3.6
+                    if convert_sun:
+                        if np.mean(r_sun) > 24: r_sun = (r_sun / 30 / max_sun_hour) * 100
+                        else: r_sun = (r_sun / max_sun_hour) * 100
+                        r_sun = np.where(r_sun > 100, 100, r_sun)
+
+                    n_suhu, n_rh, n_sun, n_wind = [], [], [], []
+                    if len(df_csv) == 12:
+                        for i in range(12):
+                            n_suhu.extend([r_suhu[i]]*2); n_rh.extend([r_rh[i]]*2); n_sun.extend([r_sun[i]]*2); n_wind.extend([r_wind[i]]*2)
+                    elif len(df_csv) >= 24:
+                        n_suhu, n_rh, n_sun, n_wind = r_suhu[:24], r_rh[:24], r_sun[:24], r_wind[:24]
                     
-                    if df_numeric.shape[1] >= 4:
-                        vals = df_numeric.iloc[:, :4].values
-                        raw_suhu, raw_rh, raw_sun, raw_wind = vals[:, 0], vals[:, 1], vals[:, 2], vals[:, 3]
-                        
-                        if convert_wind: raw_wind = raw_wind * 3.6
-                        if convert_sun:
-                            if np.mean(raw_sun) > 24: raw_sun = (raw_sun / 30 / max_sun_hour) * 100
-                            else: raw_sun = (raw_sun / max_sun_hour) * 100
-                            raw_sun = np.where(raw_sun > 100, 100, raw_sun)
-
-                        new_suhu, new_rh, new_sun, new_wind = [], [], [], []
-                        if len(df_csv) == 12:
-                            for i in range(12):
-                                new_suhu.extend([raw_suhu[i]]*2); new_rh.extend([raw_rh[i]]*2)
-                                new_sun.extend([raw_sun[i]]*2); new_wind.extend([raw_wind[i]]*2)
-                        elif len(df_csv) >= 24:
-                            new_suhu, new_rh, new_sun, new_wind = raw_suhu[:24], raw_rh[:24], raw_sun[:24], raw_wind[:24]
-                        
-                        st.session_state['df_iklim_24']['Suhu (°C)'] = new_suhu
-                        st.session_state['df_iklim_24']['Kelembaban (%)'] = new_rh
-                        st.session_state['df_iklim_24']['Penyinaran (%)'] = new_sun
-                        st.session_state['df_iklim_24']['Angin (km/jam)'] = new_wind
-                        st.rerun()
-                    else:
-                        st.error("❌ Format CSV Salah!")
-
-        except Exception as e:
-            st.error(f"Error: {e}")
+                    st.session_state['df_iklim_24']['Suhu (°C)'] = n_suhu
+                    st.session_state['df_iklim_24']['Kelembaban (%)'] = n_rh
+                    st.session_state['df_iklim_24']['Penyinaran (%)'] = n_sun
+                    st.session_state['df_iklim_24']['Angin (km/jam)'] = n_wind
+                    st.rerun()
+                else: st.error("❌ Format CSV Salah (Minimal 4 kolom angka)")
+            except Exception as e: st.error(f"Error: {e}")
 
     st.divider()
     st.header("Parameter")
-    def_c = st.session_state.get('temp_c_factor', 1.1)
-    c_factor = st.number_input("Faktor Koreksi (c)", 0.8, 1.4, def_c, 0.1)
-    
-    # --- [FIXED] SAVE BUTTON YANG LEBIH AMAN ---
-    try:
-        # Kita copy dataframe, lalu konversi HANYA kolom numeric
-        df_temp = st.session_state['df_iklim_24'].copy()
-        cols_num = ['Suhu (°C)', 'Kelembaban (%)', 'Penyinaran (%)', 'Angin (km/jam)']
-        for col in cols_num:
-            df_temp[col] = df_temp[col].astype(float)
-            
-        data_save = {
-            'df_iklim_data': df_temp.to_dict(orient='records'),
-            'c_factor': float(c_factor)
-        }
-        
-        json_str = json.dumps(data_save, indent=2)
-        st.download_button("💾 Simpan Data (.json)", json_str, "klimatologi_save.json", "application/json")
-    except Exception as e:
-        st.error(f"Error tombol save: {e}")
+    c_factor = st.number_input("Faktor Koreksi (c)", 0.8, 1.4, st.session_state.get('temp_c_factor', 1.1), 0.1)
 
 # --- 5. MAIN CONTENT ---
 st.title("🌦️ Klimatologi (Sistem 15 Harian)")
@@ -202,13 +142,12 @@ st.subheader("1. Input Data Iklim")
 edited_df = st.data_editor(st.session_state['df_iklim_24'], height=400, use_container_width=True, hide_index=True)
 st.session_state['df_iklim_24'] = edited_df
 
-# B. Proses Hitung
+# Proses Hitung
 try:
     suhu = edited_df['Suhu (°C)'].tolist()
     hum = edited_df['Kelembaban (%)'].tolist()
     sun = edited_df['Penyinaran (%)'].tolist()
     wind = edited_df['Angin (km/jam)'].tolist()
-
     eto_result = hitung_penman_modifikasi(suhu, hum, sun, wind, c_factor=c_factor)
     
     df_hasil = edited_df[['Periode']].copy()
@@ -217,26 +156,20 @@ try:
     
     st.subheader("2. Hasil Perhitungan")
     col1, col2 = st.columns([2, 1])
-    
     with col1:
-        numeric_cols = df_hasil.select_dtypes(include=[np.number]).columns
-        st.dataframe(df_hasil.style.background_gradient(cmap="Oranges", subset=['ETo (mm/hari)']).format("{:.2f}", subset=numeric_cols), use_container_width=True, height=400)
+        num_cols = df_hasil.select_dtypes(include=[np.number]).columns
+        st.dataframe(df_hasil.style.background_gradient(cmap="Oranges", subset=['ETo (mm/hari)']).format("{:.2f}", subset=num_cols), use_container_width=True, height=400)
         
         st.divider()
-        st.info("👇 Kirim data ke Irigasi Pipa")
-        if st.button("🚀 KIRIM DATA ETo (24 Periode)", type="primary", use_container_width=True):
+        if st.button("🚀 KIRIM DATA ETo", type="primary", use_container_width=True):
             st.session_state['data_eto_manual'] = df_hasil['ETo (mm/hari)'].tolist()
-            st.success("✅ Terkirim! Buka Page Irigasi Pipa untuk mengambil data.")
-    
+            st.markdown('<div class="success-box">✅ Terkirim! Buka Page Irigasi Pipa untuk ambil data.</div>', unsafe_allow_html=True)
     with col2:
         rata_eto = np.mean(eto_result)
-        st.markdown(f"""<div class="metric-card"><h4>Rata-rata ETo</h4><h2 style="margin:0;">{rata_eto:.2f} <span style="font-size:16px">mm/hari</span></h2></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-card"><h4>Rata-rata ETo</h4><h2 style="margin:0;">{rata_eto:.2f} mm/hari</h2></div>""", unsafe_allow_html=True)
         st.bar_chart(df_hasil.set_index('Periode')['ETo (mm/hari)'])
+except Exception as e: st.error(f"⚠️ Error: {e}")
 
-except Exception as e:
-    st.error(f"⚠️ Error: {e}")
-
-# Cetak
 st.divider()
 import streamlit.components.v1 as components
-components.html("""<button onclick="window.print()" style="background:#ff9800;color:white;border:none;padding:10px 20px;border-radius:5px;font-weight:bold;cursor:pointer;">🖨️ Cetak PDF</button>""", height=50)
+components.html("""<button onclick="window.print()" style="background:#ff9800;color:white;border:none;padding:10px 20px;border-radius:5px;">🖨️ Cetak PDF</button>""", height=50)
