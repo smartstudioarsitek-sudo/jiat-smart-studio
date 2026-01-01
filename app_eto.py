@@ -1,3 +1,19 @@
+# Masukkan ini di paling atas kode app.py, setelah import streamlit
+import streamlit as st
+
+# ... library lain ...
+
+# Konfigurasi Sembunyikan Menu Default & Footer Streamlit
+st.markdown("""
+<style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# ... lanjut ke kode aplikasi ...
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -330,4 +346,5 @@ st.markdown("""
     by <span>SmartStudio</span>
 </div>
 """, unsafe_allow_html=True)
+
 
