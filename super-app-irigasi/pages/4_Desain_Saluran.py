@@ -157,3 +157,13 @@ c3.metric("Total Saluran Tersier", len(st.session_state['df_saluran_tersier']))
 
 import streamlit.components.v1 as components
 components.html("""<button onclick="window.print()" style="background:#546e7a;color:white;border:none;padding:10px 20px;border-radius:5px;">🖨️ Cetak Laporan</button>""", height=50)
+
+st.markdown("""
+<div style="background-color: #eceff1; padding: 15px; border-radius: 5px; border-left: 5px solid #607d8b; margin-bottom: 20px;">
+    <strong>ℹ️ METODOLOGI: Hidrolika Saluran Terbuka</strong><br>
+    <ul>
+        <li><strong>Kapasitas Debit:</strong> Rumus Manning (V = 1/n × R⅔ × S½)</li>
+        <li><strong>Kontrol Desain:</strong> Cek Kecepatan Izin (0.6 - 2.0 m/s) untuk mencegah endapan & gerusan.</li>
+    </ul>
+</div>
+""", unsafe_allow_html=True)
