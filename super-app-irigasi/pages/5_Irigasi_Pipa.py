@@ -196,3 +196,13 @@ with tab4:
     - H = {head_total:.2f} m
     - P = {daya_kw:.2f} kW
     """)
+
+st.markdown("""
+<div style="background-color: #e0f7fa; padding: 15px; border-radius: 5px; border-left: 5px solid #00bcd4; margin-bottom: 20px;">
+    <strong>ℹ️ METODOLOGI: Hidrolika Perpipaan</strong><br>
+    <ul>
+        <li><strong>Head Loss (Mayor):</strong> Rumus Hazen-Williams</li>
+        <li><strong>Debit Sumur:</strong> Analisa Kapasitas Akuifer (Cooper-Jacob Approach)</li>
+    </ul>
+</div>
+""", unsafe_allow_html=True)
