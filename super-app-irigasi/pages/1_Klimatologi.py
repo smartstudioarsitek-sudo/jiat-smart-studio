@@ -1,4 +1,24 @@
 import streamlit as st
+import sys
+import subprocess
+import importlib.util
+
+# --- 0. AUTO-INSTALLER (JURUS PAMUNGKAS) ---
+# Kode ini akan memaksa aplikasi menginstall openpyxl jika belum ada
+def install_package(package):
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+        return True
+    except:
+        return False
+
+# Cek apakah openpyxl ada? Kalau tidak, install paksa!
+if importlib.util.find_spec("openpyxl") is None:
+    st.warning("⚙️ Sedang menginstall 'openpyxl' otomatis... Mohon tunggu sebentar.")
+    install_package("openpyxl")
+    st.success("✅ Instalasi Berhasil! Silakan tekan Rerun.")
+    st.rerun()
+
 import pandas as pd
 import numpy as np
 
@@ -38,58 +58,57 @@ def init_state():
         })
 init_state()
 
-# --- 4. SIDEBAR (AUTO EXCEL READER) ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.header("📂 Data Input")
     
-    # Bisa Upload CSV atau Excel
+    # Upload File
     uploaded_file = st.file_uploader("Upload File (Excel .xlsx / CSV)", type=["xlsx", "xls", "csv"])
     
     if uploaded_file and st.button("🔄 PROSES FILE", type="primary"):
         df = None
         try:
-            # 1. CEK TIPE FILE & BACA
+            # BACA FILE (Auto Engine)
             if uploaded_file.name.endswith(('.xlsx', '.xls')):
-                # Karena openpyxl/xlrd sudah install, ini pasti jalan!
                 df = pd.read_excel(uploaded_file)
             else:
-                # Fallback untuk CSV
                 try: df = pd.read_csv(uploaded_file)
                 except: 
                     uploaded_file.seek(0)
                     df = pd.read_csv(uploaded_file, sep=';')
 
-            # 2. VALIDASI & AMBIL DATA
-            if df is not None and df.select_dtypes(include=[np.number]).shape[1] >= 4:
-                
-                # Ambil 4 kolom angka pertama (Urutan: Suhu, RH, Sinar, Angin)
+            # VALIDASI & AMBIL DATA
+            if df is not None:
+                # Cari kolom angka
                 df_numeric = df.select_dtypes(include=[np.number])
-                vals = df_numeric.iloc[:, :4].values
                 
-                raw_suhu = vals[:, 0]
-                raw_rh   = vals[:, 1]
-                raw_sun  = vals[:, 2]
-                raw_wind = vals[:, 3]
+                if df_numeric.shape[1] >= 4:
+                    vals = df_numeric.iloc[:, :4].values
+                    raw_suhu = vals[:, 0]
+                    raw_rh   = vals[:, 1]
+                    raw_sun  = vals[:, 2]
+                    raw_wind = vals[:, 3]
 
-                # Expand 12 -> 24
-                new_suhu, new_rh, new_sun, new_wind = [], [], [], []
-                limit = min(len(vals), 12)
-                for i in range(limit):
-                    new_suhu.extend([raw_suhu[i]]*2)
-                    new_rh.extend([raw_rh[i]]*2)
-                    new_sun.extend([raw_sun[i]]*2)
-                    new_wind.extend([raw_wind[i]]*2)
+                    # Expand 12 -> 24
+                    new_suhu, new_rh, new_sun, new_wind = [], [], [], []
+                    limit = min(len(vals), 12)
+                    for i in range(limit):
+                        new_suhu.extend([raw_suhu[i]]*2)
+                        new_rh.extend([raw_rh[i]]*2)
+                        new_sun.extend([raw_sun[i]]*2)
+                        new_wind.extend([raw_wind[i]]*2)
 
-                # Update State
-                st.session_state['df_iklim_24']['Suhu (°C)'] = new_suhu
-                st.session_state['df_iklim_24']['Kelembaban (%)'] = new_rh
-                st.session_state['df_iklim_24']['Penyinaran (%)'] = new_sun
-                st.session_state['df_iklim_24']['Angin (m/s)'] = new_wind
-                
-                st.success("✅ BERHASIL! File Excel terbaca sempurna.")
-                st.rerun()
+                    st.session_state['df_iklim_24']['Suhu (°C)'] = new_suhu
+                    st.session_state['df_iklim_24']['Kelembaban (%)'] = new_rh
+                    st.session_state['df_iklim_24']['Penyinaran (%)'] = new_sun
+                    st.session_state['df_iklim_24']['Angin (m/s)'] = new_wind
+                    
+                    st.success("✅ BERHASIL! File Excel terbaca.")
+                    st.rerun()
+                else:
+                    st.error("❌ File terbaca tapi kolom angka kurang (Min 4).")
             else:
-                st.error("❌ Gagal membaca data. Pastikan ada minimal 4 kolom angka di Excel.")
+                st.error("❌ Gagal membaca file.")
                 
         except Exception as e:
             st.error(f"Error System: {e}")
@@ -107,7 +126,7 @@ st.session_state['df_iklim_24'] = edited_df
 suhu = edited_df['Suhu (°C)'].tolist()
 hum = edited_df['Kelembaban (%)'].tolist()
 sun = edited_df['Penyinaran (%)'].tolist()
-# Konversi m/s ke km/jam untuk rumus Penman
+# Konversi m/s ke km/jam
 wind = [x * 3.6 for x in edited_df['Angin (m/s)'].tolist()]
 
 eto = hitung_penman_modifikasi(suhu, hum, sun, wind, c_factor)
