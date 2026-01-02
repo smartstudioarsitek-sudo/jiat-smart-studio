@@ -25,17 +25,21 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- ENGINE HIDROLIKA (ULTRA STABLE) ---
+# --- ENGINE HIDROLIKA (ANTI-GRAVITY FIX) ---
 def solve_manning_y(Q, n, b, S, m):
-    if S <= 0: return 0.001
-    # Bisection Method for Manning (Sangat Stabil)
+    # Jika kemiringan 0 atau negatif (nanjak), anggap slope sangat kecil (genangan)
+    if S <= 0: S = 0.0001 
+    
+    # Bisection Method (Stabil)
     y_low = 0.001
-    y_high = 20.0 # Batas atas logis
+    y_high = 20.0
     for _ in range(50):
         y_mid = (y_low + y_high) / 2
         A = (b + m*y_mid) * y_mid
         P = b + 2*y_mid * np.sqrt(1 + m**2)
         R = A/P if P > 0 else 0
+        
+        # Manning Formula
         Q_calc = (1/n) * A * (R**(2/3)) * (S**0.5)
         
         if abs(Q_calc - Q) < 0.001: return y_mid
@@ -45,10 +49,8 @@ def solve_manning_y(Q, n, b, S, m):
 
 def solve_critical_y(Q, b, m):
     g = 9.81
-    # Bisection Method for Critical Depth (Anti-Explosion)
-    # Froude = 1 -> Q^2*T / g*A^3 = 1
     y_low = 0.001
-    y_high = 10.0 # Batas atas logis
+    y_high = 10.0
     
     for _ in range(50):
         y_mid = (y_low + y_high) / 2
@@ -59,10 +61,8 @@ def solve_critical_y(Q, b, m):
         else: val = (Q**2 * T) / (g * A**3)
         
         if abs(val - 1.0) < 0.01: return y_mid
-        if val > 1.0: # Aliran Superkritis (y terlalu kecil)
-            y_low = y_mid
-        else: # Aliran Subkritis (y terlalu besar)
-            y_high = y_mid
+        if val > 1.0: y_low = y_mid
+        else: y_high = y_mid
             
     return (y_low + y_high) / 2
 
@@ -73,7 +73,6 @@ def reset_data():
     data = [
         ["S1", 0.0, 50.0, 325.54, 324.95, 0.6, 1.0, 0.017],
         ["S2", 50.0, 64.0, 324.95, 323.54, 0.6, 1.0, 0.017],
-        ["S3", 64.0, 114.0, 321.47, 321.21, 0.6, 1.0, 0.017],
     ]
     return pd.DataFrame(data, columns=REQUIRED_COLS)
 
@@ -117,7 +116,7 @@ with st.sidebar:
     use_manual_zoom = st.checkbox("Manual Scaling", value=False)
     if use_manual_zoom:
         c1, c2 = st.columns(2)
-        with c1: y_min = st.number_input("Min Elev", 0.0, 1000.0, 310.0)
+        with c1: y_min = st.number_input("Min Elev", 0.0, 1000.0, 318.0)
         with c2: y_max = st.number_input("Max Elev", 0.0, 1000.0, 330.0)
     
     st.divider()
@@ -134,7 +133,6 @@ with st.sidebar:
     if up_file:
         try:
             df_up = pd.read_excel(up_file)
-            # Smart Matching
             def clean(t): return str(t).lower().replace(" ", "").replace("(m)", "").replace(".", "")
             df_up.columns = [clean(c) for c in df_up.columns]
             
@@ -195,33 +193,52 @@ if not edited_df.empty:
             L = sta2 - sta1
             if L <= 0: continue
             
+            # --- CEK SLOPE (ANTI-GRAVITY) ---
             S = (z1 - z2) / L
+            is_uphill = False
+            
+            if S <= 0: # Jika Datar atau Nanjak
+                S = 0.0001 # Set ke slope minimum positif
+                is_uphill = True
+            
             Q = st.session_state['q_global']
             
             yn = solve_manning_y(Q, n, b, S, m)
-            yc = solve_critical_y(Q, b, m) 
+            yc = solve_critical_y(Q, b, m)
             
             A = (b + m*yn) * yn
             P = b + 2*yn * np.sqrt(1 + m**2)
             R = A/P if P > 0 else 0
             TopW = b + 2*m*yn
-            V = Q/A if A > 0 else 0
-            Fr = V / np.sqrt(9.81 * (A/TopW)) if TopW > 0 else 0
+            
+            # --- CEK VELOCITY (ANTI-EXPLOSION) ---
+            if A > 0.001:
+                V = Q/A
+            else:
+                V = 0
+            
+            # Jika Uphill, Kecepatan pasti sangat rendah (tergenang)
+            if is_uphill:
+                status = "BACKWATER (Uphill)"
+                note = "Elevasi Naik!"
+                # Paksa V kecil agar EG tidak meledak
+                V = 0.1 
+            else:
+                Fr = V / np.sqrt(9.81 * (A/TopW)) if TopW > 0 else 0
+                status = "SUPERKRITIS" if Fr > 1.1 else ("SUBKRITIS" if Fr < 0.9 else "KRITIS")
+                note = status
+                if V > 3.0: note += " (Erosi!)"
+                elif V < 0.6: note += " (Endapan)"
             
             Vel_Head = (V**2) / (2*9.81)
             EGL = (z2 + yn) + Vel_Head
             EG_Slope = (n * V)**2 / (R**(4/3)) if R>0 else 0
             
-            status = "SUPERKRITIS" if Fr > 1.1 else ("SUBKRITIS" if Fr < 0.9 else "KRITIS")
-            note = status
-            if V > 3.0: note += " (Erosi!)"
-            elif V < 0.6: note += " (Endapan)"
-            
             results.append({
                 "Reach": nama, "Sta Start": sta1, "Sta Finish": sta2,
                 "Q Total": Q, "Min Ch El": z2, "W.S. Elev": z2 + yn, "Crit W.S.": z2 + yc,
                 "E.G. Elev": EGL, "E.G. Slope": S, "Vel Chnl": V,
-                "Flow Area": A, "Bottom Width": b, "Talud": m, "Top Width": TopW, "Froude # Chl": Fr,
+                "Flow Area": A, "Bottom Width": b, "Talud": m, "Top Width": TopW, "Froude # Chl": Fr if not is_uphill else 0,
                 "Keterangan": note
             })
             
@@ -236,6 +253,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 Geometry", "📈 Profile Plot", "�
 
 with tab1:
     st.subheader("Data Geometri Saluran")
+    # FIX: Ganti use_container_width=True jadi width='stretch' (versi 2026)
     new_df = st.data_editor(st.session_state['df_segments_sta'], num_rows="dynamic", use_container_width=True)
     if not new_df.equals(st.session_state['df_segments_sta']):
         st.session_state['df_segments_sta'] = new_df
@@ -251,15 +269,7 @@ with tab2:
         ax.plot(plot_x, plot_ws, 'b-', lw=1.5, label='W.S.')
         ax.fill_between(plot_x, plot_bed, plot_ws, color='#00FFFF', alpha=1.0)
         
-        # FILTER VISUALISASI: Jangan gambar garis kritis jika nilainya tidak masuk akal (> 5m di atas air)
-        clean_crit = []
-        for i in range(len(plot_crit)):
-            depth_crit = plot_crit[i] - plot_bed[i]
-            if depth_crit < 5.0: # Batas wajar
-                clean_crit.append(plot_crit[i])
-            else:
-                clean_crit.append(np.nan)
-
+        clean_crit = [c if (c - w) < 5.0 else np.nan for c, w in zip(plot_crit, plot_ws)]
         ax.plot(plot_x, clean_crit, 'r--', lw=1, label='Crit')
         ax.plot(plot_x, plot_egl, 'g--', lw=1, label='E.G.')
         
@@ -270,7 +280,6 @@ with tab2:
         if use_manual_zoom: 
             ax.set_ylim(y_min, y_max)
         else:
-            # Auto zoom pintar
             y_vals = [y for y in plot_bed + plot_ws if not np.isnan(y)]
             if y_vals:
                 min_y, max_y = min(y_vals), max(y_vals)
@@ -287,7 +296,7 @@ with tab3:
         
         b, m, y, yc = d['Bottom Width'], d['Talud'], d['W.S. Elev'] - d['Min Ch El'], d['Crit W.S.'] - d['Min Ch El']
         h_max = max(y, yc) * 1.5 if max(y, yc) > 0 else 1.0
-        if h_max > 5: h_max = y * 1.5 # Safety display
+        if h_max > 5: h_max = y * 1.5 
         
         x = [-(b/2 + m*h_max), -b/2, b/2, b/2 + m*h_max]
         y_g = [h_max, 0, 0, h_max]
@@ -323,9 +332,7 @@ with tab4:
             "Froude # Chl": "Froude"
         })
         
-        for c in final.columns:
-            if final[c].dtype == 'float64': final[c] = final[c].map('{:,.2f}'.format)
-            
+        # FIX: Gunakan width='stretch' untuk tabel
         st.dataframe(final, use_container_width=True, hide_index=True)
         
         buf = io.BytesIO()
@@ -345,6 +352,11 @@ with tab5:
         """, unsafe_allow_html=True)
         
         count_super = sum(1 for r in results if r['Froude # Chl'] > 1.1)
+        count_uphill = sum(1 for r in results if "Uphill" in r['Keterangan'])
+        
+        if count_uphill > 0:
+            st.error(f"⛔ PERINGATAN: Ada {count_uphill} segmen yang elevasinya NAIK (Uphill/Backwater). Cek data input!")
+            
         if count_super > 0:
             st.warning(f"⚠️ Terdeteksi {count_super} segmen dengan aliran SUPERKRITIS (Froude > 1.1).")
             st.info("💡 REKOMENDASI: Pasang Kolam Olak (Stilling Basin) di hilir segmen tersebut untuk meredam energi.")
