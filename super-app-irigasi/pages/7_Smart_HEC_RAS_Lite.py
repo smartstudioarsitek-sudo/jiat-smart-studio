@@ -124,10 +124,11 @@ with st.sidebar:
     
     # EXCEL IMPORT
     st.subheader("📥 Excel Import")
+    
     df_temp = pd.DataFrame([["S1", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=REQUIRED_COLS)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer: df_temp.to_excel(writer, index=False)
-    st.download_button("📄 Template Excel", buf.getvalue(), "Template_HECRAS.xlsx")
+    st.download_button("📄 Download Template Excel", buf.getvalue(), "Template_HECRAS.xlsx")
     
     up_file = st.file_uploader("Upload Excel (.xlsx)", type=['xlsx'])
     if up_file:
@@ -162,7 +163,7 @@ with st.sidebar:
                 if st.button("✅ Load Data Excel"):
                     st.session_state['df_segments_sta'] = new_data
                     st.rerun()
-            else: st.error("Gagal mencocokkan kolom.")
+            else: st.error("Gagal mencocokkan kolom. Gunakan Template.")
         except Exception as e: st.error(f"Error: {e}")
 
     if st.button("🔄 Reset Data Default"): 
@@ -250,8 +251,7 @@ with tab2:
         ax.plot(plot_x, plot_ws, 'b-', lw=1.5, label='W.S.')
         ax.fill_between(plot_x, plot_bed, plot_ws, color='#00FFFF', alpha=1.0)
         
-        # Filter: Hanya gambar garis kritis jika nilainya wajar (misal < 5m dari dasar)
-        # Jika y_c sangat tinggi (bug), jangan digambar agar tidak merusak skala
+        # FILTER VISUALISASI: Jangan gambar garis kritis jika nilainya tidak masuk akal (> 5m di atas air)
         clean_crit = []
         for i in range(len(plot_crit)):
             depth_crit = plot_crit[i] - plot_bed[i]
