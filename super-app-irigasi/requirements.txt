@@ -6,3 +6,4 @@ xlrd
 scipy
 altair
 matplotlib
+xlsxwriter
