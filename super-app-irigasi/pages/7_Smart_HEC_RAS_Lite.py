@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import matplotlib.patches as patches
 import io
-import json # Pastikan library json diimport
+import json
 
 # --- CONFIG ---
 st.set_page_config(page_title="Smart HEC-RAS Lite", layout="wide", page_icon="🌊")
@@ -19,7 +19,6 @@ st.markdown("""
     }
     .metric-card { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #007bff; margin-bottom: 10px; }
     .report-box { border: 1px solid #ddd; padding: 20px; border-radius: 5px; margin-bottom: 20px; background-color: white; }
-    h3 { color: #1e3c72; border-bottom: 2px solid #eee; padding-bottom: 5px; }
     @media print {
         .stSidebar, header, footer, .stFileUploader, .stButton, .stTabs nav { display: none !important; }
         .block-container { padding-top: 0 !important; }
@@ -73,7 +72,7 @@ def solve_critical_y(Q, b, m):
         except: return 0.001
     return y
 
-# --- 1. INISIALISASI & AUTO-FIX DATA ---
+# --- 1. INISIALISASI & DATA STRUCTURE ---
 REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
 
 def reset_data():
@@ -87,10 +86,17 @@ def reset_data():
 if 'df_segments_sta' not in st.session_state:
     st.session_state['df_segments_sta'] = reset_data()
 else:
-    current_cols = list(st.session_state['df_segments_sta'].columns)
-    if not all(col in current_cols for col in REQUIRED_COLS):
-        st.toast("⚠️ Reset format tabel...", icon="🔄")
-        st.session_state['df_segments_sta'] = reset_data()
+    # Auto-Fix Kolom Hilang (Tanpa Reset Total)
+    current_df = st.session_state['df_segments_sta']
+    missing_cols = [c for c in REQUIRED_COLS if c not in current_df.columns]
+    if missing_cols:
+        st.toast(f"Memperbaiki struktur tabel...", icon="🛠️")
+        for c in missing_cols:
+            if "Nama" in c: current_df[c] = "Saluran X"
+            elif "Talud" in c: current_df[c] = 1.0
+            elif "Kekasaran" in c: current_df[c] = 0.017
+            else: current_df[c] = 0.0
+        st.session_state['df_segments_sta'] = current_df[REQUIRED_COLS] # Reorder
 
 if 'q_global' not in st.session_state: st.session_state['q_global'] = 0.24
 
@@ -108,7 +114,7 @@ with st.sidebar:
     
     st.divider()
     
-    # --- RESTORE TOMBOL SAVE JSON ---
+    # --- SAVE / LOAD SYSTEM (FIXED) ---
     st.subheader("💾 Manajemen File")
     project_data = {
         'q': st.session_state['q_global'],
@@ -121,11 +127,27 @@ with st.sidebar:
     if uploaded_json is not None:
         try:
             loaded = json.load(uploaded_json)
-            st.session_state['q_global'] = loaded['q']
-            st.session_state['df_segments_sta'] = pd.DataFrame(loaded['segments'])
-            st.success("✅ Project Dimuat!")
-            st.rerun()
-        except: st.error("Format file salah.")
+            # Validasi Dasar
+            if 'q' in loaded and 'segments' in loaded:
+                st.session_state['q_global'] = float(loaded['q'])
+                df_loaded = pd.DataFrame(loaded['segments'])
+                
+                # --- SMART FIXER: Cek kelengkapan kolom ---
+                # Jika file lama tidak punya kolom 'STA Awal' misalnya, kita tambahkan default
+                for col in REQUIRED_COLS:
+                    if col not in df_loaded.columns:
+                        df_loaded[col] = 0.0 if "Nama" not in col else "Segment"
+                
+                # Update Session State dengan kolom yang sudah dirapikan
+                st.session_state['df_segments_sta'] = df_loaded[REQUIRED_COLS]
+                st.success("✅ Project Berhasil Dimuat!")
+                
+                # Trick: Hapus uploader state agar tidak loop error
+                # (Streamlit tidak punya clear file uploader resmi, jadi kita biarkan user manual)
+            else:
+                st.error("Struktur file tidak dikenali.")
+        except Exception as e:
+            st.error(f"Gagal membaca file: {e}")
     
     st.divider()
     
@@ -149,11 +171,14 @@ with st.sidebar:
     if up_file:
         try:
             df_up = pd.read_excel(up_file, engine='openpyxl')
-            if all(c in df_up.columns for c in REQUIRED_COLS):
+            # Check mandatory columns exist
+            missing = [c for c in REQUIRED_COLS if c not in df_up.columns]
+            if not missing:
                 if st.button("Load Excel Data"):
                     st.session_state['df_segments_sta'] = df_up[REQUIRED_COLS]
                     st.rerun()
-            else: st.error("Kolom tidak sesuai template.")
+            else:
+                st.error(f"Kolom Kurang: {missing}")
         except Exception as e: st.error(f"Error: {e}")
         
     if st.button("🔄 Reset Data Default", use_container_width=True):
@@ -203,14 +228,11 @@ if len(edited_df) > 0:
             EGL = (z2 + yn) + Vel_Head
             EG_Slope = (n * V)**2 / (R**(4/3)) if R>0 else 0
             
-            # LOGIC KETERANGAN / KESIMPULAN
-            if Fr > 1.1: status = "SUPERKRITIS"
-            elif Fr < 0.9: status = "SUBKRITIS"
-            else: status = "KRITIS"
-            
-            note = f"{status}"
+            # Conclusion Logic
+            status = "SUPERKRITIS" if Fr > 1.1 else ("SUBKRITIS" if Fr < 0.9 else "KRITIS")
+            note = status
             if V > 3.0: note += " (Erosi!)"
-            if V < 0.6: note += " (Endapan)"
+            elif V < 0.6: note += " (Endapan)"
             
             results.append({
                 "Reach": nama,
@@ -228,7 +250,7 @@ if len(edited_df) > 0:
                 "Talud": m, 
                 "Top Width": TopW,
                 "Froude # Chl": Fr,
-                "Keterangan": note  # <-- KOLOM BARU
+                "Keterangan": note
             })
             
             plot_x.extend([sta1, sta2])
@@ -237,7 +259,7 @@ if len(edited_df) > 0:
             plot_egl.extend([z1 + yn + Vel_Head, z2 + yn + Vel_Head])
             plot_crit.extend([z1 + yc, z2 + yc])
             
-    except Exception as e: st.error(f"Error: {e}")
+    except Exception as e: st.error(f"Error Calculation: {e}")
 
 # --- 4. TABS ---
 tab_input, tab_plot, tab_cross, tab_table, tab_report = st.tabs(["📝 Geometry", "📈 Profile Plot", "🖼️ Cross Section", "📋 Output Table", "📄 Laporan Teknis"])
@@ -338,7 +360,6 @@ with tab_cross:
         ax_xs.annotate('', xy=(-b/2, z_min - 0.2), xytext=(b/2, z_min - 0.2), arrowprops=dict(arrowstyle='<->', color='black', lw=1.0))
         ax_xs.text(0, z_min - 0.35, f"b = {b:.2f} m", ha='center', va='top', fontsize=10, fontweight='bold')
         
-        # Title Fix using Sta
         ax_xs.set_title(f"Cross Section: {data['Reach']} (Sta {data['Sta Start']} - {data['Sta Finish']})", fontweight='bold')
         
         info_text = (f"Reach: {data['Reach']}\nQ = {data['Q Total']} m³/s\nV = {data['Vel Chnl']} m/s\nFr = {data['Froude # Chl']}")
@@ -370,7 +391,7 @@ with tab_table:
             "Bottom Width": "Bottom Width (m)",
             "Top Width": "Top Width (m)",
             "Froude # Chl": "Froude # Chl",
-            "Keterangan": "Keterangan / Kesimpulan" # <-- HEADER BARU
+            "Keterangan": "Kesimpulan / Keterangan"
         }
         
         cols_order_internal = ["Reach", "Sta Start", "Sta Finish", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Bottom Width", "Top Width", "Froude # Chl", "Keterangan"]
@@ -396,7 +417,6 @@ with tab_table:
         st.download_button("💾 Export Table to Excel", buf.getvalue(), "HEC_RAS_Table.xlsx", "application/vnd.ms-excel", type="primary")
     else: st.info("No data available.")
 
-# --- FITUR BARU: TAB LAPORAN TEKNIS ---
 with tab_report:
     st.markdown("""
         <div style="text-align: center;">
@@ -407,45 +427,27 @@ with tab_report:
     """, unsafe_allow_html=True)
     
     if len(results) > 0:
-        # 1. INPUT DATA
         st.markdown("### 1. Data Perencanaan")
         st.write(f"**Debit Desain (Q):** {st.session_state['q_global']} m³/s")
         st.write("**Data Geometri Saluran:**")
         st.dataframe(st.session_state['df_segments_sta'], hide_index=True)
         
-        # 2. METODOLOGI
-        st.markdown("### 2. Metodologi Analisa")
-        st.markdown("""
-        Analisa dilakukan menggunakan pendekatan aliran tunak (Steady Flow) 1-Dimensi dengan persamaan Manning.
-        Kapasitas saluran dievaluasi berdasarkan elevasi muka air normal (Normal Depth) dan dikontrol terhadap kedalaman kritis (Critical Depth) untuk menentukan rezim aliran.
-        """)
-        
-        # 3. HASIL ANALISA
-        st.markdown("### 3. Hasil Analisa Hidrolis")
-        st.dataframe(final_df_display, use_container_width=True, hide_index=True)
-        
-        # 4. REKOMENDASI TEKNIS (OTOMATIS)
-        st.markdown("### 4. Evaluasi & Rekomendasi Teknis")
-        
-        # Logic Rekomendasi
+        st.markdown("### 2. Evaluasi & Rekomendasi Teknis")
         count_super = sum(1 for r in results if r['Froude # Chl'] > 1.1)
         count_high_vel = sum(1 for r in results if r['Vel Chnl'] > 3.0)
         
         recs = []
         if count_super > 0:
-            recs.append(f"⚠️ Terdeteksi **{count_super} segmen dengan Aliran Superkritis (Fr > 1)**. Berpotensi gerusan tinggi. Disarankan memasang **Bangunan Peredam Energi (Kolam Olak)** di hilir segmen tersebut atau mengubah kemiringan dasar saluran menjadi lebih landai.")
-        
+            recs.append(f"⚠️ Terdeteksi **{count_super} segmen Aliran Superkritis**. Wajib Kolam Olak.")
         if count_high_vel > 0:
-            recs.append(f"⚠️ Terdeteksi **{count_high_vel} segmen dengan Kecepatan Tinggi (> 3 m/s)**. Saluran pasangan batu kali berisiko tergerus. Disarankan menggunakan **Lining Beton (Concrete Lining)** dengan mutu minimal K-225.")
-        
+            recs.append(f"⚠️ Terdeteksi **{count_high_vel} segmen Kecepatan Tinggi (>3 m/s)**. Perlu Lining Beton.")
         if not recs:
-            recs.append("✅ Secara umum kondisi aliran **Aman (Stabil)**. Kecepatan dan Froude Number berada dalam batas izin.")
+            recs.append("✅ Kondisi aliran Aman (Stabil).")
             
-        for i, r in enumerate(recs):
-            st.info(f"{i+1}. {r}")
-            
-    else:
-        st.warning("Data belum tersedia. Silakan isi data di Tab Geometry Data.")
-    
-    st.markdown("<br><br><p style='text-align:center; font-size:12px; color:gray;'>Dicetak secara otomatis oleh Smart HEC-RAS Lite</p>", unsafe_allow_html=True)
-    st.markdown("""<button onclick="window.print()" style="width:100%; background:#28a745; color:white; border:none; padding:12px; border-radius:5px; font-weight:bold; cursor:pointer;">🖨️ Cetak Laporan PDF</button>""", unsafe_allow_html=True)
+        for i, r in enumerate(recs): st.info(f"{i+1}. {r}")
+        
+        st.markdown("### 3. Hasil Analisa Detail")
+        st.dataframe(final_df_display, use_container_width=True, hide_index=True)
+        
+        st.markdown("<br><br><p style='text-align:center; font-size:12px; color:gray;'>Dicetak secara otomatis oleh Smart HEC-RAS Lite</p>", unsafe_allow_html=True)
+        st.markdown("""<button onclick="window.print()" style="width:100%; background:#28a745; color:white; border:none; padding:12px; border-radius:5px; font-weight:bold; cursor:pointer;">🖨️ Cetak Laporan PDF</button>""", unsafe_allow_html=True)
