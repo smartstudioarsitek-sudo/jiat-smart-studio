@@ -107,8 +107,6 @@ with st.sidebar:
     
     st.divider()
     
-    # SLIDER ASPEK RATIO GRAFIK
-    st.subheader("👁️ Plot Options")
     aspect_ratio_fix = st.slider("📐 Skala Vertikal (Long Section)", 0.1, 10.0, 1.0, 0.1)
     
     use_manual_zoom = st.checkbox("Manual Scaling", value=False)
@@ -128,13 +126,21 @@ with st.sidebar:
     up_file = st.file_uploader("Upload .xlsx", type=['xlsx'])
     if up_file:
         try:
-            df_up = pd.read_excel(up_file)
-            if all(c in df_up.columns for c in REQUIRED_COLS):
+            # FIX: Tampilkan error asli jika gagal baca
+            df_up = pd.read_excel(up_file, engine='openpyxl') # Paksa engine openpyxl
+            
+            # Cek Kolom
+            missing = [c for c in REQUIRED_COLS if c not in df_up.columns]
+            
+            if not missing:
                 if st.button("Load Excel Data"):
                     st.session_state['df_segments_sta'] = df_up[REQUIRED_COLS]
                     st.rerun()
-            else: st.error("Kolom tidak sesuai template.")
-        except: st.error("File error.")
+            else:
+                st.error(f"Format Salah! Kolom hilang: {', '.join(missing)}")
+        except Exception as e:
+            st.error(f"Gagal membaca file: {e}") # Tampilkan Error Asli
+            st.info("Tips: Pastikan file tidak dipassword dan formatnya .xlsx (bukan .xls)")
         
     if st.button("🔄 Reset Data Default", use_container_width=True):
         st.session_state['df_segments_sta'] = reset_data()
@@ -269,7 +275,6 @@ with tab_plot:
 with tab_cross:
     st.subheader("Cross Section Plotter")
     if len(results) > 0:
-        # Pilihi Segmen (Gunakan "Reach" sebagai identifier)
         seg_names = [r['Reach'] for r in results]
         selected_seg = st.selectbox("Pilih Segmen / Cross Section:", seg_names)
         
@@ -350,7 +355,6 @@ with tab_table:
     if len(results) > 0:
         df_hec = pd.DataFrame(results)
         
-        # --- UPDATE 1: HEADER DENGAN SATUAN & NAMA KOLOM BARU ---
         col_mapping = {
             "Reach": "Segment Name",
             "Sta Start": "Sta Start (m)",
@@ -368,22 +372,18 @@ with tab_table:
             "Froude # Chl": "Froude # Chl"
         }
         
-        # Susun urutan kolom (Internal Names)
         cols_order_internal = ["Reach", "Sta Start", "Sta Finish", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Bottom Width", "Top Width", "Froude # Chl"]
         
-        # Buat dataframe baru sesuai urutan
         final_df = pd.DataFrame()
         for c in cols_order_internal:
             if c in df_hec.columns: final_df[c] = df_hec[c]
             else: final_df[c] = "-"
             
-        # Format Angka (Rounding)
         for c in final_df.columns:
             if c not in ["Reach"]:
                 try: final_df[c] = final_df[c].astype(float).map('{:,.2f}'.format)
                 except: pass
         
-        # --- UPDATE 2: RENAME COLUMN HEADERS ---
         final_df_display = final_df.rename(columns=col_mapping)
 
         st.subheader("HEC-RAS Profile Output Table")
