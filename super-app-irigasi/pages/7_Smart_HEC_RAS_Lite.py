@@ -106,17 +106,15 @@ with st.sidebar:
     
     st.divider()
     
-    # --- FITUR BARU: SKALA PROPORTIONAL ---
-    st.subheader("👁️ Plot Options (Tampilan)")
-    # Slider untuk mengatur "Kemanisan" grafik (Vertical Exaggeration)
-    aspect_ratio_fix = st.slider("📐 Skala Vertikal (Exaggeration)", 0.1, 10.0, 1.0, 0.1, help="Geser ke kanan agar grafik terlihat lebih tinggi/curam (tidak gepeng).")
+    # SLIDER ASPEK RATIO GRAFIK
+    st.subheader("👁️ Plot Options")
+    aspect_ratio_fix = st.slider("📐 Skala Vertikal (Long Section)", 0.1, 10.0, 1.0, 0.1)
     
-    use_manual_zoom = st.checkbox("Atur Batas Manual (Zoom)", value=False)
+    use_manual_zoom = st.checkbox("Manual Scaling", value=False)
     if use_manual_zoom:
         c1, c2 = st.columns(2)
         with c1: y_min = st.number_input("Min Elev", 0.0, 1000.0, 318.0)
         with c2: y_max = st.number_input("Max Elev", 0.0, 1000.0, 330.0)
-        x_max_limit = st.number_input("Max Stationing", 0.0, 5000.0, 200.0)
     
     st.divider()
     st.subheader("📥 Excel Import")
@@ -197,6 +195,7 @@ if len(edited_df) > 0:
                 "Vel Chnl": V,
                 "Flow Area": A,
                 "Bottom Width": b,
+                "Talud": m, # Disimpan untuk Cross Section
                 "Top Width": TopW,
                 "Froude # Chl": Fr
             })
@@ -210,7 +209,8 @@ if len(edited_df) > 0:
     except Exception as e: st.error(f"Error: {e}")
 
 # --- 4. TABS ---
-tab_input, tab_plot, tab_table = st.tabs(["📝 Geometry Data", "📈 Profile Plot (HEC-RAS Style)", "📋 Output Table"])
+# UPDATE: Tambah Tab Cross Section
+tab_input, tab_plot, tab_cross, tab_table = st.tabs(["📝 Geometry Data", "📈 Profile Plot", "🖼️ Cross Section Plot", "📋 Output Table"])
 
 with tab_input:
     st.subheader("Geometric Data Editor")
@@ -221,10 +221,8 @@ with tab_input:
 
 with tab_plot:
     if len(plot_x) > 0:
-        # Atur Figsize berdasarkan Aspect Ratio Slider
-        # Default lebar 14, tinggi disesuaikan slider (exaggeration)
         fig_height = 6 * aspect_ratio_fix 
-        if fig_height > 20: fig_height = 20 # Batasi biar gak kegedean
+        if fig_height > 20: fig_height = 20
         if fig_height < 4: fig_height = 4
         
         fig, ax = plt.subplots(figsize=(14, fig_height))
@@ -245,23 +243,19 @@ with tab_plot:
         ax.minorticks_on()
         ax.grid(True, which='minor', linestyle=':', linewidth=0.2, color='lightgray')
 
-        # --- LEGEND DENGAN ANGKA (PERMINTAAN USER) ---
         q_label = f"{st.session_state['q_global']} m³/s"
-        
         legend_elements = [
             Line2D([0], [0], color='green', linestyle='--', lw=1.5, label=f'E.G. (PF 1)'),
             Line2D([0], [0], color='blue', lw=1.5, label=f'W.S. (PF 1)'),
             Line2D([0], [0], color='red', linestyle='--', lw=1.5, label=f'Crit (PF 1)'),
             Line2D([0], [0], color='black', marker='.', lw=1.5, label='Ground'),
         ]
-        # Menambahkan Judul Legend agar mirip HEC-RAS
         leg = ax.legend(handles=legend_elements, loc='upper right', frameon=True, 
                         facecolor='white', edgecolor='black', title=f"Profile: PF 1\nQ = {q_label}")
         leg.get_title().set_fontsize('9') 
         
         if use_manual_zoom: 
             ax.set_ylim(y_min, y_max)
-            ax.set_xlim(0, x_max_limit)
         else:
             y_vals = [y for y in plot_bed + plot_ws if not np.isnan(y)]
             if y_vals:
@@ -270,8 +264,92 @@ with tab_plot:
                 ax.set_ylim(min_y - margin, max_y + margin)
         
         st.pyplot(fig)
-        st.caption(f"💡 Tips: Gunakan slider **'Skala Vertikal'** di sidebar kiri untuk mengatur proporsi grafik agar terlihat manis.")
     else: st.info("No data to plot.")
+
+# --- FITUR BARU: TAB CROSS SECTION ---
+with tab_cross:
+    st.subheader("Cross Section Plotter")
+    if len(results) > 0:
+        # Pilihi Segmen
+        seg_names = [r['Reach'] for r in results]
+        selected_seg = st.selectbox("Pilih Segmen / Cross Section:", seg_names)
+        
+        # Ambil Data Segmen Terpilih
+        data = next(item for item in results if item["Reach"] == selected_seg)
+        
+        # Ekstrak Data
+        b = data['Bottom Width']
+        m = data['Talud']
+        z_min = data['Min Ch El']
+        ws_elev = data['W.S. Elev']
+        eg_elev = data['E.G. Elev']
+        crit_elev = data['Crit W.S.']
+        
+        # Hitung Geometri Tanah (Trapesium)
+        # Kita gambar agak tinggi sedikit dari air tertinggi (Buffer 1 meter)
+        max_h_draw = max(ws_elev, eg_elev) - z_min + 1.0
+        if max_h_draw < 0.5: max_h_draw = 0.5
+        
+        # Koordinat Tanah (0,0 ada di tengah dasar saluran)
+        # Titik: [Kiri Atas, Kiri Bawah, Kanan Bawah, Kanan Atas]
+        x_ground = [-(b/2 + m*max_h_draw), -b/2, b/2, b/2 + m*max_h_draw]
+        y_ground = [z_min + max_h_draw, z_min, z_min, z_min + max_h_draw]
+        
+        # Plotting
+        fig_xs, ax_xs = plt.subplots(figsize=(10, 6))
+        ax_xs.set_facecolor('white')
+        
+        # 1. Tanah
+        ax_xs.plot(x_ground, y_ground, color='black', linewidth=2, marker='.', label='Ground')
+        
+        # 2. Air (Isi Trapesium Air)
+        depth = ws_elev - z_min
+        if depth > 0:
+            top_w_water = b + 2 * m * depth
+            x_water = [-top_w_water/2, top_w_water/2]
+            y_water = [ws_elev, ws_elev]
+            
+            # Fill area polygon
+            poly_x = [-top_w_water/2, -b/2, b/2, top_w_water/2]
+            poly_y = [ws_elev, z_min, z_min, ws_elev]
+            ax_xs.fill(poly_x, poly_y, color='#00FFFF', alpha=1.0, label='Water')
+            ax_xs.plot(x_water, y_water, color='blue', linewidth=1.5, label='W.S.')
+
+        # 3. Garis EGL & Crit
+        # Gambar garis horizontal sepanjang lebar grafik
+        xmin_plot, xmax_plot = min(x_ground), max(x_ground)
+        ax_xs.hlines(eg_elev, xmin_plot, xmax_plot, colors='green', linestyles='--', label='E.G.')
+        
+        # Gambar Crit hanya jika tidak error (tidak terlalu tinggi)
+        if crit_elev < z_min + max_h_draw + 2:
+            ax_xs.hlines(crit_elev, xmin_plot, xmax_plot, colors='red', linestyles='--', label='Crit')
+
+        # Formatting
+        ax_xs.set_title(f"Cross Section: {selected_seg}", fontweight='bold')
+        ax_xs.set_xlabel("Offset (m)")
+        ax_xs.set_ylabel("Elevation (m)")
+        ax_xs.grid(True, which='major', linestyle=':', linewidth=0.5, color='gray')
+        ax_xs.set_aspect('equal') # Biar proporsional 1:1
+        
+        # Legend HEC-RAS Style
+        legend_elements = [
+            Line2D([0], [0], color='green', linestyle='--', lw=1.5, label='E.G.'),
+            Line2D([0], [0], color='blue', lw=1.5, label='W.S.'),
+            Line2D([0], [0], color='red', linestyle='--', lw=1.5, label='Crit'),
+            Line2D([0], [0], color='black', marker='.', lw=1.5, label='Ground'),
+        ]
+        ax_xs.legend(handles=legend_elements, loc='upper right', frameon=True, facecolor='white', edgecolor='black')
+        
+        st.pyplot(fig_xs)
+        
+        # Tampilkan Data Angka di Bawah Gambar
+        c1, c2, c3 = st.columns(3)
+        c1.metric("W.S. Elev", f"{ws_elev:.2f} m")
+        c2.metric("Crit W.S.", f"{crit_elev:.2f} m")
+        c3.metric("E.G. Elev", f"{eg_elev:.2f} m")
+        
+    else:
+        st.info("Belum ada data. Silakan hitung dulu di Tab 1.")
 
 with tab_table:
     if len(results) > 0:
