@@ -18,7 +18,6 @@ st.markdown("""
     .metric-card {
         background-color: #e3f2fd; border-left: 5px solid #2196f3; padding: 10px; border-radius: 5px;
     }
-    /* Hide Streamlit elements when printing */
     @media print {
         .stSidebar, header, footer, .stFileUploader, .stButton { display: none !important; }
         .block-container { padding-top: 0 !important; }
@@ -26,44 +25,59 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- ENGINE HIDROLIKA ---
+# --- ENGINE HIDROLIKA (Robust Version) ---
 def solve_manning_y(Q, n, b, S, m):
     if S <= 0: return 0.001
     y = 0.5
     for _ in range(30):
-        A = (b + m*y) * y
-        P = b + 2*y * np.sqrt(1 + m**2)
-        R = A/P
-        f = (1/n) * A * (R**(2/3)) * (S**0.5) - Q
-        dy = 0.001
-        A_d = (b + m*(y+dy)) * (y+dy)
-        P_d = b + 2*(y+dy) * np.sqrt(1 + m**2)
-        R_d = A_d/P_d
-        f_d = (1/n) * A_d * (R_d**(2/3)) * (S**0.5) - Q
-        df = (f_d - f) / dy
-        if df == 0: break
-        y_new = y - f/df
-        if abs(y_new - y) < 0.0001: return abs(y_new)
-        y = abs(y_new)
+        try:
+            A = (b + m*y) * y
+            P = b + 2*y * np.sqrt(1 + m**2)
+            R = A/P if P > 0 else 0
+            f = (1/n) * A * (R**(2/3)) * (S**0.5) - Q
+            
+            dy = 0.001
+            A_d = (b + m*(y+dy)) * (y+dy)
+            P_d = b + 2*(y+dy) * np.sqrt(1 + m**2)
+            R_d = A_d/P_d if P_d > 0 else 0
+            f_d = (1/n) * A_d * (R_d**(2/3)) * (S**0.5) - Q
+            
+            df = (f_d - f) / dy
+            if df == 0: break
+            y_new = y - f/df
+            if abs(y_new - y) < 0.0001: return abs(y_new)
+            y = abs(y_new)
+        except: return 0.001
     return y
 
 def solve_critical_y(Q, b, m):
     g = 9.81
     y = 0.5
     for _ in range(30):
-        A = (b + m*y) * y
-        T = b + 2*m*y
-        if A <= 0: A = 0.01
-        f = (Q**2 * T) / (g * A**3) - 1
-        dy = 0.001
-        A_d = (b + m*(y+dy)) * (y+dy)
-        T_d = b + 2*m*(y+dy)
-        f_d = (Q**2 * T_d) / (g * A_d**3) - 1
-        df = (f_d - f) / dy
-        if df == 0: break
-        y_new = y - f/df
-        if abs(y_new - y) < 0.0001: return abs(y_new)
-        y = abs(y_new)
+        try:
+            A = (b + m*y) * y
+            T = b + 2*m*y
+            if A <= 0.001: A = 0.001 # Cegah pembagian nol
+            
+            f = (Q**2 * T) / (g * A**3) - 1
+            
+            dy = 0.001
+            A_d = (b + m*(y+dy)) * (y+dy)
+            T_d = b + 2*m*(y+dy)
+            if A_d <= 0.001: A_d = 0.001
+            
+            f_d = (Q**2 * T_d) / (g * A_d**3) - 1
+            
+            df = (f_d - f) / dy
+            if df == 0: break
+            y_new = y - f/df
+            
+            # Safety: Batasi max depth agar tidak meledak ke 1e8
+            if y_new > 50.0: y_new = 50.0 
+            
+            if abs(y_new - y) < 0.0001: return abs(y_new)
+            y = abs(y_new)
+        except: return 0.001
     return y
 
 def generate_recommendations(V, Fr, n):
@@ -80,9 +94,9 @@ def generate_recommendations(V, Fr, n):
 # --- INIT STATE ---
 if 'df_segments_v2' not in st.session_state:
     data = [
-        ["Segmen 1 (Hulu)", 200, 100.0, 90.0, 1.5, 1.0, 0.017],
-        ["Segmen 2 (Drop)", 50, 88.0, 85.0, 1.5, 0.5, 0.017],
-        ["Segmen 3 (Hilir)", 300, 85.0, 84.0, 2.0, 1.0, 0.025],
+        ["STA 0+00", 64.0, 325.54, 323.00, 0.6, 1.0, 0.017],
+        ["STA 0+64", 50.0, 322.00, 321.00, 0.6, 1.0, 0.017],
+        ["STA 0+114", 28.0, 320.00, 319.00, 0.6, 1.0, 0.017],
     ]
     st.session_state['df_segments_v2'] = pd.DataFrame(data, columns=["Nama Segmen", "Panjang L (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"])
 if 'q_global' not in st.session_state: st.session_state['q_global'] = 0.24
@@ -98,67 +112,53 @@ st.markdown("""
 # === SIDEBAR ===
 with st.sidebar:
     st.header("⚙️ Parameter Global")
-    st.session_state['q_global'] = st.number_input("Debit Desain (Q) m³/s", 0.1, 50.0, st.session_state['q_global'], 0.01)
+    st.session_state['q_global'] = st.number_input("Debit Desain (Q) m³/s", 0.001, 50.0, st.session_state['q_global'], 0.01)
     
     st.divider()
     
-    # --- FITUR BARU: IMPORT DARI EXCEL ---
+    # --- FITUR BARU: KONTROL GRAFIK (DATUM) ---
+    st.subheader("👁️ Kontrol Tampilan (Zoom)")
+    use_manual_zoom = st.checkbox("Atur Datum Manual", value=False)
+    y_min_manual = st.number_input("Min Elevasi (Y-Min)", value=300.0)
+    y_max_manual = st.number_input("Max Elevasi (Y-Max)", value=340.0)
+    st.caption("Gunakan ini jika grafik terlihat terlalu kecil/besar.")
+    
+    st.divider()
+    
+    # INPUT EXCEL
     st.subheader("📥 Input dari Excel")
-    
-    # 1. DOWNLOAD TEMPLATE
-    # Buat dummy dataframe untuk template
-    df_template = pd.DataFrame([
-        ["STA 0+00", 50, 100, 99.5, 0.6, 1.0, 0.017],
-        ["STA 0+50", 50, 99.5, 99.0, 0.6, 1.0, 0.017]
-    ], columns=["Nama Segmen", "Panjang L (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"])
-    
+    df_template = pd.DataFrame([["STA 0+00", 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=["Nama Segmen", "Panjang L (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"])
     buffer_template = io.BytesIO()
     with pd.ExcelWriter(buffer_template, engine='openpyxl') as writer:
         df_template.to_excel(writer, index=False, sheet_name='Template Input')
+    st.download_button("📄 Download Template Excel", buffer_template.getvalue(), "Template_HECRAS.xlsx", "application/vnd.ms-excel")
     
-    st.download_button(
-        label="📄 Download Template Excel",
-        data=buffer_template.getvalue(),
-        file_name="Template_HECRAS_Lite.xlsx",
-        mime="application/vnd.ms-excel",
-        help="Download format Excel ini, isi datanya, lalu upload di bawah."
-    )
-    
-    # 2. UPLOAD EXCEL
     uploaded_excel = st.file_uploader("Upload File Excel (.xlsx)", type=['xlsx'])
     if uploaded_excel is not None:
         try:
             df_uploaded = pd.read_excel(uploaded_excel)
-            # Validasi Kolom
             required_cols = ["Nama Segmen", "Panjang L (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
             if all(col in df_uploaded.columns for col in required_cols):
                 if st.button("✅ Load Data Excel"):
-                    st.session_state['df_segments_v2'] = df_uploaded[required_cols] # Ambil kolom yg sesuai aja
-                    st.success("Data berhasil masuk tabel!")
+                    st.session_state['df_segments_v2'] = df_uploaded[required_cols]
+                    st.success("Data loaded!")
                     st.rerun()
-            else:
-                st.error(f"Format kolom salah! Gunakan tombol Download Template di atas.")
-        except Exception as e:
-            st.error(f"Error membaca file: {e}")
+            else: st.error("Format kolom salah.")
+        except Exception as e: st.error(f"Error: {e}")
 
+    # BACKUP JSON
     st.divider()
+    st.subheader("💾 Backup Data")
+    project_data = {'q': st.session_state['q_global'], 'segments': st.session_state['df_segments_v2'].to_dict(orient='records')}
+    st.download_button("Simpan (.json)", json.dumps(project_data, indent=2), "backup.json", "application/json")
     
-    # MANAJEMEN FILE JSON (LAMA)
-    st.subheader("💾 Backup Data (.json)")
-    project_data = {
-        'q': st.session_state['q_global'],
-        'segments': st.session_state['df_segments_v2'].to_dict(orient='records')
-    }
-    json_str = json.dumps(project_data, indent=2)
-    st.download_button("Simpan Backup (.json)", json_str, file_name="hecras_backup.json", mime="application/json")
-    
-    uploaded_json = st.file_uploader("Restore Backup (.json)", type=['json'])
-    if uploaded_json:
+    up_json = st.file_uploader("Restore (.json)", type=['json'])
+    if up_json:
         try:
-            loaded = json.load(uploaded_json)
+            loaded = json.load(up_json)
             st.session_state['q_global'] = loaded['q']
             st.session_state['df_segments_v2'] = pd.DataFrame(loaded['segments'])
-            st.success("Backup dimuat!")
+            st.success("Restored!")
             st.rerun()
         except: pass
 
@@ -167,23 +167,14 @@ tab1, tab2, tab3 = st.tabs(["📝 Input Elevasi", "📉 Profil Memanjang (Cascad
 
 with tab1:
     st.subheader("1. Tabel Geometri & Elevasi")
-    st.caption("Tips: Gunakan menu 'Input dari Excel' di sidebar kiri untuk data banyak.")
-    
-    edited_df = st.data_editor(
-        st.session_state['df_segments_v2'],
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "Panjang L (m)": st.column_config.NumberColumn(format="%.1f m"),
-            "Elev Awal (m)": st.column_config.NumberColumn(format="%.2f m", required=True),
-            "Elev Akhir (m)": st.column_config.NumberColumn(format="%.2f m", required=True),
-        }
-    )
+    edited_df = st.data_editor(st.session_state['df_segments_v2'], num_rows="dynamic", use_container_width=True)
     st.session_state['df_segments_v2'] = edited_df
     
     if len(edited_df) > 0:
         results = []
         cumulative_dist = 0
+        min_bed_plot = 9999
+        max_water_plot = -9999
         
         for idx, row in edited_df.iterrows():
             try:
@@ -200,18 +191,21 @@ with tab1:
             Fr = V / np.sqrt(9.81 * (((b+m*yn)*yn)/(b+2*m*yn))) if yn > 0 else 0
             status = "SUPER-KRITIS" if yn < yc else "SUB-KRITIS"
             
+            # Update Batas Plotting (untuk Auto-Zoom)
+            min_bed_plot = min(min_bed_plot, Z2)
+            max_water_plot = max(max_water_plot, Z1 + yn)
+            
             p_start = {'x': cumulative_dist, 'z_bed': Z1, 'z_water': Z1 + yn, 'z_crit': Z1 + yc}
             cumulative_dist += L
             p_end = {'x': cumulative_dist, 'z_bed': Z2, 'z_water': Z2 + yn, 'z_crit': Z2 + yc}
             
-            results.append({
-                'data': row,
-                'calc': {'S': S, 'dH': dH, 'yn': yn, 'yc': yc, 'V': V, 'Fr': Fr, 'status': status},
-                'plot': [p_start, p_end]
-            })
+            results.append({'data': row, 'calc': {'S': S, 'dH': dH, 'yn': yn, 'yc': yc, 'V': V, 'Fr': Fr, 'status': status}, 'plot': [p_start, p_end]})
             
         st.session_state['calc_results_v2'] = results
-        if len(results) > 0: st.success(f"✅ Berhasil menghitung {len(results)} segmen secara Absolut!")
+        # SIMPAN BATAS AUTO ZOOM
+        st.session_state['plot_limits'] = (min_bed_plot, max_water_plot)
+        
+        if len(results) > 0: st.success(f"✅ Berhasil menghitung {len(results)} segmen!")
 
 with tab2:
     st.subheader("2. Profil Memanjang (Long Section)")
@@ -228,7 +222,12 @@ with tab2:
             
             ax.plot(x, z_bed, 'k-', linewidth=2.5)
             ax.plot(x, z_water, 'b-', linewidth=2)
-            ax.plot(x, z_crit, 'r--', linewidth=1, alpha=0.6)
+            
+            # HANYA GAMBAR KRITIS JIKA NILAINYA MASUK AKAL (< 5m di atas air)
+            # Ini trik visual supaya grafik tidak rusak kalau Yc meledak
+            if z_crit[0] < z_water[0] + 5:
+                ax.plot(x, z_crit, 'r--', linewidth=1, alpha=0.6)
+            
             ax.fill_between(x, z_bed, z_water, color='cyan', alpha=0.3)
             
             mid_x, mid_y = (x[0] + x[1]) / 2, (z_bed[0] + z_bed[1]) / 2
@@ -241,6 +240,17 @@ with tab2:
                     ax.plot([curr_start['x'], curr_start['x']], [prev_end['z_bed'], curr_start['z_bed']], color='gray', linestyle='--', linewidth=1.5)
                     drop_h = prev_end['z_bed'] - curr_start['z_bed']
                     if drop_h > 0: ax.text(curr_start['x'], (prev_end['z_bed'] + curr_start['z_bed'])/2, f" Drop {drop_h:.2f}m", ha='left', va='center', fontsize=7, color='brown')
+
+        # === FITUR SMART ZOOM (DATUM OTOMATIS) ===
+        if use_manual_zoom:
+            # Gunakan Setting Sidebar
+            ax.set_ylim(bottom=y_min_manual, top=y_max_manual)
+        else:
+            # Auto Zoom Cerdas (Fokus ke Bed & Air saja, abaikan Kritis yg error)
+            min_z, max_z = st.session_state.get('plot_limits', (0, 10))
+            buffer = (max_z - min_z) * 0.5 # Kasih ruang 50% biar lega
+            if buffer == 0: buffer = 1.0
+            ax.set_ylim(bottom=min_z - buffer*0.2, top=max_z + buffer)
 
         from matplotlib.lines import Line2D
         legend_elements = [
@@ -285,7 +295,6 @@ with tab3:
 st.divider()
 st.subheader("🖨️ Export Laporan")
 col_ex1, col_ex2 = st.columns(2)
-
 with col_ex1:
     if 'calc_results_v2' in st.session_state and len(st.session_state['calc_results_v2']) > 0:
         export_data = []
@@ -298,8 +307,6 @@ with col_ex1:
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df_export.to_excel(writer, index=False, sheet_name='HEC-RAS Lite Data')
         st.download_button("📊 Download Excel (.xlsx)", buffer.getvalue(), "Laporan_Elevasi.xlsx", "application/vnd.ms-excel", type="primary", use_container_width=True)
-    else:
-        st.button("📊 Download Excel", disabled=True, use_container_width=True)
-
+    else: st.button("📊 Download Excel", disabled=True, use_container_width=True)
 with col_ex2:
     st.markdown("""<button onclick="window.print()" style="background-color: #4CAF50; border: none; color: white; padding: 10px 24px; text-align: center; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 8px; width: 100%; height: 42px; font-weight: bold;">🖨️ Cetak PDF (Print Page)</button>""", unsafe_allow_html=True)
