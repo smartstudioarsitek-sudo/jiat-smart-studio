@@ -182,9 +182,9 @@ if len(edited_df) > 0:
             
             results.append({
                 "Reach": nama,
-                "Sta Start": sta1,   # Kolom Baru: Sta Start
-                "Sta Finish": sta2,  # Kolom Baru: Sta Finish
-                "Profile": "PF 1",
+                "Sta Start": sta1,
+                "Sta Finish": sta2,
+                # "Profile": "PF 1",  <-- KOLOM INI SUDAH DIHAPUS
                 "Q Total": Q,
                 "Min Ch El": z2,
                 "W.S. Elev": z2 + yn,
@@ -255,8 +255,8 @@ with tab_plot:
 with tab_table:
     if len(results) > 0:
         df_hec = pd.DataFrame(results)
-        # Update urutan kolom: River Sta DIGANTI Sta Start & Sta Finish
-        cols_order = ["Reach", "Sta Start", "Sta Finish", "Profile", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Bottom Width", "Top Width", "Froude # Chl"]
+        # REVISI: Kolom "Profile" DIHAPUS dari daftar
+        cols_order = ["Reach", "Sta Start", "Sta Finish", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Bottom Width", "Top Width", "Froude # Chl"]
         
         final_df = pd.DataFrame()
         for c in cols_order:
@@ -264,7 +264,7 @@ with tab_table:
             else: final_df[c] = "-"
             
         for c in final_df.columns:
-            if c not in ["Reach", "Profile"]:
+            if c not in ["Reach"]:
                 try: final_df[c] = final_df[c].astype(float).map('{:,.2f}'.format)
                 except: pass
 
