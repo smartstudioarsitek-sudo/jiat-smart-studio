@@ -106,17 +106,17 @@ with st.sidebar:
     
     st.divider()
     
-    if st.button("🔄 Reset Data ke Default", use_container_width=True):
-        st.session_state['df_segments_sta'] = reset_data()
-        st.rerun()
-
-    st.subheader("👁️ Plot Options")
-    use_manual_zoom = st.checkbox("Manual Scaling", value=False)
+    # --- FITUR BARU: SKALA PROPORTIONAL ---
+    st.subheader("👁️ Plot Options (Tampilan)")
+    # Slider untuk mengatur "Kemanisan" grafik (Vertical Exaggeration)
+    aspect_ratio_fix = st.slider("📐 Skala Vertikal (Exaggeration)", 0.1, 10.0, 1.0, 0.1, help="Geser ke kanan agar grafik terlihat lebih tinggi/curam (tidak gepeng).")
     
+    use_manual_zoom = st.checkbox("Atur Batas Manual (Zoom)", value=False)
     if use_manual_zoom:
         c1, c2 = st.columns(2)
         with c1: y_min = st.number_input("Min Elev", 0.0, 1000.0, 318.0)
         with c2: y_max = st.number_input("Max Elev", 0.0, 1000.0, 330.0)
+        x_max_limit = st.number_input("Max Stationing", 0.0, 5000.0, 200.0)
     
     st.divider()
     st.subheader("📥 Excel Import")
@@ -136,6 +136,10 @@ with st.sidebar:
                     st.rerun()
             else: st.error("Kolom tidak sesuai template.")
         except: st.error("File error.")
+        
+    if st.button("🔄 Reset Data Default", use_container_width=True):
+        st.session_state['df_segments_sta'] = reset_data()
+        st.rerun()
 
 # --- 3. MAIN LOGIC ---
 edited_df = st.session_state['df_segments_sta']
@@ -184,7 +188,6 @@ if len(edited_df) > 0:
                 "Reach": nama,
                 "Sta Start": sta1,
                 "Sta Finish": sta2,
-                # "Profile": "PF 1",  <-- KOLOM INI SUDAH DIHAPUS
                 "Q Total": Q,
                 "Min Ch El": z2,
                 "W.S. Elev": z2 + yn,
@@ -218,7 +221,13 @@ with tab_input:
 
 with tab_plot:
     if len(plot_x) > 0:
-        fig, ax = plt.subplots(figsize=(14, 7))
+        # Atur Figsize berdasarkan Aspect Ratio Slider
+        # Default lebar 14, tinggi disesuaikan slider (exaggeration)
+        fig_height = 6 * aspect_ratio_fix 
+        if fig_height > 20: fig_height = 20 # Batasi biar gak kegedean
+        if fig_height < 4: fig_height = 4
+        
+        fig, ax = plt.subplots(figsize=(14, fig_height))
         ax.set_facecolor('white') 
         
         ax.plot(plot_x, plot_bed, color='black', linewidth=1.5, marker='.', markersize=4, label='Ground')
@@ -229,33 +238,44 @@ with tab_plot:
         ax.plot(plot_x, clean_crit, color='red', linestyle='--', linewidth=1.0, label='Crit')
         ax.plot(plot_x, plot_egl, color='green', linestyle='--', linewidth=1.0, label='E.G.')
         
-        ax.set_xlabel("Stationing (m)", fontweight='bold')
+        ax.set_xlabel("Main Channel Distance (m)", fontweight='bold')
         ax.set_ylabel("Elevation (m)", fontweight='bold')
         ax.set_title("Profile Plot", fontweight='bold')
-        ax.grid(True, linestyle=':', linewidth=0.5)
+        ax.grid(True, which='major', linestyle=':', linewidth=0.5, color='gray')
+        ax.minorticks_on()
+        ax.grid(True, which='minor', linestyle=':', linewidth=0.2, color='lightgray')
 
+        # --- LEGEND DENGAN ANGKA (PERMINTAAN USER) ---
+        q_label = f"{st.session_state['q_global']} m³/s"
+        
         legend_elements = [
-            Line2D([0], [0], color='green', linestyle='--', lw=1.5, label='E.G.'),
-            Line2D([0], [0], color='blue', lw=1.5, label='W.S.'),
-            Line2D([0], [0], color='red', linestyle='--', lw=1.5, label='Crit'),
+            Line2D([0], [0], color='green', linestyle='--', lw=1.5, label=f'E.G. (PF 1)'),
+            Line2D([0], [0], color='blue', lw=1.5, label=f'W.S. (PF 1)'),
+            Line2D([0], [0], color='red', linestyle='--', lw=1.5, label=f'Crit (PF 1)'),
             Line2D([0], [0], color='black', marker='.', lw=1.5, label='Ground'),
         ]
-        ax.legend(handles=legend_elements, loc='upper right', frameon=True, edgecolor='black')
+        # Menambahkan Judul Legend agar mirip HEC-RAS
+        leg = ax.legend(handles=legend_elements, loc='upper right', frameon=True, 
+                        facecolor='white', edgecolor='black', title=f"Profile: PF 1\nQ = {q_label}")
+        leg.get_title().set_fontsize('9') 
         
-        if use_manual_zoom: ax.set_ylim(y_min, y_max)
+        if use_manual_zoom: 
+            ax.set_ylim(y_min, y_max)
+            ax.set_xlim(0, x_max_limit)
         else:
             y_vals = [y for y in plot_bed + plot_ws if not np.isnan(y)]
             if y_vals:
                 min_y, max_y = min(y_vals), max(y_vals)
                 margin = (max_y - min_y) * 0.2 if max_y != min_y else 1.0
                 ax.set_ylim(min_y - margin, max_y + margin)
+        
         st.pyplot(fig)
+        st.caption(f"💡 Tips: Gunakan slider **'Skala Vertikal'** di sidebar kiri untuk mengatur proporsi grafik agar terlihat manis.")
     else: st.info("No data to plot.")
 
 with tab_table:
     if len(results) > 0:
         df_hec = pd.DataFrame(results)
-        # REVISI: Kolom "Profile" DIHAPUS dari daftar
         cols_order = ["Reach", "Sta Start", "Sta Finish", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Bottom Width", "Top Width", "Froude # Chl"]
         
         final_df = pd.DataFrame()
