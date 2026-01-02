@@ -139,14 +139,13 @@ with tab_input:
     # --- CALCULATION CORE ---
     if len(edited_df) > 0:
         results = []
-        # Arrays untuk Continuous Plotting
         plot_x, plot_bed, plot_ws, plot_egl, plot_crit = [], [], [], [], []
         
-        # Sort by STA Awal
         calc_df = edited_df.sort_values(by="STA Awal (m)")
         
         for idx, row in calc_df.iterrows():
             try:
+                nama = str(row['Segmen Name']) # Ambil Nama Segmen
                 sta1, sta2 = row['STA Awal (m)'], row['STA Akhir (m)']
                 z1, z2 = row['Elev Awal (m)'], row['Elev Akhir (m)']
                 b, m, n = row['Lebar b (m)'], row['Talud m'], row['Kekasaran n']
@@ -176,7 +175,7 @@ with tab_input:
             
             # Store Table Data
             results.append({
-                "Reach": "Main Channel",
+                "Reach": nama, # <--- UPDATE: Mengambil Nama Segmen dari Input
                 "River Sta": sta2,
                 "Profile": "PF 1",
                 "Q Total": Q,
@@ -187,83 +186,50 @@ with tab_input:
                 "E.G. Slope": S,
                 "Vel Chnl": V,
                 "Flow Area": A,
+                "Bottom Width": b, # <--- UPDATE: Tambah Kolom Bottom Width
                 "Top Width": TopW,
                 "Froude # Chl": Fr
             })
             
-            # Store Plot Data (Start Point & End Point) to create CONTINUOUS LINE
-            # Point 1 (Start)
-            plot_x.append(sta1)
-            plot_bed.append(z1)
-            plot_ws.append(z1 + yn)
-            plot_egl.append(z1 + yn + Vel_Head)
-            plot_crit.append(z1 + yc)
-            
-            # Point 2 (End)
-            plot_x.append(sta2)
-            plot_bed.append(z2)
-            plot_ws.append(z2 + yn)
-            plot_egl.append(z2 + yn + Vel_Head)
-            plot_crit.append(z2 + yc)
+            # Plot Data
+            plot_x.append(sta1); plot_bed.append(z1); plot_ws.append(z1 + yn); plot_egl.append(z1 + yn + Vel_Head); plot_crit.append(z1 + yc)
+            plot_x.append(sta2); plot_bed.append(z2); plot_ws.append(z2 + yn); plot_egl.append(z2 + yn + Vel_Head); plot_crit.append(z2 + yc)
             
         st.session_state['hec_results'] = results
-        st.session_state['plot_arrays'] = {
-            'x': plot_x, 'bed': plot_bed, 'ws': plot_ws, 'egl': plot_egl, 'crit': plot_crit
-        }
+        st.session_state['plot_arrays'] = {'x': plot_x, 'bed': plot_bed, 'ws': plot_ws, 'egl': plot_egl, 'crit': plot_crit}
 
-# --- TAB 2: HEC-RAS STYLE PLOT ---
+# --- TAB 2: PLOT ---
 with tab_plot:
     if 'plot_arrays' in st.session_state and len(st.session_state['plot_arrays']['x']) > 0:
         d = st.session_state['plot_arrays']
-        
-        # Setup Figure
         fig, ax = plt.subplots(figsize=(14, 7))
-        ax.set_facecolor('white') # HEC-RAS white background
+        ax.set_facecolor('white') 
         
-        # 1. GROUND (Black Line with Vertices)
         ax.plot(d['x'], d['bed'], color='black', linewidth=1.5, marker='.', markersize=4, label='Ground')
-        
-        # 2. WATER SURFACE (Blue Line + Cyan Fill)
         ax.plot(d['x'], d['ws'], color='blue', linewidth=1.0, label='W.S.')
-        ax.fill_between(d['x'], d['bed'], d['ws'], color='#00FFFF', alpha=1.0) # HEC-RAS Cyan
+        ax.fill_between(d['x'], d['bed'], d['ws'], color='#00FFFF', alpha=1.0)
         
-        # 3. CRITICAL DEPTH (Red Dashed)
-        # Filter extreme values for plotting
         clean_crit = [c if c < w + 10 else np.nan for c, w in zip(d['crit'], d['ws'])]
         ax.plot(d['x'], clean_crit, color='red', linestyle='--', linewidth=1.0, label='Crit')
-        
-        # 4. ENERGY GRADE (Green Dashed)
         ax.plot(d['x'], d['egl'], color='green', linestyle='--', linewidth=1.0, label='E.G.')
         
-        # Formatting Grid & Labels
         ax.set_xlabel("Main Channel Distance (m)", fontweight='bold', fontsize=10)
         ax.set_ylabel("Elevation (m)", fontweight='bold', fontsize=10)
         ax.set_title("Profile Plot", fontweight='bold', fontsize=12)
-        
-        # Grid titik-titik (HEC-RAS style)
         ax.grid(True, which='major', linestyle=':', linewidth=0.5, color='gray')
         ax.minorticks_on()
         ax.grid(True, which='minor', linestyle=':', linewidth=0.3, color='lightgray')
 
-        # === LEGEND BOX (SEPERTI YANG DILINGKARI) ===
-        # Membuat Custom Legend di Pojok Kanan Atas
         legend_elements = [
             Line2D([0], [0], color='green', linestyle='--', lw=1.5, label='E.G.'),
             Line2D([0], [0], color='blue', lw=1.5, label='W.S.'),
             Line2D([0], [0], color='red', linestyle='--', lw=1.5, label='Crit'),
             Line2D([0], [0], color='black', marker='.', lw=1.5, label='Ground'),
         ]
+        ax.legend(handles=legend_elements, loc='upper right', frameon=True, facecolor='white', edgecolor='black')
         
-        # Legend Box: White background, Black border
-        ax.legend(handles=legend_elements, loc='upper right', frameon=True, 
-                  facecolor='white', edgecolor='black', framealpha=1.0, fontsize=9,
-                  title="Legend", title_fontsize=9)
-        
-        # Manual Zoom
-        if use_manual_zoom:
-            ax.set_ylim(y_min, y_max)
+        if use_manual_zoom: ax.set_ylim(y_min, y_max)
         else:
-            # Auto zoom yang pintar (fokus ke air)
             y_data_vals = [y for y in d['bed'] + d['ws'] if not np.isnan(y)]
             if y_data_vals:
                 min_y, max_y = min(y_data_vals), max(y_data_vals)
@@ -271,24 +237,21 @@ with tab_plot:
                 ax.set_ylim(min_y - margin, max_y + margin)
         
         st.pyplot(fig)
-        st.caption("ℹ️ Grafik ini menggunakan standar visualisasi HEC-RAS.")
 
-# --- TAB 3: HEC-RAS STYLE TABLE ---
+# --- TAB 3: TABLE ---
 with tab_table:
     if 'hec_results' in st.session_state:
         res = st.session_state['hec_results']
         df_hec = pd.DataFrame(res)
         
-        # Kolom sesuai screenshot User
-        cols_order = ["Reach", "River Sta", "Profile", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Top Width", "Froude # Chl"]
+        # Tambahkan Bottom Width ke urutan kolom
+        cols_order = ["Reach", "River Sta", "Profile", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Bottom Width", "Top Width", "Froude # Chl"]
         
-        # Pastikan kolom ada
         final_df = pd.DataFrame()
         for c in cols_order:
             if c in df_hec.columns: final_df[c] = df_hec[c]
             else: final_df[c] = "-"
             
-        # Format Angka
         for c in final_df.columns:
             if c not in ["Reach", "Profile"]:
                 try: final_df[c] = final_df[c].astype(float).map('{:,.2f}'.format)
@@ -297,8 +260,7 @@ with tab_table:
         st.subheader("HEC-RAS Profile Output Table")
         st.dataframe(final_df, use_container_width=True, hide_index=True)
         
-        # Export
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine='openpyxl') as writer:
             final_df.to_excel(writer, index=False, sheet_name='HEC-RAS Output')
-        st.download_button("💾 Download Excel Table", buf.getvalue(), "HEC_RAS_Table.xlsx", "application/vnd.ms-excel", type="primary")
+        st.download_button("💾 Export Table to Excel", buf.getvalue(), "HEC_RAS_Table.xlsx", "application/vnd.ms-excel", type="primary")
