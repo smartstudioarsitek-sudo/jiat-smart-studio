@@ -3,24 +3,22 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-import matplotlib.patches as patches
 import io
 import json
 
 # --- CONFIG ---
 st.set_page_config(page_title="Smart HEC-RAS Lite", layout="wide", page_icon="🌊")
 
+# Sembunyikan Warning Streamlit yang mengganggu
 st.markdown("""
 <style>
     .header-box {
-        padding: 20px; background: linear-gradient(90deg, #0f2027, #203a43, #2c5364); 
+        padding: 20px; background: linear-gradient(90deg, #1e3c72, #2a5298); 
         color: white; border-radius: 8px; text-align: center; margin-bottom: 20px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     .metric-card { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #007bff; margin-bottom: 10px; }
-    .report-section { background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #eee; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-    h3 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-top: 0; }
-    h4 { color: #e67e22; margin-top: 15px; }
+    .report-box { border: 1px solid #ddd; padding: 20px; border-radius: 5px; margin-bottom: 20px; background-color: white; }
     @media print {
         .stSidebar, header, footer, .stFileUploader, .stButton, .stTabs nav { display: none !important; }
         .block-container { padding-top: 0 !important; }
@@ -28,7 +26,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- ENGINE HIDROLIKA (FIXED CRITICAL DEPTH) ---
+# --- ENGINE HIDROLIKA ---
 def solve_manning_y(Q, n, b, S, m):
     if S <= 0: return 0.001
     y = 0.5
@@ -54,7 +52,6 @@ def solve_manning_y(Q, n, b, S, m):
 def solve_critical_y(Q, b, m):
     g = 9.81
     y = 0.5
-    # Newton-Raphson dengan batasan (Clamping) agar tidak meledak ke ribuan
     for _ in range(50):
         try:
             A = (b + m*y) * y
@@ -69,11 +66,7 @@ def solve_critical_y(Q, b, m):
             df = (f_d - f) / dy
             if df == 0: break
             y_new = y - f/df
-            
-            # --- BUG FIX: BATASI NILAI KRITIS ---
-            if y_new > 20.0: y_new = 20.0 # Batas maksimal kedalaman logis
-            if y_new < 0.01: y_new = 0.01
-            
+            if y_new > 20.0: y_new = 20.0 
             if abs(y_new - y) < 0.0001: return abs(y_new)
             y = abs(y_new)
         except: return 0.001
@@ -92,109 +85,145 @@ def reset_data():
 
 if 'df_segments_sta' not in st.session_state:
     st.session_state['df_segments_sta'] = reset_data()
-else:
-    # Ensure column integrity without full reset if possible
-    current_cols = list(st.session_state['df_segments_sta'].columns)
-    if not all(col in current_cols for col in REQUIRED_COLS):
-        st.session_state['df_segments_sta'] = reset_data()
 
 if 'q_global' not in st.session_state: st.session_state['q_global'] = 0.24
 
-# --- 2. UI HEADER & SIDEBAR ---
+# --- 2. HEADER & SIDEBAR ---
 st.markdown("""
 <div class="header-box">
     <h1 style="margin:0; font-size: 32px;">🌊 Smart HEC-RAS Lite</h1>
-    <p style="margin-top:5px; font-size: 14px; opacity: 0.9;">Analisis Profil Aliran & Desain Saluran Terbuka</p>
+    <p style="margin-top:5px; font-size: 14px; opacity: 0.9;">Steady Flow Analysis & HEC-RAS Style Plot</p>
 </div>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ Parameter Desain")
-    st.session_state['q_global'] = st.number_input("Debit Rencana (Q) m³/s", 0.001, 100.0, st.session_state['q_global'], 0.01)
+    st.header("⚙️ Plan Data")
+    st.session_state['q_global'] = st.number_input("Flow (Q) m³/s", 0.001, 100.0, st.session_state['q_global'], 0.01)
     
     st.divider()
     
-    # SAVE/LOAD
-    st.subheader("💾 File Project")
+    # SAVE/LOAD PROJECT
+    st.subheader("💾 Manajemen File")
     project_data = {'q': st.session_state['q_global'], 'segments': st.session_state['df_segments_sta'].to_dict(orient='records')}
-    st.download_button("Simpan (.json)", json.dumps(project_data, indent=2), "desain_saluran.json", "application/json")
+    st.download_button("💾 Simpan Project (.json)", json.dumps(project_data, indent=2), "hecras_project.json", "application/json")
     
-    uploaded_json = st.file_uploader("Buka (.json)", type=['json'])
+    uploaded_json = st.file_uploader("Buka Project (.json)", type=['json'])
     if uploaded_json:
         try:
             loaded = json.load(uploaded_json)
             st.session_state['q_global'] = float(loaded['q'])
-            st.session_state['df_segments_sta'] = pd.DataFrame(loaded['segments'])[REQUIRED_COLS]
+            st.session_state['df_segments_sta'] = pd.DataFrame(loaded['segments'])
+            st.success("Data Dimuat!")
             st.rerun()
-        except: st.error("File tidak valid.")
+        except: st.error("File JSON rusak.")
     
     st.divider()
     
-    # DISPLAY OPTIONS
-    aspect_ratio_fix = st.slider("📐 Vertical Exaggeration", 0.1, 10.0, 1.0, 0.1, help="Ubah skala vertikal agar grafik terlihat lebih jelas")
+    aspect_ratio_fix = st.slider("📐 Skala Vertikal (Long Section)", 0.1, 10.0, 1.0, 0.1)
+    use_manual_zoom = st.checkbox("Manual Scaling", value=False)
+    if use_manual_zoom:
+        c1, c2 = st.columns(2)
+        with c1: y_min = st.number_input("Min Elev", 0.0, 1000.0, 318.0)
+        with c2: y_max = st.number_input("Max Elev", 0.0, 1000.0, 330.0)
     
-    # EXCEL IMPORT
-    st.subheader("📥 Import Excel")
-    df_temp = pd.DataFrame([["Saluran A", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=REQUIRED_COLS)
+    st.divider()
+    
+    # --- FITUR IMPORT EXCEL (PERBAIKAN TOTAL) ---
+    st.subheader("📥 Excel Import")
+    
+    # Template
+    df_temp = pd.DataFrame([["Saluran 1", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=REQUIRED_COLS)
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine='openpyxl') as writer: df_temp.to_excel(writer, index=False)
-    st.download_button("Download Template", buf.getvalue(), "Template_Input.xlsx")
+    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer: df_temp.to_excel(writer, index=False)
+    st.download_button("📄 Download Template Excel", buf.getvalue(), "Template_HECRAS.xlsx")
     
-    up_file = st.file_uploader("Upload Excel", type=['xlsx'])
+    up_file = st.file_uploader("Upload Excel (.xlsx)", type=['xlsx'])
     if up_file:
         try:
-            df_up = pd.read_excel(up_file, engine='openpyxl')
-            # Smart Column Matcher
-            mapper = {}
-            for req in REQUIRED_COLS:
-                for col in df_up.columns:
-                    if req.lower().split()[0] in col.lower(): mapper[req] = col; break
+            # 1. Baca Excel Tanpa Engine Spesifik (Biar Pandas Pilih Sendiri)
+            df_up = pd.read_excel(up_file)
             
-            if len(mapper) >= 5: # Toleransi jika minimal 5 kolom cocok
-                df_clean = pd.DataFrame()
-                for req, orig in mapper.items(): df_clean[req] = df_up[orig]
-                # Fill missing
-                for req in REQUIRED_COLS: 
-                    if req not in df_clean.columns: 
-                        df_clean[req] = 0.0 if "Nama" not in req else "Segmen X"
-                
-                if st.button("Load Data"):
-                    st.session_state['df_segments_sta'] = df_clean
+            # 2. Normalisasi Nama Kolom (Hilangkan spasi, lowercase, tanda kurung)
+            # Biar "Lebar b" terbaca sama dengan "Lebar b (m)"
+            def clean_col(txt):
+                return str(txt).lower().replace(" ", "").replace("(m)", "").replace(".", "")
+            
+            df_up.columns = [clean_col(c) for c in df_up.columns]
+            
+            # 3. Mapping Kolom Kita -> Kolom Excel
+            # Format: 'Kolom Sistem': ['kemungkinan1', 'kemungkinan2']
+            mapping = {
+                "Nama Segmen": ["nama", "reach", "segmen"],
+                "STA Awal (m)": ["staawal", "start", "hulu"],
+                "STA Akhir (m)": ["staakhir", "end", "hilir"],
+                "Elev Awal (m)": ["elevawal", "z1", "startelv"],
+                "Elev Akhir (m)": ["elevakhir", "z2", "endelv"],
+                "Lebar b (m)": ["lebar", "width", "b"],
+                "Talud m": ["talud", "slope", "m", "z"],
+                "Kekasaran n": ["kekasaran", "manning", "n"]
+            }
+            
+            new_data = pd.DataFrame()
+            cols_found = 0
+            
+            for system_col, keywords in mapping.items():
+                found = False
+                for kw in keywords:
+                    for excel_col in df_up.columns:
+                        if kw in excel_col:
+                            new_data[system_col] = df_up[excel_col]
+                            found = True
+                            cols_found += 1
+                            break
+                    if found: break
+            
+            if cols_found >= 6: # Jika minimal 6 kolom penting ketemu
+                if st.button("✅ Load Data Excel"):
+                    st.session_state['df_segments_sta'] = new_data
                     st.rerun()
-            else: st.error("Kolom Excel tidak dikenali. Gunakan Template.")
-        except Exception as e: st.error(f"Error: {e}")
+            else:
+                st.error("Gagal mencocokkan kolom. Gunakan Template di atas.")
+                
+        except Exception as e: st.error(f"Error baca file: {e}")
 
-    if st.button("Reset Default"): st.session_state['df_segments_sta'] = reset_data(); st.rerun()
+    if st.button("🔄 Reset Default"): 
+        st.session_state['df_segments_sta'] = reset_data()
+        st.rerun()
 
-# --- 3. MAIN CALCULATION ---
+# --- 3. LOGIC ---
 edited_df = st.session_state['df_segments_sta']
 results = []
 plot_x, plot_bed, plot_ws, plot_egl, plot_crit = [], [], [], [], []
 
-if len(edited_df) > 0:
+if not edited_df.empty:
     try:
-        numeric_cols = ["STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
+        # Pastikan Numeric
+        num_cols = ["STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
         calc_df = edited_df.copy()
-        for col in numeric_cols: calc_df[col] = pd.to_numeric(calc_df[col], errors='coerce')
+        
+        # Perbaiki jika ada kolom yang hilang saat import
+        for c in num_cols:
+            if c not in calc_df.columns: calc_df[c] = 0.0
+        
+        for col in num_cols: calc_df[col] = pd.to_numeric(calc_df[col], errors='coerce')
         calc_df = calc_df.sort_values(by="STA Awal (m)")
         
         for idx, row in calc_df.iterrows():
-            if row[numeric_cols].isnull().any(): continue
+            if row[num_cols].isnull().any(): continue
             
-            # Data Extraction
-            nama, sta1, sta2 = str(row['Nama Segmen']), row['STA Awal (m)'], row['STA Akhir (m)']
+            nama = str(row.get('Nama Segmen', f'Segmen {idx}'))
+            sta1, sta2 = row['STA Awal (m)'], row['STA Akhir (m)']
             z1, z2 = row['Elev Awal (m)'], row['Elev Akhir (m)']
             b, m, n = row['Lebar b (m)'], row['Talud m'], row['Kekasaran n']
-            L = sta2 - sta1
             
+            L = sta2 - sta1
             if L <= 0: continue
             
-            # Hydraulic Calcs
             S = (z1 - z2) / L
             Q = st.session_state['q_global']
             
             yn = solve_manning_y(Q, n, b, S, m)
-            yc = solve_critical_y(Q, b, m) # <-- SUDAH DIPERBAIKI (TIDAK AKAN 1000+)
+            yc = solve_critical_y(Q, b, m)
             
             A = (b + m*yn) * yn
             P = b + 2*yn * np.sqrt(1 + m**2)
@@ -205,37 +234,40 @@ if len(edited_df) > 0:
             
             Vel_Head = (V**2) / (2*9.81)
             EGL = (z2 + yn) + Vel_Head
+            EG_Slope = (n * V)**2 / (R**(4/3)) if R>0 else 0
             
-            # Logic Status
-            if Fr > 1.1: status = "SUPERKRITIS"
-            elif Fr < 0.9: status = "SUBKRITIS"
-            else: status = "KRITIS"
+            status = "SUPERKRITIS" if Fr > 1.1 else ("SUBKRITIS" if Fr < 0.9 else "KRITIS")
+            note = status
+            if V > 3.0: note += " (Erosi!)"
+            elif V < 0.6: note += " (Endapan)"
             
             results.append({
                 "Reach": nama, "Sta Start": sta1, "Sta Finish": sta2,
                 "Q Total": Q, "Min Ch El": z2, "W.S. Elev": z2 + yn, "Crit W.S.": z2 + yc,
                 "E.G. Elev": EGL, "E.G. Slope": S, "Vel Chnl": V,
                 "Flow Area": A, "Bottom Width": b, "Talud": m, "Top Width": TopW, "Froude # Chl": Fr,
-                "Status": status
+                "Keterangan": note
             })
             
             plot_x.extend([sta1, sta2]); plot_bed.extend([z1, z2])
             plot_ws.extend([z1 + yn, z2 + yn]); plot_egl.extend([z1 + yn + Vel_Head, z2 + yn + Vel_Head])
             plot_crit.extend([z1 + yc, z2 + yc])
             
-    except Exception as e: st.error(f"Calculation Error: {e}")
+    except Exception as e: st.error(f"Error Perhitungan: {e}")
 
-# --- 4. TABS DISPLAY ---
-tab_geom, tab_prof, tab_cross, tab_table, tab_report = st.tabs(["📝 Geometry", "📈 Profile Plot", "🖼️ Cross Section", "📋 Output Table", "📄 Deep Research Report"])
+# --- 4. TABS UI ---
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 Geometry", "📈 Profile Plot", "🖼️ Cross Section", "📋 Output Table", "📄 Laporan Teknis"])
 
-with tab_geom:
-    st.subheader("Editor Data Geometri")
-    new_edited = st.data_editor(st.session_state['df_segments_sta'], num_rows="dynamic", use_container_width=True)
-    if not new_edited.equals(st.session_state['df_segments_sta']):
-        st.session_state['df_segments_sta'] = new_edited
+with tab1:
+    st.subheader("Data Geometri Saluran")
+    # Gunakan st.data_editor dengan key agar state tersimpan
+    new_df = st.data_editor(st.session_state['df_segments_sta'], num_rows="dynamic", use_container_width=True, key="editor_geom")
+    # Simpan perubahan manual user ke state
+    if not new_df.equals(st.session_state['df_segments_sta']):
+        st.session_state['df_segments_sta'] = new_df
         st.rerun()
 
-with tab_prof:
+with tab2:
     if len(plot_x) > 0:
         fig_h = max(4, 6 * aspect_ratio_fix)
         fig, ax = plt.subplots(figsize=(14, fig_h))
@@ -245,18 +277,21 @@ with tab_prof:
         ax.plot(plot_x, plot_ws, 'b-', lw=1.5, label='W.S.')
         ax.fill_between(plot_x, plot_bed, plot_ws, color='#00FFFF', alpha=1.0)
         
-        # Filter garis kritis agar tidak mengganggu jika error (meski sudah difix)
         clean_crit = [c if c < w + 5 else np.nan for c, w in zip(plot_crit, plot_ws)]
-        ax.plot(plot_x, clean_crit, 'r--', lw=1, label='Crit Depth')
-        ax.plot(plot_x, plot_egl, 'g--', lw=1, label='E.G. Line')
+        ax.plot(plot_x, clean_crit, 'r--', lw=1, label='Crit')
+        ax.plot(plot_x, plot_egl, 'g--', lw=1, label='E.G.')
         
         ax.set_xlabel("Station (m)"); ax.set_ylabel("Elevation (m)")
         ax.grid(True, linestyle=':', alpha=0.5)
-        ax.legend(loc='upper right', frameon=True, facecolor='white', edgecolor='black', title=f"Q = {st.session_state['q_global']} m³/s")
+        ax.legend(loc='upper right', frameon=True, facecolor='white', edgecolor='black')
+        
+        if use_manual_zoom: 
+            ax.set_ylim(y_min, y_max)
+        
         st.pyplot(fig)
     else: st.info("Belum ada data.")
 
-with tab_cross:
+with tab3:
     if len(results) > 0:
         sel = st.selectbox("Pilih Segmen:", [r['Reach'] for r in results])
         d = next(r for r in results if r['Reach'] == sel)
@@ -264,125 +299,69 @@ with tab_cross:
         b, m, y, yc = d['Bottom Width'], d['Talud'], d['W.S. Elev'] - d['Min Ch El'], d['Crit W.S.'] - d['Min Ch El']
         h_max = max(y, yc) * 1.5 if max(y, yc) > 0 else 1.0
         
-        # Draw Coords
         x = [-(b/2 + m*h_max), -b/2, b/2, b/2 + m*h_max]
         y_g = [h_max, 0, 0, h_max]
         
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.plot(x, y_g, 'k-', lw=2)
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(x, y_g, 'k-', lw=2, label='Ground')
         
-        # Water
         top_w = b + 2*m*y
-        ax.fill([-top_w/2, -b/2, b/2, top_w/2], [y, 0, 0, y], '#00FFFF')
+        ax.fill([-top_w/2, -b/2, b/2, top_w/2], [y, 0, 0, y], '#00FFFF', label='Water')
         ax.plot([-top_w/2, top_w/2], [y, y], 'b-', lw=1.5)
-        ax.text(0, y, '▼', color='blue', ha='center', va='bottom')
+        ax.text(0, y, '▼', color='blue', ha='center', va='bottom', fontsize=14)
         
-        # Crit Line
-        ax.hlines(yc, x[0], x[3], 'r', '--', label='Critical')
+        ax.hlines(yc, x[0], x[3], 'r', '--', label='Crit')
         
         ax.set_aspect('equal')
         ax.set_title(f"Cross Section: {d['Reach']}")
+        ax.set_xlabel("Width (m)")
         ax.grid(True, linestyle=':')
+        ax.legend()
         st.pyplot(fig)
 
-with tab_table:
+with tab4:
     if len(results) > 0:
         df_res = pd.DataFrame(results)
-        cols = ["Reach", "Sta Start", "Sta Finish", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "Vel Chnl", "Flow Area", "Top Width", "Froude # Chl", "Status"]
+        cols = ["Reach", "Sta Start", "Sta Finish", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Top Width", "Froude # Chl", "Keterangan"]
         
-        # Rename for display
-        disp_cols = {
-            "Min Ch El": "Min Ch El (m) [Dasar]", 
+        final = df_res[cols].rename(columns={
+            "Min Ch El": "Min Ch El (m)", 
             "W.S. Elev": "W.S. Elev (m)",
             "Crit W.S.": "Crit W.S. (m)",
-            "Vel Chnl": "Velocity (m/s)",
-            "Status": "Kesimpulan"
-        }
+            "Vel Chnl": "Vel (m/s)",
+            "Froude # Chl": "Froude"
+        })
         
-        df_show = df_res[cols].rename(columns=disp_cols)
-        
-        # Formatting
-        for c in df_show.columns:
-            if df_show[c].dtype == 'float64': df_show[c] = df_show[c].map('{:,.2f}'.format)
+        # Format Angka
+        for c in final.columns:
+            if final[c].dtype == 'float64': final[c] = final[c].map('{:,.2f}'.format)
             
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+        st.dataframe(final, use_container_width=True, hide_index=True)
         
         buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine='openpyxl') as writer: df_show.to_excel(writer, index=False)
-        st.download_button("💾 Export Excel", buf.getvalue(), "Hasil_Analisa.xlsx", "application/vnd.ms-excel", type="primary")
+        with pd.ExcelWriter(buf, engine='xlsxwriter') as writer: final.to_excel(writer, index=False)
+        st.download_button("💾 Export Excel", buf.getvalue(), "Hasil_HEC_RAS.xlsx", "application/vnd.ms-excel", type="primary")
 
-# --- 5. DEEP RESEARCH REPORT (NEW) ---
-with tab_report:
+with tab5:
     if len(results) > 0:
         st.markdown(f"""
-        <div class='report-section'>
-            <h2 style='text-align:center;'>LAPORAN ANALISIS HIDROLIS MENDALAM</h2>
-            <p style='text-align:center;'><b>Proyek:</b> Desain Saluran Terbuka (Cascade System) | <b>Debit:</b> {st.session_state['q_global']} m³/s</p>
+        <div class='report-box'>
+            <h2 style='text-align:center;'>LAPORAN ANALISIS HIDROLIS</h2>
+            <hr>
+            <h3>1. Ringkasan Eksekutif</h3>
+            <p>Debit Desain: <b>{st.session_state['q_global']} m³/s</b></p>
+            <p>Panjang Saluran: <b>{results[-1]['Sta Finish'] - results[0]['Sta Start']:.1f} m</b></p>
         </div>
         """, unsafe_allow_html=True)
         
-        # EXECUTIVE SUMMARY
-        st.markdown("<div class='report-section'><h3>1. Eksekutif Summary</h3>", unsafe_allow_html=True)
-        tot_len = results[-1]['Sta Finish'] - results[0]['Sta Start']
-        max_vel = max(r['Vel Chnl'] for r in results)
-        avg_fr = np.mean([r['Froude # Chl'] for r in results])
-        
-        st.write(f"""
-        Sistem saluran sepanjang **{tot_len:.1f} meter** telah dianalisis. 
-        Karakteristik aliran didominasi oleh rezim **{'SUPERKRITIS' if avg_fr > 1 else 'SUBKRITIS'}** dengan rata-rata Bilangan Froude **{avg_fr:.2f}**.
-        Kecepatan maksimum tercatat sebesar **{max_vel:.2f} m/s**.
-        """)
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        # DETAILED ANALYSIS
-        st.markdown("<div class='report-section'><h3>2. Analisis Tantangan Desain (Deep Dive)</h3>", unsafe_allow_html=True)
-        
-        # Tantangan 1: Superkritis
-        super_segs = [r['Reach'] for r in results if r['Froude # Chl'] > 1.0]
-        if super_segs:
-            st.markdown("#### A. Tantangan Aliran Superkritis (High Energy)")
-            st.warning(f"⚠️ **Isu:** Terdeteksi aliran Superkritis pada segmen: {', '.join(super_segs)}.")
-            st.markdown("""
-            * **Analisis:** Aliran superkritis memiliki kecepatan tinggi dan kedalaman dangkal. Energi kinetik mendominasi energi potensial.
-            * **Risiko:** Gelombang kejut (standing waves) dapat terjadi jika ada belokan atau pilar jembatan. Air sangat sensitif terhadap perubahan geometri.
-            * **Mitigasi:** Hindari tikungan tajam pada segmen ini. Pastikan freeboard (tinggi jagaan) cukup untuk menampung percikan air.
-            """)
-        
-        # Tantangan 2: Kecepatan & Erosi
-        erosi_segs = [r['Reach'] for r in results if r['Vel Chnl'] > 2.5] # Batas aman pasangan batu ~2-2.5 m/s
-        if erosi_segs:
-            st.markdown("#### B. Tantangan Erosi Dasar Saluran")
-            st.error(f"⛔ **Isu:** Kecepatan > 2.5 m/s pada segmen: {', '.join(erosi_segs)}.")
-            st.markdown("""
-            * **Analisis:** Kecepatan air melebihi batas izin gerusan untuk saluran tanah atau pasangan batu kali biasa.
-            * **Risiko:** Dasar saluran akan tergerus (scouring), menyebabkan dinding longsor.
-            * **Solusi:**
-                1.  **Lining:** Gunakan beton bertulang (Reinforced Concrete) mutu K-225 atau lebih.
-                2.  **Check Dam:** Kurangi kemiringan memanjang dengan menambah bangunan terjun.
-            """)
+        count_super = sum(1 for r in results if r['Froude # Chl'] > 1.1)
+        if count_super > 0:
+            st.warning(f"⚠️ Terdeteksi {count_super} segmen dengan aliran SUPERKRITIS (Froude > 1.1).")
+            st.info("💡 REKOMENDASI: Pasang Kolam Olak (Stilling Basin) di hilir segmen tersebut untuk meredam energi.")
+        else:
+            st.success("✅ Aliran dominan SUBKRITIS (Tenang). Saluran relatif aman dari gerusan ekstrim.")
             
-        # Tantangan 3: Terjunan (Cascade)
-        st.markdown("#### C. Manajemen Energi pada Terjunan (Drop Structures)")
-        st.markdown("""
-        * **Konteks:** Profil memanjang menunjukkan adanya patahan elevasi (Cascade).
-        * **Bahaya:** Di kaki terjunan, energi air sangat besar. Jika tidak diredam, akan terjadi *local scouring* (gerusan lokal) yang dalam.
-        * **Rekomendasi:** Wajib merencanakan **Kolam Olak (Stilling Basin)** tipe USBR atau Vlughter di setiap akhir terjunan untuk mengubah aliran Superkritis menjadi Subkritis (Hydraulic Jump).
-        """)
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("### 2. Tabel Detail")
+        st.dataframe(final, use_container_width=True, hide_index=True)
         
-        # KESIMPULAN
-        st.markdown("<div class='report-section'><h3>3. Rekomendasi Konstruksi</h3>", unsafe_allow_html=True)
-        rec_list = []
-        if max_vel > 3: rec_list.append("Gunakan **Beton Bertulang** untuk seluruh saluran utama.")
-        elif max_vel > 1.5: rec_list.append("Pasangan Batu Kali dengan plesteran acian halus cukup memadai.")
-        else: rec_list.append("Saluran tanah stabil (jika tanah kohesif), namun disarankan pasangan batu untuk maintenance.")
-        
-        if super_segs: rec_list.append("Sediakan **Kolam Olak** di setiap pertemuan segmen curam ke landai.")
-        
-        for i, rec in enumerate(rec_list):
-            st.success(f"✅ {rec}")
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        st.markdown("""<button onclick="window.print()" style="width:100%; background:#27ae60; color:white; border:none; padding:15px; border-radius:5px; font-weight:bold; font-size:16px; cursor:pointer;">🖨️ Cetak Laporan PDF</button>""", unsafe_allow_html=True)
-
-    else: st.info("Data belum tersedia.")
+        st.markdown("""<button onclick="window.print()" style="background:#28a745; color:white; border:none; padding:10px 20px; border-radius:5px; cursor:pointer;">🖨️ Cetak PDF</button>""", unsafe_allow_html=True)
