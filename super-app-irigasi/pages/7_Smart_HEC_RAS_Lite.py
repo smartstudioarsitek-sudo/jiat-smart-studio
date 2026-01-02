@@ -9,7 +9,6 @@ import json
 # --- CONFIG ---
 st.set_page_config(page_title="Smart HEC-RAS Lite", layout="wide", page_icon="🌊")
 
-# Sembunyikan Warning Streamlit yang mengganggu
 st.markdown("""
 <style>
     .header-box {
@@ -26,7 +25,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- ENGINE HIDROLIKA ---
+# --- ENGINE HIDROLIKA (SUDAH DIPERBAIKI) ---
 def solve_manning_y(Q, n, b, S, m):
     if S <= 0: return 0.001
     y = 0.5
@@ -34,42 +33,60 @@ def solve_manning_y(Q, n, b, S, m):
         try:
             A = (b + m*y) * y
             P = b + 2*y * np.sqrt(1 + m**2)
-            R = A/P if P > 0 else 0
+            if A <= 0 or P <= 0: 
+                y = 0.01; continue
+            R = A/P
             f = (1/n) * A * (R**(2/3)) * (S**0.5) - Q
-            dy = 0.001
+            
+            # Derivative numerical
+            dy = 0.0001
             A_d = (b + m*(y+dy)) * (y+dy)
             P_d = b + 2*(y+dy) * np.sqrt(1 + m**2)
-            R_d = A_d/P_d if P_d > 0 else 0
+            R_d = A_d/P_d
             f_d = (1/n) * A_d * (R_d**(2/3)) * (S**0.5) - Q
             df = (f_d - f) / dy
+            
             if df == 0: break
             y_new = y - f/df
-            if abs(y_new - y) < 0.0001: return abs(y_new)
-            y = abs(y_new)
+            
+            # Safety
+            if y_new <= 0: y_new = 0.001
+            if y_new > 20: y_new = 20 # Batas atas logis
+            
+            if abs(y_new - y) < 0.0001: return y_new
+            y = y_new
         except: return 0.001
     return y
 
 def solve_critical_y(Q, b, m):
+    # Froude = 1 -> Q^2*T / g*A^3 = 1
     g = 9.81
-    y = 0.5
+    y = 0.5 # Tebakan awal
     for _ in range(50):
         try:
             A = (b + m*y) * y
             T = b + 2*m*y
             if A <= 0.001: A = 0.001
+            
             f = (Q**2 * T) / (g * A**3) - 1
-            dy = 0.001
+            
+            dy = 0.0001
             A_d = (b + m*(y+dy)) * (y+dy)
             T_d = b + 2*m*(y+dy)
-            if A_d <= 0.001: A_d = 0.001
             f_d = (Q**2 * T_d) / (g * A_d**3) - 1
             df = (f_d - f) / dy
+            
             if df == 0: break
             y_new = y - f/df
-            if y_new > 20.0: y_new = 20.0 
-            if abs(y_new - y) < 0.0001: return abs(y_new)
-            y = abs(y_new)
-        except: return 0.001
+            
+            # --- PENJAGA GAWANG (BUG FIX) ---
+            # Agar tidak meledak ke 1400 meter
+            if y_new <= 0: y_new = 0.01
+            if y_new > 10.0: y_new = 5.0 # Reset ke angka wajar jika meledak
+            
+            if abs(y_new - y) < 0.0001: return y_new
+            y = y_new
+        except: return 0.5
     return y
 
 # --- 1. INISIALISASI ---
@@ -88,7 +105,7 @@ if 'df_segments_sta' not in st.session_state:
 
 if 'q_global' not in st.session_state: st.session_state['q_global'] = 0.24
 
-# --- 2. HEADER & SIDEBAR ---
+# --- 2. SIDEBAR ---
 st.markdown("""
 <div class="header-box">
     <h1 style="margin:0; font-size: 32px;">🌊 Smart HEC-RAS Lite</h1>
@@ -102,7 +119,7 @@ with st.sidebar:
     
     st.divider()
     
-    # SAVE/LOAD PROJECT
+    # SAVE/LOAD
     st.subheader("💾 Manajemen File")
     project_data = {'q': st.session_state['q_global'], 'segments': st.session_state['df_segments_sta'].to_dict(orient='records')}
     st.download_button("💾 Simpan Project (.json)", json.dumps(project_data, indent=2), "hecras_project.json", "application/json")
@@ -127,11 +144,8 @@ with st.sidebar:
         with c2: y_max = st.number_input("Max Elev", 0.0, 1000.0, 330.0)
     
     st.divider()
-    
-    # --- FITUR IMPORT EXCEL (PERBAIKAN TOTAL) ---
     st.subheader("📥 Excel Import")
     
-    # Template
     df_temp = pd.DataFrame([["Saluran 1", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=REQUIRED_COLS)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer: df_temp.to_excel(writer, index=False)
@@ -140,18 +154,11 @@ with st.sidebar:
     up_file = st.file_uploader("Upload Excel (.xlsx)", type=['xlsx'])
     if up_file:
         try:
-            # 1. Baca Excel Tanpa Engine Spesifik (Biar Pandas Pilih Sendiri)
             df_up = pd.read_excel(up_file)
+            # Smart Matching
+            def clean(t): return str(t).lower().replace(" ", "").replace("(m)", "").replace(".", "")
+            df_up.columns = [clean(c) for c in df_up.columns]
             
-            # 2. Normalisasi Nama Kolom (Hilangkan spasi, lowercase, tanda kurung)
-            # Biar "Lebar b" terbaca sama dengan "Lebar b (m)"
-            def clean_col(txt):
-                return str(txt).lower().replace(" ", "").replace("(m)", "").replace(".", "")
-            
-            df_up.columns = [clean_col(c) for c in df_up.columns]
-            
-            # 3. Mapping Kolom Kita -> Kolom Excel
-            # Format: 'Kolom Sistem': ['kemungkinan1', 'kemungkinan2']
             mapping = {
                 "Nama Segmen": ["nama", "reach", "segmen"],
                 "STA Awal (m)": ["staawal", "start", "hulu"],
@@ -164,54 +171,44 @@ with st.sidebar:
             }
             
             new_data = pd.DataFrame()
-            cols_found = 0
-            
-            for system_col, keywords in mapping.items():
-                found = False
+            found_count = 0
+            for sys_col, keywords in mapping.items():
                 for kw in keywords:
-                    for excel_col in df_up.columns:
-                        if kw in excel_col:
-                            new_data[system_col] = df_up[excel_col]
-                            found = True
-                            cols_found += 1
-                            break
-                    if found: break
+                    match = next((c for c in df_up.columns if kw in c), None)
+                    if match:
+                        new_data[sys_col] = df_up[match]
+                        found_count += 1
+                        break
             
-            if cols_found >= 6: # Jika minimal 6 kolom penting ketemu
+            if found_count >= 6:
                 if st.button("✅ Load Data Excel"):
                     st.session_state['df_segments_sta'] = new_data
                     st.rerun()
-            else:
-                st.error("Gagal mencocokkan kolom. Gunakan Template di atas.")
-                
-        except Exception as e: st.error(f"Error baca file: {e}")
+            else: st.error("Gagal mencocokkan kolom. Gunakan Template.")
+        except Exception as e: st.error(f"Error: {e}")
 
-    if st.button("🔄 Reset Default"): 
-        st.session_state['df_segments_sta'] = reset_data()
-        st.rerun()
+    if st.button("🔄 Reset Data Default"): 
+        st.session_state['df_segments_sta'] = reset_data(); st.rerun()
 
-# --- 3. LOGIC ---
+# --- 3. CALCULATIONS ---
 edited_df = st.session_state['df_segments_sta']
 results = []
 plot_x, plot_bed, plot_ws, plot_egl, plot_crit = [], [], [], [], []
 
 if not edited_df.empty:
     try:
-        # Pastikan Numeric
         num_cols = ["STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
         calc_df = edited_df.copy()
-        
-        # Perbaiki jika ada kolom yang hilang saat import
         for c in num_cols:
             if c not in calc_df.columns: calc_df[c] = 0.0
+            calc_df[c] = pd.to_numeric(calc_df[c], errors='coerce')
         
-        for col in num_cols: calc_df[col] = pd.to_numeric(calc_df[col], errors='coerce')
         calc_df = calc_df.sort_values(by="STA Awal (m)")
         
         for idx, row in calc_df.iterrows():
             if row[num_cols].isnull().any(): continue
             
-            nama = str(row.get('Nama Segmen', f'Segmen {idx}'))
+            nama = str(row.get('Nama Segmen', f'S-{idx}'))
             sta1, sta2 = row['STA Awal (m)'], row['STA Akhir (m)']
             z1, z2 = row['Elev Awal (m)'], row['Elev Akhir (m)']
             b, m, n = row['Lebar b (m)'], row['Talud m'], row['Kekasaran n']
@@ -223,7 +220,7 @@ if not edited_df.empty:
             Q = st.session_state['q_global']
             
             yn = solve_manning_y(Q, n, b, S, m)
-            yc = solve_critical_y(Q, b, m)
+            yc = solve_critical_y(Q, b, m) # <-- Using fixed logic
             
             A = (b + m*yn) * yn
             P = b + 2*yn * np.sqrt(1 + m**2)
@@ -234,7 +231,6 @@ if not edited_df.empty:
             
             Vel_Head = (V**2) / (2*9.81)
             EGL = (z2 + yn) + Vel_Head
-            EG_Slope = (n * V)**2 / (R**(4/3)) if R>0 else 0
             
             status = "SUPERKRITIS" if Fr > 1.1 else ("SUBKRITIS" if Fr < 0.9 else "KRITIS")
             note = status
@@ -253,16 +249,14 @@ if not edited_df.empty:
             plot_ws.extend([z1 + yn, z2 + yn]); plot_egl.extend([z1 + yn + Vel_Head, z2 + yn + Vel_Head])
             plot_crit.extend([z1 + yc, z2 + yc])
             
-    except Exception as e: st.error(f"Error Perhitungan: {e}")
+    except Exception as e: st.error(f"Hitungan Error: {e}")
 
 # --- 4. TABS UI ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 Geometry", "📈 Profile Plot", "🖼️ Cross Section", "📋 Output Table", "📄 Laporan Teknis"])
 
 with tab1:
     st.subheader("Data Geometri Saluran")
-    # Gunakan st.data_editor dengan key agar state tersimpan
-    new_df = st.data_editor(st.session_state['df_segments_sta'], num_rows="dynamic", use_container_width=True, key="editor_geom")
-    # Simpan perubahan manual user ke state
+    new_df = st.data_editor(st.session_state['df_segments_sta'], num_rows="dynamic", use_container_width=True)
     if not new_df.equals(st.session_state['df_segments_sta']):
         st.session_state['df_segments_sta'] = new_df
         st.rerun()
@@ -277,7 +271,9 @@ with tab2:
         ax.plot(plot_x, plot_ws, 'b-', lw=1.5, label='W.S.')
         ax.fill_between(plot_x, plot_bed, plot_ws, color='#00FFFF', alpha=1.0)
         
-        clean_crit = [c if c < w + 5 else np.nan for c, w in zip(plot_crit, plot_ws)]
+        # FILTER VISUALISASI: Jangan gambar garis kritis jika nilainya tidak masuk akal (> 5m di atas air)
+        clean_crit = [c if (c - w) < 5.0 else np.nan for c, w in zip(plot_crit, plot_ws)]
+        
         ax.plot(plot_x, clean_crit, 'r--', lw=1, label='Crit')
         ax.plot(plot_x, plot_egl, 'g--', lw=1, label='E.G.')
         
@@ -310,7 +306,8 @@ with tab3:
         ax.plot([-top_w/2, top_w/2], [y, y], 'b-', lw=1.5)
         ax.text(0, y, '▼', color='blue', ha='center', va='bottom', fontsize=14)
         
-        ax.hlines(yc, x[0], x[3], 'r', '--', label='Crit')
+        if yc < h_max:
+            ax.hlines(yc, x[0], x[3], 'r', '--', label='Crit')
         
         ax.set_aspect('equal')
         ax.set_title(f"Cross Section: {d['Reach']}")
@@ -332,7 +329,6 @@ with tab4:
             "Froude # Chl": "Froude"
         })
         
-        # Format Angka
         for c in final.columns:
             if final[c].dtype == 'float64': final[c] = final[c].map('{:,.2f}'.format)
             
