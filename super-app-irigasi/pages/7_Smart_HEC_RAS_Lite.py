@@ -74,7 +74,6 @@ def solve_critical_y(Q, b, m):
 # --- 1. INISIALISASI & AUTO-FIX DATA ---
 REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
 
-# Fungsi Reset Data Default
 def reset_data():
     data = [
         ["Saluran 1", 0.0, 64.0, 325.54, 323.00, 0.6, 1.0, 0.017],
@@ -83,14 +82,12 @@ def reset_data():
     ]
     return pd.DataFrame(data, columns=REQUIRED_COLS)
 
-# Cek apakah session state ada dan valid
 if 'df_segments_sta' not in st.session_state:
     st.session_state['df_segments_sta'] = reset_data()
 else:
-    # AUTO-FIX: Cek apakah kolomnya sesuai? Jika salah (karena sisa kode lama), RESET.
     current_cols = list(st.session_state['df_segments_sta'].columns)
     if not all(col in current_cols for col in REQUIRED_COLS):
-        st.toast("⚠️ Mendeteksi format data lama. Mereset tabel ke format baru...", icon="🔄")
+        st.toast("⚠️ Reset format tabel...", icon="🔄")
         st.session_state['df_segments_sta'] = reset_data()
 
 if 'q_global' not in st.session_state: st.session_state['q_global'] = 0.24
@@ -109,7 +106,6 @@ with st.sidebar:
     
     st.divider()
     
-    # Tombol Reset Manual (Jaga-jaga)
     if st.button("🔄 Reset Data ke Default", use_container_width=True):
         st.session_state['df_segments_sta'] = reset_data()
         st.rerun()
@@ -125,7 +121,6 @@ with st.sidebar:
     st.divider()
     st.subheader("📥 Excel Import")
     
-    # Template
     df_temp = pd.DataFrame([["Reach-1", 0, 50, 100, 99.5, 1.0, 1.0, 0.017]], columns=REQUIRED_COLS)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as writer: df_temp.to_excel(writer, index=False)
@@ -142,25 +137,21 @@ with st.sidebar:
             else: st.error("Kolom tidak sesuai template.")
         except: st.error("File error.")
 
-# --- 3. MAIN LOGIC (HITUNG DI LUAR TAB AGAR SELALU READY) ---
-
-edited_df = st.session_state['df_segments_sta'] # Ambil data saat ini
+# --- 3. MAIN LOGIC ---
+edited_df = st.session_state['df_segments_sta']
 results = []
 plot_x, plot_bed, plot_ws, plot_egl, plot_crit = [], [], [], [], []
 
 if len(edited_df) > 0:
     try:
-        # Pastikan tipe data numeric untuk kolom perhitungan
         numeric_cols = ["STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
         calc_df = edited_df.copy()
         for col in numeric_cols:
             calc_df[col] = pd.to_numeric(calc_df[col], errors='coerce')
         
-        # Sort by STA
         calc_df = calc_df.sort_values(by="STA Awal (m)")
         
         for idx, row in calc_df.iterrows():
-            # Skip jika ada data kosong/NaN
             if row[numeric_cols].isnull().any(): continue
             
             nama = str(row['Nama Segmen'])
@@ -185,15 +176,14 @@ if len(edited_df) > 0:
             V = Q/A if A > 0 else 0
             Fr = V / np.sqrt(9.81 * (A/TopW)) if TopW > 0 else 0
             
-            # Energy Grade
             Vel_Head = (V**2) / (2*9.81)
             EGL = (z2 + yn) + Vel_Head
             EG_Slope = (n * V)**2 / (R**(4/3)) if R>0 else 0
             
-            # Store Results
             results.append({
                 "Reach": nama,
-                "River Sta": sta2,
+                "Sta Start": sta1,   # Kolom Baru: Sta Start
+                "Sta Finish": sta2,  # Kolom Baru: Sta Finish
                 "Profile": "PF 1",
                 "Q Total": Q,
                 "Min Ch El": z2,
@@ -208,31 +198,24 @@ if len(edited_df) > 0:
                 "Froude # Chl": Fr
             })
             
-            # Plot Data (Append Start & End Points)
             plot_x.extend([sta1, sta2])
             plot_bed.extend([z1, z2])
             plot_ws.extend([z1 + yn, z2 + yn])
             plot_egl.extend([z1 + yn + Vel_Head, z2 + yn + Vel_Head])
             plot_crit.extend([z1 + yc, z2 + yc])
             
-    except Exception as e:
-        st.error(f"Terjadi kesalahan perhitungan: {e}")
+    except Exception as e: st.error(f"Error: {e}")
 
-# --- 4. TAMPILAN TABS ---
+# --- 4. TABS ---
 tab_input, tab_plot, tab_table = st.tabs(["📝 Geometry Data", "📈 Profile Plot (HEC-RAS Style)", "📋 Output Table"])
 
-# TAB 1: INPUT
 with tab_input:
     st.subheader("Geometric Data Editor")
-    # Tampilkan Data Editor dan Update State saat diubah
     new_edited = st.data_editor(st.session_state['df_segments_sta'], num_rows="dynamic", use_container_width=True)
-    
-    # Update state jika ada perubahan input
     if not new_edited.equals(st.session_state['df_segments_sta']):
         st.session_state['df_segments_sta'] = new_edited
-        st.rerun() # Refresh agar perhitungan ulang berjalan
+        st.rerun()
 
-# TAB 2: PLOT
 with tab_plot:
     if len(plot_x) > 0:
         fig, ax = plt.subplots(figsize=(14, 7))
@@ -242,17 +225,14 @@ with tab_plot:
         ax.plot(plot_x, plot_ws, color='blue', linewidth=1.0, label='W.S.')
         ax.fill_between(plot_x, plot_bed, plot_ws, color='#00FFFF', alpha=1.0)
         
-        # Filter Critical Depth outliers
         clean_crit = [c if c < w + 10 else np.nan for c, w in zip(plot_crit, plot_ws)]
         ax.plot(plot_x, clean_crit, color='red', linestyle='--', linewidth=1.0, label='Crit')
         ax.plot(plot_x, plot_egl, color='green', linestyle='--', linewidth=1.0, label='E.G.')
         
-        ax.set_xlabel("Main Channel Distance (m)", fontweight='bold', fontsize=10)
-        ax.set_ylabel("Elevation (m)", fontweight='bold', fontsize=10)
-        ax.set_title("Profile Plot", fontweight='bold', fontsize=12)
-        ax.grid(True, which='major', linestyle=':', linewidth=0.5, color='gray')
-        ax.minorticks_on()
-        ax.grid(True, which='minor', linestyle=':', linewidth=0.3, color='lightgray')
+        ax.set_xlabel("Stationing (m)", fontweight='bold')
+        ax.set_ylabel("Elevation (m)", fontweight='bold')
+        ax.set_title("Profile Plot", fontweight='bold')
+        ax.grid(True, linestyle=':', linewidth=0.5)
 
         legend_elements = [
             Line2D([0], [0], color='green', linestyle='--', lw=1.5, label='E.G.'),
@@ -260,7 +240,7 @@ with tab_plot:
             Line2D([0], [0], color='red', linestyle='--', lw=1.5, label='Crit'),
             Line2D([0], [0], color='black', marker='.', lw=1.5, label='Ground'),
         ]
-        ax.legend(handles=legend_elements, loc='upper right', frameon=True, facecolor='white', edgecolor='black')
+        ax.legend(handles=legend_elements, loc='upper right', frameon=True, edgecolor='black')
         
         if use_manual_zoom: ax.set_ylim(y_min, y_max)
         else:
@@ -269,16 +249,14 @@ with tab_plot:
                 min_y, max_y = min(y_vals), max(y_vals)
                 margin = (max_y - min_y) * 0.2 if max_y != min_y else 1.0
                 ax.set_ylim(min_y - margin, max_y + margin)
-        
         st.pyplot(fig)
-    else:
-        st.info("Belum ada data untuk di-plot. Silakan isi data geometri.")
+    else: st.info("No data to plot.")
 
-# TAB 3: TABLE
 with tab_table:
     if len(results) > 0:
         df_hec = pd.DataFrame(results)
-        cols_order = ["Reach", "River Sta", "Profile", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Bottom Width", "Top Width", "Froude # Chl"]
+        # Update urutan kolom: River Sta DIGANTI Sta Start & Sta Finish
+        cols_order = ["Reach", "Sta Start", "Sta Finish", "Profile", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Bottom Width", "Top Width", "Froude # Chl"]
         
         final_df = pd.DataFrame()
         for c in cols_order:
@@ -297,5 +275,4 @@ with tab_table:
         with pd.ExcelWriter(buf, engine='openpyxl') as writer:
             final_df.to_excel(writer, index=False, sheet_name='HEC-RAS Output')
         st.download_button("💾 Export Table to Excel", buf.getvalue(), "HEC_RAS_Table.xlsx", "application/vnd.ms-excel", type="primary")
-    else:
-        st.info("Data kosong. Silakan isi geometri di Tab 1.")
+    else: st.info("No data available.")
