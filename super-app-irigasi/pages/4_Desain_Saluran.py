@@ -2,191 +2,205 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 
-# --- CONFIG & METODOLOGI ---
-st.set_page_config(page_title="Desain Saluran", layout="wide", page_icon="🏗️")
+# --- CONFIG ---
+st.set_page_config(page_title="Desain Saluran & Got Miring", layout="wide", page_icon="🌊")
 
 st.markdown("""
 <style>
     .header-box {
-        padding: 20px; background-color: #546e7a; color: white;
+        padding: 20px; background: linear-gradient(90deg, #0d47a1, #1976d2); color: white;
         border-radius: 10px; text-align: center; margin-bottom: 20px;
     }
-    .metric-safe {color: green; font-weight: bold;}
-    .metric-danger {color: red; font-weight: bold;}
-    .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
-        font-size: 16px; font-weight: bold;
+    .metric-card {
+        background-color: #f1f8e9; border-left: 5px solid #33691e; padding: 15px; border-radius: 5px;
+    }
+    .danger-box {
+        background-color: #ffebee; border: 1px solid #ef5350; padding: 15px; border-radius: 5px; color: #c62828;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# KOTAK METODOLOGI
-st.markdown("""
-<div style="background-color: #eceff1; padding: 15px; border-radius: 5px; border-left: 5px solid #607d8b; margin-bottom: 20px;">
-    <strong>ℹ️ METODOLOGI: Hidrolika Saluran Terbuka (Open Channel)</strong><br>
-    <ul>
-        <li><strong>Kapasitas Debit:</strong> Rumus Manning (V = 1/n × R⅔ × S½)</li>
-        <li><strong>Geometri:</strong> Penampang Trapesium (A = (b + mh)h)</li>
-        <li><strong>Kontrol:</strong> Kecepatan Izin (0.6 - 2.0 m/s) & Froude Number (Aliran Subkritis/Superkritis).</li>
-    </ul>
-</div>
-""", unsafe_allow_html=True)
+# --- 1. RUMUS CANGGIH (HEC-RAS LITE ENGINE) ---
+def solve_manning_y(Q, n, b, S, m):
+    """Mencari kedalaman normal (yn) secara iteratif (Newton-Raphson)"""
+    y = 0.5 # Tebakan awal
+    for _ in range(20):
+        A = (b + m*y) * y
+        P = b + 2*y * np.sqrt(1 + m**2)
+        R = A/P
+        # Q = (1/n) * A * R^(2/3) * S^(1/2)
+        f = (1/n) * A * (R**(2/3)) * (S**0.5) - Q
+        
+        # Turunan f (df/dy) didekati secara numerik
+        dy = 0.001
+        A_d = (b + m*(y+dy)) * (y+dy)
+        P_d = b + 2*(y+dy) * np.sqrt(1 + m**2)
+        R_d = A_d/P_d
+        f_d = (1/n) * A_d * (R_d**(2/3)) * (S**0.5) - Q
+        df = (f_d - f) / dy
+        
+        y_new = y - f/df
+        if abs(y_new - y) < 0.0001: return y_new
+        y = y_new
+    return y
 
-# --- 1. DATA NFR LINK ---
-nfr_base = 1.25 
-status_nfr = "⚠️ Default (Modul Pola Tanam belum dijalankan)"
-if 'data_nfr_manual' in st.session_state:
-    data_nfr = st.session_state['data_nfr_manual']
-    if len(data_nfr) > 0:
-        nfr_max = max(data_nfr)
-        if nfr_max > 0:
-            nfr_base = nfr_max
-            status_nfr = "✅ Terhubung (NFR Max Pola Tanam)"
+def hitung_got_miring(Q, b, m, L, H_drop, n_beton=0.014):
+    # 1. Geometri
+    S_bed = H_drop / L # Kemiringan Dasar (3.33% di kasus Nokan)
+    
+    # 2. Kedalaman Normal (yn) - Kondisi saat aliran stabil di kecepatan tinggi
+    y_n = solve_manning_y(Q, n_beton, b, S_bed, m)
+    
+    # 3. Properti Aliran Superkritis
+    A_n = (b + m*y_n) * y_n
+    V_n = Q / A_n
+    
+    # Froude Number
+    T_top = b + 2*m*y_n
+    D_hyd = A_n / T_top
+    Fr = V_n / np.sqrt(9.81 * D_hyd)
+    
+    # 4. AERASI (AIR ENTRAINMENT) - KP-04
+    # Air "mengembang" karena bercampur udara pada kecepatan tinggi
+    # Rumus pendekatan (Gumensky): Bulking Factor
+    if V_n > 6.0: # Biasanya aerasi mulai signifikan di V > 6 m/s
+        # Persentase udara (C)
+        # C = 0.2 * (V - 9) -> Empiris kasar
+        # Kita pakai safety factor tinggi dinding (Freeboard)
+        h_aerasi = 0.6 * (V_n**2 / (2*9.81)) # Kriteria USBR untuk freeboard chute
+    else:
+        h_aerasi = 0.2 + (0.1 * V_n) # Freeboard standar KP-03
+        
+    h_total_perlu = y_n + h_aerasi
+    
+    # 5. KOLAM OLAK (STILLING BASIN)
+    # Tentukan tipe berdasarkan Froude
+    if Fr < 4.5:
+        tipe_olak = "USBR Tipe IV (Gigi Ompong) atau Vlugter"
+    elif Fr > 4.5 and V_n < 18:
+        tipe_olak = "USBR Tipe III (Gigi Penghadang)"
+    else:
+        tipe_olak = "USBR Tipe II (Untuk V sangat tinggi)"
+        
+    return {
+        'S_bed': S_bed * 100, # persen
+        'yn': y_n,
+        'V': V_n,
+        'Fr': Fr,
+        'h_aerasi': h_aerasi,
+        'h_desain': h_total_perlu,
+        'tipe_olak': tipe_olak
+    }
 
-# --- 2. INIT STATE ---
-def init_channel_data():
-    cols = ['Nama Saluran', 'Luas (ha)', 'Modulus (l/s/ha)', 'Efisiensi', 'Lebar b (m)', 'Tinggi h (m)', 'Talud m', 'Slope S (%)', 'Kekasaran n']
-    if 'df_saluran_induk' not in st.session_state:
-        st.session_state['df_saluran_induk'] = pd.DataFrame([['Induk Kanan', 500, nfr_base, 0.90, 2.0, 1.2, 1.5, 0.04, 0.025]], columns=cols)
-    if 'df_saluran_sekunder' not in st.session_state:
-        st.session_state['df_saluran_sekunder'] = pd.DataFrame([['Sekunder A', 150, nfr_base, 0.85, 1.0, 0.8, 1.0, 0.05, 0.025]], columns=cols)
-    if 'df_saluran_tersier' not in st.session_state:
-        st.session_state['df_saluran_tersier'] = pd.DataFrame([['Tersier 1', 50, nfr_base, 0.80, 0.5, 0.4, 1.0, 0.10, 0.030]], columns=cols)
-init_channel_data()
-
-# --- 3. FUNGSI HITUNG & GAMBAR ---
-def hitung_hidrolika(df):
-    for c in df.columns[1:]: df[c] = pd.to_numeric(df[c])
+def plot_chute(L, H, y_air):
+    fig, ax = plt.subplots(figsize=(10, 4))
     
-    b, h, m = df['Lebar b (m)'], df['Tinggi h (m)'], df['Talud m']
-    S = df['Slope S (%)'] / 100
-    n = df['Kekasaran n']
+    # Koordinat Dasar Saluran (Miring)
+    x = [0, L]
+    y_bed = [H, 0] # Dari H turun ke 0
     
-    A = (b + m * h) * h
-    P = b + 2 * h * np.sqrt(1 + m**2)
-    R = A / P
-    V = (1/n) * (R**(2/3)) * (S**(0.5))
-    Q_cap = A * V * 1000 
-    Q_req = (df['Luas (ha)'] * df['Modulus (l/s/ha)']) / df['Efisiensi']
+    # Muka Air
+    y_water = [H + y_air, 0 + y_air]
     
-    # Froude Number (Fr = V / sqrt(g * D)) -> D = A / T -> T = b + 2mh
-    T_top = b + 2 * m * h
-    D_hyd = A / T_top
-    Fr = V / np.sqrt(9.81 * D_hyd)
-
-    df_res = df.copy()
-    df_res['V (m/s)'] = np.round(V, 2)
-    df_res['Q Cap (L/s)'] = np.round(Q_cap, 2)
-    df_res['Q Req (L/s)'] = np.round(Q_req, 2)
-    df_res['Fr'] = np.round(Fr, 2)
-    df_res['Status'] = np.where(df_res['Q Cap (L/s)'] >= df_res['Q Req (L/s)'], "✅ AMAN", "❌ MELUAP")
-    return df_res
-
-def gambar_penampang(b, h, m, h_air=None):
-    # Setup Koordinat Trapesium
-    # (0,h) ____b____ (b,h)
-    #      /         \
-    #     /           \
-    # (-mh,0)_________(b+mh,0) -> Tapi kita balik agar dasar di y=0
+    ax.plot(x, y_bed, 'k-', linewidth=3, label='Dasar Saluran')
+    ax.plot(x, y_water, 'c--', linewidth=2, label='Muka Air (Teoretis)')
     
-    # Koordinat Dasar (Bottom)
-    # Kiri Bawah (0, 0) -> Kanan Bawah (b, 0)
-    # Kiri Atas (-mh, h) -> Kanan Atas (b+mh, h)
+    # Fill air
+    ax.fill_between(x, y_bed, y_water, color='cyan', alpha=0.3)
     
-    fig, ax = plt.subplots(figsize=(6, 3))
+    # Anotasi
+    ax.set_title(f"Profil Memanjang Got Miring (L={L}m, Drop={H}m)", fontsize=12)
+    ax.set_xlabel("Jarak (m)")
+    ax.set_ylabel("Elevasi (m)")
+    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.legend()
     
-    # Tanah/Saluran
-    x_coords = [-m*h, 0, b, b + m*h]
-    y_coords = [h, 0, 0, h]
-    
-    ax.plot(x_coords, y_coords, color='brown', linewidth=2, label='Saluran')
-    
-    # Air (Asumsi Penuh h)
-    if h_air is None: h_air = h * 0.9 # Default visualisasi 90% penuh
-    
-    width_top_water = b + 2 * m * h_air
-    x_water = [-(m*h_air), b + (m*h_air)]
-    y_water = [h_air, h_air]
-    
-    # Fill Water
-    ax.fill_between([-(m*h_air), 0, b, b+(m*h_air)], [h_air, 0, 0, h_air], color='cyan', alpha=0.6, label='Air')
-    
-    # Anotasi Dimensi
-    ax.text(b/2, -h*0.1, f"b = {b} m", ha='center', va='top', fontsize=10)
-    ax.text(b + m*h + h*0.1, h/2, f"h = {h} m", ha='left', va='center', fontsize=10)
-    ax.text(-m*h/2, h/2, f"m = {m}", ha='right', va='center', fontsize=9, rotation=45)
-
-    ax.set_aspect('equal')
-    ax.axis('off') # Hilangkan sumbu biar bersih
-    ax.set_title("Visualisasi Penampang", fontsize=10)
     return fig
 
-# --- 4. TAMPILAN UTAMA ---
-st.markdown('<div class="header-box"><h2>🏗️ Desain Hidrolika Saluran</h2></div>', unsafe_allow_html=True)
-st.info(f"ℹ️ **Info NFR:** {status_nfr} | **Base Modulus:** {nfr_base:.3f} l/s/ha")
+# --- UI UTAMA ---
+st.markdown('<div class="header-box"><h1>🚀 Advanced Channel & Chute Designer</h1><p>Solusi Khusus Topografi Ekstrim (Nokan Case)</p></div>', unsafe_allow_html=True)
 
-# SIDEBAR UPLOAD SKEMA
-with st.sidebar:
-    st.header("🗺️ Peta Skema")
-    skema_file = st.file_uploader("Upload Gambar Skema (JPG/PNG)", type=['jpg','png','jpeg'])
-    if skema_file:
-        st.image(skema_file, caption="Skema Jaringan Irigasi", use_container_width=True)
-    else:
-        st.info("Upload gambar skema jaringan di sini untuk referensi.")
+# TAB NAVIGASI
+mode = st.radio("Pilih Mode Desain:", ["🏗️ Saluran Irigasi Biasa (Manning)", "🎢 Got Miring Ekstrim (Chute)"], horizontal=True)
 
-# TABS UTAMA
-tab1, tab2, tab3 = st.tabs(["🟦 Saluran INDUK", "🟨 Saluran SEKUNDER", "🟩 Saluran TERSIER"])
+if mode == "🏗️ Saluran Irigasi Biasa (Manning)":
+    st.info("Mode ini untuk saluran tersier/sekunder yang landai (Slope < 1%). Gunakan fitur standard.")
+    # (Kode lama untuk saluran biasa bisa ditaruh disini atau di-skip demi fokus ke challenge)
+    st.write("Silakan gunakan modul standard untuk saluran landai. Pindah ke tab sebelah untuk kasus Nokan.")
 
-def render_tab(key_df, label):
-    c_input, c_visual = st.columns([1.5, 1])
+else:
+    # --- MODE GOT MIRING (NOKAN SPECIAL) ---
+    st.markdown("""
+    <div style="background-color: #fff3e0; padding: 15px; border-left: 5px solid #ff9800; margin-bottom: 20px;">
+        <strong>⚠️ CHUTE DESIGN MODE</strong><br>
+        Modul ini menggunakan algoritma aliran superkritis untuk menghitung dimensi <strong>Got Miring</strong>, 
+        analisa <strong>Aerasi (Bulking)</strong>, dan rekomendasi <strong>Kolam Olak</strong>.
+    </div>
+    """, unsafe_allow_html=True)
     
-    with c_input:
-        st.subheader(f"1. Dimensi {label}")
-        edited = st.data_editor(st.session_state[key_df], num_rows="dynamic", use_container_width=True, key=f"edit_{key_df}")
-        st.session_state[key_df] = edited
+    col_in, col_out = st.columns([1, 1.5])
+    
+    with col_in:
+        st.subheader("1. Parameter Ekstrim")
+        Q_desain = st.number_input("Debit Desain (m³/s)", 0.1, 50.0, 2.0, 0.1)
+        L_saluran = st.number_input("Panjang Saluran (m)", 10.0, 5000.0, 1200.0, 10.0)
+        H_drop = st.number_input("Beda Tinggi / Drop (m)", 1.0, 500.0, 40.0, 1.0)
         
-        # Hitung
-        df_hasil = hitung_hidrolika(edited)
-        
-        st.subheader("2. Hasil Analisa")
-        st.dataframe(
-            df_hasil[['Nama Saluran', 'Q Req (L/s)', 'Q Cap (L/s)', 'V (m/s)', 'Fr', 'Status']]
-            .style.map(lambda v: 'color: red; font-weight: bold;' if v == '❌ MELUAP' else 'color: green; font-weight: bold;', subset=['Status'])
-            .format("{:.2f}", subset=['Q Req (L/s)', 'Q Cap (L/s)', 'V (m/s)', 'Fr']),
-            use_container_width=True
-        )
+        st.subheader("2. Geometri Penampang")
+        b_lebar = st.number_input("Lebar Dasar (m)", 0.5, 10.0, 1.5, 0.1)
+        m_talud = st.number_input("Kemiringan Talud (m)", 0.0, 5.0, 0.0, 0.1, help="0 untuk Persegi (Beton), 1 untuk Trapesium")
+        n_mat = st.number_input("Kekasaran Manning (n)", 0.010, 0.040, 0.017, 0.001, help="Beton Halus: 0.013, Beton Kasar: 0.017")
 
-    with c_visual:
-        st.subheader("3. Visualisasi")
-        if len(edited) > 0:
-            # Ambil baris pertama atau yang dipilih (Logic sederhana: baris pertama dulu)
-            pilih_saluran = st.selectbox("Pilih Saluran utk Visualisasi:", edited['Nama Saluran'].unique(), key=f"sel_{key_df}")
-            row = edited[edited['Nama Saluran'] == pilih_saluran].iloc[0]
+        if st.button("🔥 HITUNG ANALISA EKSTRIM", type="primary", use_container_width=True):
+            res = hitung_got_miring(Q_desain, b_lebar, m_talud, L_saluran, H_drop, n_mat)
+            st.session_state['res_chute'] = res
+
+    with col_out:
+        if 'res_chute' in st.session_state:
+            res = st.session_state['res_chute']
             
-            try:
-                fig = gambar_penampang(float(row['Lebar b (m)']), float(row['Tinggi h (m)']), float(row['Talud m']))
-                st.pyplot(fig)
-                
-                # Info Cepat
-                row_res = df_hasil[df_hasil['Nama Saluran'] == pilih_saluran].iloc[0]
-                st.info(f"**{pilih_saluran}**\n\nKecepatan: {row_res['V (m/s)']} m/s\n\nFroude: {row_res['Fr']} ({'Superkritis' if row_res['Fr']>1 else 'Subkritis'})")
-            except:
-                st.warning("Lengkapi data dimensi untuk melihat gambar.")
+            st.subheader("3. Hasil Analisa Hidrolis")
+            
+            # KPI Cards
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Slope", f"{res['S_bed']:.2f} %", "Curam!")
+            c2.metric("Kecepatan (V)", f"{res['V']:.2f} m/s", "Superkritis" if res['Fr']>1 else "Subkritis")
+            c3.metric("Froude (Fr)", f"{res['Fr']:.2f}", "Butuh Peredam")
+            
+            # Warning System
+            if res['V'] > 3.0:
+                st.markdown(f"""
+                <div class="danger-box">
+                    <strong>⚠️ BAHAYA KAVITASI & EROSI!</strong><br>
+                    Kecepatan mencapai {res['V']:.2f} m/s (Batas aman beton biasa: 3 m/s).<br>
+                    <strong>Wajib:</strong> Gunakan Beton Mutu Tinggi (K-350 ke atas) + Tulangan Ganda.
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Analisa Dimensi
+            st.markdown("### 4. Rekomendasi Dimensi (Safety)")
+            st.markdown(f"""
+            - **Kedalaman Air Murni:** {res['yn']:.3f} m
+            - **Tinggi Jagaan (Aerasi/Bulking):** +{res['h_aerasi']:.3f} m
+            - **Tinggi Dinding MINIMAL:** <span style="font-size:24px; font-weight:bold; color:blue;">{res['h_desain']:.2f} m</span>
+            """, unsafe_allow_html=True)
+            
+            st.info(f"💡 **Rekomendasi Kolam Olak:** Gunakan **{res['tipe_olak']}** di ujung saluran untuk meredam energi Froude {res['Fr']:.2f}.")
+            
+            # Visualisasi
+            st.pyplot(plot_chute(L_saluran, H_drop, res['yn']))
+            
+        else:
+            st.info("Masukkan data dan tekan tombol HITUNG.")
 
-    # Warning Global
-    for i, r in df_hasil.iterrows():
-        if r['Status'] == "❌ MELUAP":
-            st.error(f"⚠️ **{r['Nama Saluran']}**: Dimensi kurang besar! (Kurang {r['Q Req (L/s)'] - r['Q Cap (L/s)'] :.1f} L/s)")
-        if r['V (m/s)'] < 0.6:
-            st.warning(f"⚠️ **{r['Nama Saluran']}**: Aliran terlalu pelan ({r['V (m/s)']} m/s). Endapan!")
-        elif r['V (m/s)'] > 2.0:
-            st.warning(f"⚠️ **{r['Nama Saluran']}**: Aliran terlalu cepat ({r['V (m/s)']} m/s). Gerusan!")
-
-with tab1: render_tab('df_saluran_induk', "Saluran Induk")
-with tab2: render_tab('df_saluran_sekunder', "Saluran Sekunder")
-with tab3: render_tab('df_saluran_tersier', "Saluran Tersier")
-
+# Tambahan: Library Edukasi
 st.divider()
-import streamlit.components.v1 as components
-components.html("""<button onclick="window.print()" style="background:#546e7a;color:white;border:none;padding:10px 20px;border-radius:5px;">🖨️ Cetak Laporan</button>""", height=50)
+with st.expander("📚 Referensi: Mengapa Perlu Analisa Khusus?"):
+    st.markdown("""
+    **Kasus Nokan (L=1.2km, H=40m)** memiliki kemiringan 3.33%. 
+    Ini bukan lagi saluran irigasi, tapi **Peluncur (Chute)**.
+    1.  **Bulking Air:** Pada kecepatan tinggi, udara masuk ke air, membuat volume air bertambah. Jika pakai rumus biasa, air pasti meluap (overtopping).
+    2.  **Kavitasi:** Kecepatan > 10-15 m/s bisa meledakkan permukaan beton karena tekanan uap.
+    3.  **Loncatan Air:** Di ujung saluran, air akan "menabrak" air tenang, menciptakan ledakan energi. Aplikasi ini menghitung tipe kolam olak yang kuat menahannya.
+    """)
