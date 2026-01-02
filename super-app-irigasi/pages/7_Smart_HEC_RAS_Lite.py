@@ -16,8 +16,12 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     .metric-card {
-        background-color: #e3f2fd; border-left: 5px solid #2196f3; padding: 10px; border-radius: 5px;
+        background-color: #f8f9fa; border-left: 5px solid #2196f3; padding: 15px; 
+        border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 10px;
     }
+    .metric-value { font-size: 18px; font-weight: bold; color: #0d47a1; }
+    .metric-label { font-size: 12px; color: #666; }
+    
     @media print {
         .stSidebar, header, footer, .stFileUploader, .stButton { display: none !important; }
         .block-container { padding-top: 0 !important; }
@@ -67,7 +71,7 @@ def solve_critical_y(Q, b, m):
             df = (f_d - f) / dy
             if df == 0: break
             y_new = y - f/df
-            if y_new > 50.0: y_new = 50.0 # Safety Cap
+            if y_new > 50.0: y_new = 50.0 
             if abs(y_new - y) < 0.0001: return abs(y_new)
             y = abs(y_new)
         except: return 0.001
@@ -110,12 +114,24 @@ with st.sidebar:
     st.session_state['q_global'] = st.number_input("Debit Desain (Q) m³/s", 0.001, 50.0, st.session_state['q_global'], 0.01)
     
     st.divider()
-    st.subheader("👁️ Kontrol Tampilan")
-    use_manual_zoom = st.checkbox("Atur Datum Manual", value=False)
-    y_min_manual = st.number_input("Min Elevasi", value=300.0)
-    y_max_manual = st.number_input("Max Elevasi", value=340.0)
+    
+    # KONTROL ZOOM (FEATURE REQUESTED)
+    st.subheader("🎨 Kontrol Grafik")
+    use_manual_zoom = st.checkbox("Aktifkan Skala Manual", value=False)
+    
+    c_x1, c_x2 = st.columns(2)
+    with c_x1: x_min_manual = st.number_input("STA Awal", value=0.0)
+    with c_x2: x_max_manual = st.number_input("STA Akhir", value=150.0)
+    
+    c_y1, c_y2 = st.columns(2)
+    with c_y1: y_min_manual = st.number_input("Min Elev", value=315.0)
+    with c_y2: y_max_manual = st.number_input("Max Elev", value=330.0)
+    
+    st.caption("Centang 'Aktifkan Skala Manual' untuk menggunakan nilai di atas.")
     
     st.divider()
+    
+    # INPUT EXCEL
     st.subheader("📥 Input dari Excel")
     cols_excel = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
     df_template = pd.DataFrame([["Saluran A", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=cols_excel)
@@ -137,6 +153,7 @@ with st.sidebar:
             else: st.error("Kolom Excel tidak sesuai template.")
         except Exception as e: st.error(f"Error: {e}")
 
+    # BACKUP
     st.divider()
     st.subheader("💾 Backup Data")
     project_data = {'q': st.session_state['q_global'], 'segments': st.session_state['df_segments_sta'].to_dict(orient='records')}
@@ -157,8 +174,6 @@ tab1, tab2, tab3 = st.tabs(["📝 Input Stationing (STA)", "📉 Profil Memanjan
 
 with tab1:
     st.subheader("1. Tabel Geometri & Stationing")
-    st.caption("Masukkan STA Awal dan STA Akhir. Panjang (L) akan dihitung otomatis.")
-    
     edited_df = st.data_editor(
         st.session_state['df_segments_sta'],
         num_rows="dynamic",
@@ -230,6 +245,7 @@ with tab2:
             mid_x, mid_y = (x[0] + x[1]) / 2, (z_bed[0] + z_bed[1]) / 2
             ax.text(mid_x, mid_y, str(r['data']['Nama Segmen']), ha='center', va='top', fontsize=8, bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
             
+            # GAMBAR TERJUNAN
             if i > 0:
                 prev_end = res[i-1]['plot'][1]
                 curr_start = r['plot'][0]
@@ -237,9 +253,14 @@ with tab2:
                     if abs(prev_end['z_bed'] - curr_start['z_bed']) > 0.05:
                         ax.plot([curr_start['x'], curr_start['x']], [prev_end['z_bed'], curr_start['z_bed']], color='gray', linestyle='--', linewidth=1.5)
                         drop_h = prev_end['z_bed'] - curr_start['z_bed']
-                        if drop_h > 0: ax.text(curr_start['x'], (prev_end['z_bed'] + curr_start['z_bed'])/2, f" Drop {drop_h:.2f}m", ha='left', va='center', fontsize=7, color='brown')
+                        if drop_h > 0: 
+                            # Label Drop dengan Elevasi
+                            ax.text(curr_start['x'], (prev_end['z_bed'] + curr_start['z_bed'])/2, 
+                                    f" Drop {drop_h:.2f}m\n ({prev_end['z_bed']:.2f}→{curr_start['z_bed']:.2f})", 
+                                    ha='left', va='center', fontsize=7, color='brown', fontweight='bold')
 
         if use_manual_zoom:
+            ax.set_xlim(left=x_min_manual, right=x_max_manual)
             ax.set_ylim(bottom=y_min_manual, top=y_max_manual)
         else:
             min_z, max_z = st.session_state.get('plot_limits', (0, 10))
@@ -248,8 +269,13 @@ with tab2:
             ax.set_ylim(bottom=min_z - buffer*0.2, top=max_z + buffer)
 
         from matplotlib.lines import Line2D
-        legend_elements = [Line2D([0], [0], color='k', lw=2, label='Dasar Saluran'), Line2D([0], [0], color='b', lw=2, label='Muka Air (NDL)'), Line2D([0], [0], color='r', lw=1, linestyle='--', label='Kritis (CDL)'), Line2D([0], [0], color='gray', lw=1.5, linestyle='--', label='Bangunan Terjun')]
-        ax.legend(handles=legend_elements)
+        legend_elements = [
+            Line2D([0], [0], color='k', lw=2, label='Dasar Saluran'),
+            Line2D([0], [0], color='b', lw=2, label='Muka Air (NDL)'),
+            Line2D([0], [0], color='r', lw=1, linestyle='--', label='Kritis (CDL)'),
+            Line2D([0], [0], color='gray', lw=1.5, linestyle='--', label='Bangunan Terjun')
+        ]
+        ax.legend(handles=legend_elements, loc='upper right')
         ax.set_xlabel("Stationing (m)"); ax.set_ylabel("Elevasi (m)"); ax.grid(True, linestyle=':', alpha=0.5); ax.set_title("Profil Aliran Berdasarkan STA")
         st.pyplot(fig)
 
@@ -261,42 +287,54 @@ with tab3:
         pilih = st.selectbox("Pilih Segmen:", nama_list)
         selected = next(item for item in res if str(item['data']['Nama Segmen']) == pilih)
         c, d = selected['calc'], selected['data']
+        
+        # --- KOTAK INFO ELEVASI (BARU) ---
+        st.markdown("#### 📐 Data Elevasi Penting")
+        ec1, ec2, ec3, ec4 = st.columns(4)
+        with ec1:
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>Elv Dasar Hulu</div><div class='metric-value'>{d['Elev Awal (m)']:.2f} m</div></div>", unsafe_allow_html=True)
+        with ec2:
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>Elv Dasar Hilir</div><div class='metric-value'>{d['Elev Akhir (m)']:.2f} m</div></div>", unsafe_allow_html=True)
+        with ec3:
+            elv_air_hulu = d['Elev Awal (m)'] + c['yn']
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>Elv M.A.N (Hulu)</div><div class='metric-value'>{elv_air_hulu:.2f} m</div></div>", unsafe_allow_html=True)
+        with ec4:
+            elv_kritis_hulu = d['Elev Awal (m)'] + c['yc']
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>Elv Kritis (Hulu)</div><div class='metric-value'>{elv_kritis_hulu:.2f} m</div></div>", unsafe_allow_html=True)
+
+        st.divider()
+
         col1, col2 = st.columns([1, 1.5])
         with col1:
+            st.markdown("#### ⚙️ Parameter Hidrolis")
             st.metric("Panjang (L)", f"{c['L']:.1f} m", f"STA: {d['STA Awal (m)']} - {d['STA Akhir (m)']}")
             st.metric("Kecepatan (V)", f"{c['V']:.2f} m/s", f"Fr: {c['Fr']:.2f}")
             is_super = 'SUPER' in c['status']
             st.metric("Status Aliran", c['status'], delta="- BAHAYA" if is_super else "+ AMAN")
+            
             st.markdown("#### 💡 Saran Teknis")
             for r in generate_recommendations(c['V'], c['Fr'], float(d['Kekasaran n'])): st.info(r)
+        
         with col2:
+            st.markdown("#### 🖼️ Cross Section")
             b, m, yn = float(d['Lebar b (m)']), float(d['Talud m']), c['yn']
-            # --- FIX SKALA CROSS SECTION ---
-            # Pakai yn untuk menentukan tinggi gambar agar proporsional
             h_draw = max(yn * 1.5, 0.5) 
             fig_cs, ax_cs = plt.subplots(figsize=(6, 3))
             
-            # Gambar Tanah
             x_soil = [-m*h_draw, 0, b, b+m*h_draw]
             y_soil = [h_draw, 0, 0, h_draw]
             ax_cs.plot(x_soil, y_soil, 'k-', linewidth=2)
-            
-            # Gambar Air
             ax_cs.fill_between([-m*yn, 0, b, b+m*yn], [yn, 0, 0, yn], color='cyan', alpha=0.6)
             
-            # Batasi Tampilan (Zoom ke area saluran)
-            # Ini kuncinya: Set batas X dan Y secara eksplisit
             top_width = b + 2 * m * h_draw
             center_x = b / 2
             ax_cs.set_xlim(center_x - top_width/2 - 0.5, center_x + top_width/2 + 0.5)
             ax_cs.set_ylim(0, h_draw * 1.2)
             
-            # Gambar Garis Kritis (Hanya jika masuk akal)
             if c['yc'] < h_draw * 2:
                 ax_cs.hlines(c['yc'], -m*c['yc'], b+m*c['yc'], colors='red', linestyles='--', label='Kritis')
             else:
-                # Jika Kritis jauh di atas (error), kasih teks aja
-                ax_cs.text(b/2, h_draw, "Garis Kritis > Tinggi Saluran (Jauh)", color='red', ha='center', fontsize=8)
+                ax_cs.text(b/2, h_draw, "Garis Kritis > Tinggi Saluran", color='red', ha='center', fontsize=8)
 
             ax_cs.legend(loc='upper right', fontsize='small'); ax_cs.set_aspect('equal')
             st.pyplot(fig_cs)
