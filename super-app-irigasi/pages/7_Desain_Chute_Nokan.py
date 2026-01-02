@@ -223,7 +223,11 @@ with tab3:
         
         with col1:
             st.metric("Kecepatan (V)", f"{c['V']:.2f} m/s", f"Fr: {c['Fr']:.2f}")
-            st.metric("Status Aliran", c['status'], inverse=(c['status']=='SUPER-KRITIS'))
+            
+            # PERBAIKAN DI SINI: Gunakan parameter delta untuk warna, bukan inverse
+            is_super = 'SUPER' in c['status']
+            st.metric("Status Aliran", c['status'], delta="- BAHAYA" if is_super else "+ AMAN")
+            
             st.markdown("#### 💡 Saran Teknis")
             for r in generate_recommendations(c['V'], c['Fr'], float(d['Kekasaran n'])):
                 st.info(r)
@@ -276,7 +280,6 @@ with col_ex1:
 
 # 2. PRINT PDF
 with col_ex2:
-    # Tombol Javascript untuk Print Browser (Solusi Terbaik untuk Grafik)
     st.markdown("""
     <button onclick="window.print()" style="
         background-color: #4CAF50; border: none; color: white; padding: 10px 24px;
