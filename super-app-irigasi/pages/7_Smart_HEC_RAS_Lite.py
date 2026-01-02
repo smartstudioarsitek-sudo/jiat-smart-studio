@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+import matplotlib.patches as patches
 import io
 
 # --- CONFIG ---
@@ -106,6 +107,8 @@ with st.sidebar:
     
     st.divider()
     
+    # SLIDER ASPEK RATIO GRAFIK
+    st.subheader("👁️ Plot Options")
     aspect_ratio_fix = st.slider("📐 Skala Vertikal (Long Section)", 0.1, 10.0, 1.0, 0.1)
     
     use_manual_zoom = st.checkbox("Manual Scaling", value=False)
@@ -263,10 +266,10 @@ with tab_plot:
         st.pyplot(fig)
     else: st.info("No data to plot.")
 
-# --- FITUR BARU: CROSS SECTION ADVANCED ---
 with tab_cross:
     st.subheader("Cross Section Plotter")
     if len(results) > 0:
+        # Pilihi Segmen (Gunakan "Reach" sebagai identifier)
         seg_names = [r['Reach'] for r in results]
         selected_seg = st.selectbox("Pilih Segmen / Cross Section:", seg_names)
         
@@ -320,7 +323,7 @@ with tab_cross:
         if m > 0:
             ax_xs.text(mid_slope_x, mid_slope_y, f"m = {m}", rotation=0, ha='left', va='center', fontsize=9, bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
 
-        # --- FIX JUDUL GRAFIK (MENGGUNAKAN NAMA SEGMEN & STA) ---
+        # Fix Title using Sta Start/Finish
         ax_xs.set_title(f"Cross Section: {data['Reach']} (Sta {data['Sta Start']} - {data['Sta Finish']})", fontweight='bold')
         
         info_text = (f"Reach: {data['Reach']}\nQ = {data['Q Total']} m³/s\nV = {data['Vel Chnl']} m/s\nFr = {data['Froude # Chl']}")
@@ -341,28 +344,53 @@ with tab_cross:
         ax_xs.legend(handles=legend_elements, loc='upper right', frameon=True, facecolor='white', edgecolor='black')
         
         st.pyplot(fig_xs)
-    else: st.info("Belum ada data. Silakan hitung dulu di Tab 1.")
+    else: st.info("No data available.")
 
 with tab_table:
     if len(results) > 0:
         df_hec = pd.DataFrame(results)
-        cols_order = ["Reach", "Sta Start", "Sta Finish", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Bottom Width", "Top Width", "Froude # Chl"]
         
+        # --- UPDATE 1: HEADER DENGAN SATUAN & NAMA KOLOM BARU ---
+        col_mapping = {
+            "Reach": "Segment Name",
+            "Sta Start": "Sta Start (m)",
+            "Sta Finish": "Sta Finish (m)",
+            "Q Total": "Q Total (m³/s)",
+            "Min Ch El": "Min Ch El (m)",
+            "W.S. Elev": "W.S. Elev (m)",
+            "Crit W.S.": "Crit W.S. (m)",
+            "E.G. Elev": "E.G. Elev (m)",
+            "E.G. Slope": "E.G. Slope (m/m)",
+            "Vel Chnl": "Vel Chnl (m/s)",
+            "Flow Area": "Flow Area (m²)",
+            "Bottom Width": "Bottom Width (m)",
+            "Top Width": "Top Width (m)",
+            "Froude # Chl": "Froude # Chl"
+        }
+        
+        # Susun urutan kolom (Internal Names)
+        cols_order_internal = ["Reach", "Sta Start", "Sta Finish", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Bottom Width", "Top Width", "Froude # Chl"]
+        
+        # Buat dataframe baru sesuai urutan
         final_df = pd.DataFrame()
-        for c in cols_order:
+        for c in cols_order_internal:
             if c in df_hec.columns: final_df[c] = df_hec[c]
             else: final_df[c] = "-"
             
+        # Format Angka (Rounding)
         for c in final_df.columns:
             if c not in ["Reach"]:
                 try: final_df[c] = final_df[c].astype(float).map('{:,.2f}'.format)
                 except: pass
+        
+        # --- UPDATE 2: RENAME COLUMN HEADERS ---
+        final_df_display = final_df.rename(columns=col_mapping)
 
         st.subheader("HEC-RAS Profile Output Table")
-        st.dataframe(final_df, use_container_width=True, hide_index=True)
+        st.dataframe(final_df_display, use_container_width=True, hide_index=True)
         
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine='openpyxl') as writer:
-            final_df.to_excel(writer, index=False, sheet_name='HEC-RAS Output')
+            final_df_display.to_excel(writer, index=False, sheet_name='HEC-RAS Output')
         st.download_button("💾 Export Table to Excel", buf.getvalue(), "HEC_RAS_Table.xlsx", "application/vnd.ms-excel", type="primary")
     else: st.info("No data available.")
