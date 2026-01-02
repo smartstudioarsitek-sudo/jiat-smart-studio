@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-import matplotlib.patches as patches
 import io
 import json
+import re
 
 # --- CONFIG ---
 st.set_page_config(page_title="Smart HEC-RAS Lite", layout="wide", page_icon="🌊")
@@ -18,7 +18,6 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     .metric-card { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #007bff; margin-bottom: 10px; }
-    .report-box { border: 1px solid #ddd; padding: 20px; border-radius: 5px; margin-bottom: 20px; background-color: white; }
     @media print {
         .stSidebar, header, footer, .stFileUploader, .stButton, .stTabs nav { display: none !important; }
         .block-container { padding-top: 0 !important; }
@@ -72,7 +71,8 @@ def solve_critical_y(Q, b, m):
         except: return 0.001
     return y
 
-# --- 1. INISIALISASI & DATA STRUCTURE ---
+# --- 1. INISIALISASI & STRUKTUR DATA ---
+# Definisi kolom internal (yang dipakai sistem)
 REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
 
 def reset_data():
@@ -85,18 +85,6 @@ def reset_data():
 
 if 'df_segments_sta' not in st.session_state:
     st.session_state['df_segments_sta'] = reset_data()
-else:
-    # Auto-Fix Kolom Hilang (Tanpa Reset Total)
-    current_df = st.session_state['df_segments_sta']
-    missing_cols = [c for c in REQUIRED_COLS if c not in current_df.columns]
-    if missing_cols:
-        st.toast(f"Memperbaiki struktur tabel...", icon="🛠️")
-        for c in missing_cols:
-            if "Nama" in c: current_df[c] = "Saluran X"
-            elif "Talud" in c: current_df[c] = 1.0
-            elif "Kekasaran" in c: current_df[c] = 0.017
-            else: current_df[c] = 0.0
-        st.session_state['df_segments_sta'] = current_df[REQUIRED_COLS] # Reorder
 
 if 'q_global' not in st.session_state: st.session_state['q_global'] = 0.24
 
@@ -114,45 +102,27 @@ with st.sidebar:
     
     st.divider()
     
-    # --- SAVE / LOAD SYSTEM (FIXED) ---
-    st.subheader("💾 Manajemen File")
+    # MANAJEMEN FILE JSON
+    st.subheader("💾 Manajemen Project")
     project_data = {
         'q': st.session_state['q_global'],
         'segments': st.session_state['df_segments_sta'].to_dict(orient='records')
     }
-    json_str = json.dumps(project_data, indent=2)
-    st.download_button("💾 Simpan Project (.json)", json_str, file_name="project_hecras.json", mime="application/json")
+    st.download_button("💾 Simpan Project (.json)", json.dumps(project_data, indent=2), "project_hecras.json", "application/json")
     
     uploaded_json = st.file_uploader("Buka Project (.json)", type=['json'])
-    if uploaded_json is not None:
+    if uploaded_json:
         try:
             loaded = json.load(uploaded_json)
-            # Validasi Dasar
-            if 'q' in loaded and 'segments' in loaded:
-                st.session_state['q_global'] = float(loaded['q'])
-                df_loaded = pd.DataFrame(loaded['segments'])
-                
-                # --- SMART FIXER: Cek kelengkapan kolom ---
-                # Jika file lama tidak punya kolom 'STA Awal' misalnya, kita tambahkan default
-                for col in REQUIRED_COLS:
-                    if col not in df_loaded.columns:
-                        df_loaded[col] = 0.0 if "Nama" not in col else "Segment"
-                
-                # Update Session State dengan kolom yang sudah dirapikan
-                st.session_state['df_segments_sta'] = df_loaded[REQUIRED_COLS]
-                st.success("✅ Project Berhasil Dimuat!")
-                
-                # Trick: Hapus uploader state agar tidak loop error
-                # (Streamlit tidak punya clear file uploader resmi, jadi kita biarkan user manual)
-            else:
-                st.error("Struktur file tidak dikenali.")
-        except Exception as e:
-            st.error(f"Gagal membaca file: {e}")
+            st.session_state['q_global'] = float(loaded['q'])
+            st.session_state['df_segments_sta'] = pd.DataFrame(loaded['segments'])
+            st.success("✅ Project Dimuat!")
+            st.rerun()
+        except: st.error("File rusak/salah format.")
     
     st.divider()
     
     aspect_ratio_fix = st.slider("📐 Skala Vertikal (Long Section)", 0.1, 10.0, 1.0, 0.1)
-    
     use_manual_zoom = st.checkbox("Manual Scaling", value=False)
     if use_manual_zoom:
         c1, c2 = st.columns(2)
@@ -160,26 +130,91 @@ with st.sidebar:
         with c2: y_max = st.number_input("Max Elev", 0.0, 1000.0, 330.0)
     
     st.divider()
+    
+    # --- FITUR SMART EXCEL IMPORT (ROBUST) ---
     st.subheader("📥 Excel Import")
     
-    df_temp = pd.DataFrame([["Reach-1", 0, 50, 100, 99.5, 1.0, 1.0, 0.017]], columns=REQUIRED_COLS)
+    # Template Download
+    df_temp = pd.DataFrame([["S1", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=REQUIRED_COLS)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as writer: df_temp.to_excel(writer, index=False)
     st.download_button("📄 Template Excel", buf.getvalue(), "HECRAS_Template.xlsx")
     
+    # Upload Logic
     up_file = st.file_uploader("Upload .xlsx", type=['xlsx'])
     if up_file:
         try:
-            df_up = pd.read_excel(up_file, engine='openpyxl')
-            # Check mandatory columns exist
-            missing = [c for c in REQUIRED_COLS if c not in df_up.columns]
-            if not missing:
-                if st.button("Load Excel Data"):
-                    st.session_state['df_segments_sta'] = df_up[REQUIRED_COLS]
+            # Baca Excel tanpa menganggap baris pertama header dulu (biar aman)
+            df_raw = pd.read_excel(up_file, engine='openpyxl')
+            
+            # --- FUNGSI PENCCOCOKAN KOLOM PINTAR ---
+            # Ini akan mencari kolom yang "mirip" meskipun beda spasi/huruf besar kecil/satuan
+            def find_col(keyword, columns):
+                keyword = keyword.lower().replace(" ", "").replace("(m)", "").replace("(m³/s)", "")
+                for col in columns:
+                    clean_col = str(col).lower().replace(" ", "").replace("(m)", "").replace("(m³/s)", "")
+                    if keyword in clean_col:
+                        return col
+                return None
+
+            # Mapping kolom Excel User -> Kolom Sistem Kita
+            mapped_data = {}
+            missing_cols = []
+            
+            # 1. Nama Segmen
+            col_nama = find_col("nama", df_raw.columns) or find_col("reach", df_raw.columns)
+            if col_nama: mapped_data["Nama Segmen"] = df_raw[col_nama]
+            else: missing_cols.append("Nama Segmen")
+            
+            # 2. STA Awal
+            col_sta1 = find_col("staawal", df_raw.columns) or find_col("start", df_raw.columns)
+            if col_sta1: mapped_data["STA Awal (m)"] = df_raw[col_sta1]
+            else: missing_cols.append("STA Awal")
+            
+            # 3. STA Akhir
+            col_sta2 = find_col("staakhir", df_raw.columns) or find_col("end", df_raw.columns)
+            if col_sta2: mapped_data["STA Akhir (m)"] = df_raw[col_sta2]
+            else: missing_cols.append("STA Akhir")
+            
+            # 4. Elev Awal
+            col_z1 = find_col("elevawal", df_raw.columns) or find_col("invertstart", df_raw.columns)
+            if col_z1: mapped_data["Elev Awal (m)"] = df_raw[col_z1]
+            else: missing_cols.append("Elev Awal")
+            
+            # 5. Elev Akhir
+            col_z2 = find_col("elevakhir", df_raw.columns) or find_col("invertend", df_raw.columns)
+            if col_z2: mapped_data["Elev Akhir (m)"] = df_raw[col_z2]
+            else: missing_cols.append("Elev Akhir")
+            
+            # 6. Lebar b
+            col_b = find_col("lebar", df_raw.columns) or find_col("width", df_raw.columns) or find_col("b", df_raw.columns)
+            if col_b: mapped_data["Lebar b (m)"] = df_raw[col_b]
+            else: missing_cols.append("Lebar b")
+            
+            # 7. Talud m
+            col_m = find_col("talud", df_raw.columns) or find_col("slope", df_raw.columns) or find_col("z", df_raw.columns)
+            if col_m: mapped_data["Talud m"] = df_raw[col_m]
+            else: missing_cols.append("Talud m")
+            
+            # 8. Kekasaran n
+            col_n = find_col("kekasaran", df_raw.columns) or find_col("manning", df_raw.columns) or find_col("n", df_raw.columns)
+            if col_n: mapped_data["Kekasaran n"] = df_raw[col_n]
+            else: missing_cols.append("Kekasaran n")
+
+            if not missing_cols:
+                if st.button("✅ Load Data Excel (Smart Match)"):
+                    # Buat DataFrame baru yang bersih
+                    new_df = pd.DataFrame(mapped_data)
+                    # Pastikan urutan kolom sesuai standar
+                    new_df = new_df[REQUIRED_COLS] 
+                    st.session_state['df_segments_sta'] = new_df
+                    st.success("Data berhasil masuk! Struktur disesuaikan otomatis.")
                     st.rerun()
             else:
-                st.error(f"Kolom Kurang: {missing}")
-        except Exception as e: st.error(f"Error: {e}")
+                st.warning(f"Gagal mencocokkan kolom: {', '.join(missing_cols)}")
+                st.caption("Tips: Pastikan nama kolom di Excel mirip dengan template (misal: 'Lebar b', 'Talud', 'Kekasaran n').")
+                
+        except Exception as e: st.error(f"Error baca file: {e}")
         
     if st.button("🔄 Reset Data Default", use_container_width=True):
         st.session_state['df_segments_sta'] = reset_data()
@@ -213,7 +248,6 @@ if len(edited_df) > 0:
             S = (z1 - z2) / L
             Q = st.session_state['q_global']
             
-            # Hydraulics
             yn = solve_manning_y(Q, n, b, S, m)
             yc = solve_critical_y(Q, b, m)
             
@@ -228,7 +262,6 @@ if len(edited_df) > 0:
             EGL = (z2 + yn) + Vel_Head
             EG_Slope = (n * V)**2 / (R**(4/3)) if R>0 else 0
             
-            # Conclusion Logic
             status = "SUPERKRITIS" if Fr > 1.1 else ("SUBKRITIS" if Fr < 0.9 else "KRITIS")
             note = status
             if V > 3.0: note += " (Erosi!)"
