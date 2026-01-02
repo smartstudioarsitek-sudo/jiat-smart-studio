@@ -11,17 +11,11 @@ st.set_page_config(page_title="Smart HEC-RAS Lite", layout="wide", page_icon="�
 st.markdown("""
 <style>
     .header-box {
-        padding: 25px; background: linear-gradient(90deg, #0d47a1, #1976d2); 
-        color: white; border-radius: 12px; text-align: center; margin-bottom: 25px;
+        padding: 20px; background: linear-gradient(90deg, #1e3c72, #2a5298); 
+        color: white; border-radius: 8px; text-align: center; margin-bottom: 20px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    .metric-card {
-        background-color: #f8f9fa; border-left: 5px solid #2196f3; padding: 15px; 
-        border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 10px;
-    }
-    .metric-value { font-size: 18px; font-weight: bold; color: #0d47a1; }
-    .metric-label { font-size: 12px; color: #666; }
-    
+    .stDataFrame { font-size: 12px; font-family: 'Arial', sans-serif; }
     @media print {
         .stSidebar, header, footer, .stFileUploader, .stButton { display: none !important; }
         .block-container { padding-top: 0 !important; }
@@ -29,11 +23,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- ENGINE HIDROLIKA ---
+# --- ENGINE HIDROLIKA (ROBUST) ---
 def solve_manning_y(Q, n, b, S, m):
     if S <= 0: return 0.001
     y = 0.5
-    for _ in range(30):
+    for _ in range(50):
         try:
             A = (b + m*y) * y
             P = b + 2*y * np.sqrt(1 + m**2)
@@ -57,7 +51,7 @@ def solve_manning_y(Q, n, b, S, m):
 def solve_critical_y(Q, b, m):
     g = 9.81
     y = 0.5
-    for _ in range(30):
+    for _ in range(50):
         try:
             A = (b + m*y) * y
             T = b + 2*m*y
@@ -71,22 +65,11 @@ def solve_critical_y(Q, b, m):
             df = (f_d - f) / dy
             if df == 0: break
             y_new = y - f/df
-            if y_new > 50.0: y_new = 50.0 
+            if y_new > 50.0: y_new = 50.0 # Safety Cap
             if abs(y_new - y) < 0.0001: return abs(y_new)
             y = abs(y_new)
         except: return 0.001
     return y
-
-def generate_recommendations(V, Fr, n):
-    recs = []
-    if V > 10.0: recs.append("⚠️ **BAHAYA KAVITASI!** V > 10 m/s. Wajib Beton Mutu Tinggi (K-350+) & Aerator.")
-    elif V > 3.0:
-        if n > 0.020: recs.append("⚠️ **Risiko Erosi!** Material kasar tidak tahan V > 3 m/s. Ganti Lining Beton.")
-        else: recs.append("ℹ️ Gunakan Beton Mutu K-225 atau lebih.")
-    elif V < 0.6: recs.append("⚠️ **Risiko Endapan.** V < 0.6 m/s. Cek elevasi akhir.")
-    if Fr > 1.0: recs.append("🌊 **Superkritis.** Wajib Kolam Olak di hilir segmen ini.")
-    else: recs.append("✅ Subkritis. Aman.")
-    return recs
 
 # --- INIT STATE ---
 if 'df_segments_sta' not in st.session_state:
@@ -103,258 +86,232 @@ if 'q_global' not in st.session_state: st.session_state['q_global'] = 0.24
 # --- UI UTAMA ---
 st.markdown("""
 <div class="header-box">
-    <h1 style="margin:0; font-size: 36px;">🌊 Smart HEC-RAS Lite</h1>
-    <p style="margin-top:5px; font-size: 16px; opacity: 0.9;">Mode Stationing (STA) Input</p>
+    <h1 style="margin:0; font-size: 32px;">🌊 Smart HEC-RAS Lite</h1>
+    <p style="margin-top:5px; font-size: 14px; opacity: 0.8;">Steady Flow Analysis & Profile Plot</p>
 </div>
 """, unsafe_allow_html=True)
 
 # === SIDEBAR ===
 with st.sidebar:
-    st.header("⚙️ Parameter Global")
-    st.session_state['q_global'] = st.number_input("Debit Desain (Q) m³/s", 0.001, 50.0, st.session_state['q_global'], 0.01)
+    st.header("⚙️ Plan Data")
+    st.session_state['q_global'] = st.number_input("Flow (Q) m³/s", 0.001, 100.0, st.session_state['q_global'], 0.01)
     
     st.divider()
+    st.subheader("👁️ Plot Options")
+    use_manual_zoom = st.checkbox("Manual Scaling", value=False)
     
-    # KONTROL ZOOM (FEATURE REQUESTED)
-    st.subheader("🎨 Kontrol Grafik")
-    use_manual_zoom = st.checkbox("Aktifkan Skala Manual", value=False)
-    
-    c_x1, c_x2 = st.columns(2)
-    with c_x1: x_min_manual = st.number_input("STA Awal", value=0.0)
-    with c_x2: x_max_manual = st.number_input("STA Akhir", value=150.0)
-    
-    c_y1, c_y2 = st.columns(2)
-    with c_y1: y_min_manual = st.number_input("Min Elev", value=315.0)
-    with c_y2: y_max_manual = st.number_input("Max Elev", value=330.0)
-    
-    st.caption("Centang 'Aktifkan Skala Manual' untuk menggunakan nilai di atas.")
+    if use_manual_zoom:
+        c1, c2 = st.columns(2)
+        with c1: y_min = st.number_input("Min Elev", 0.0, 1000.0, 318.0)
+        with c2: y_max = st.number_input("Max Elev", 0.0, 1000.0, 330.0)
     
     st.divider()
-    
-    # INPUT EXCEL
-    st.subheader("📥 Input dari Excel")
+    st.subheader("📥 Excel Import")
     cols_excel = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
-    df_template = pd.DataFrame([["Saluran A", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=cols_excel)
     
-    buffer_template = io.BytesIO()
-    with pd.ExcelWriter(buffer_template, engine='openpyxl') as writer:
-        df_template.to_excel(writer, index=False, sheet_name='Template Input')
-    st.download_button("📄 Download Template Excel", buffer_template.getvalue(), "Template_HECRAS_STA.xlsx", "application/vnd.ms-excel")
+    # Template
+    df_temp = pd.DataFrame([["Reach-1", 0, 50, 100, 99.5, 1.0, 1.0, 0.017]], columns=cols_excel)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as writer: df_temp.to_excel(writer, index=False)
+    st.download_button("📄 Template Excel", buf.getvalue(), "HECRAS_Template.xlsx")
     
-    uploaded_excel = st.file_uploader("Upload File Excel (.xlsx)", type=['xlsx'])
-    if uploaded_excel is not None:
+    up_file = st.file_uploader("Upload .xlsx", type=['xlsx'])
+    if up_file:
         try:
-            df_uploaded = pd.read_excel(uploaded_excel)
-            if all(col in df_uploaded.columns for col in cols_excel):
-                if st.button("✅ Load Data Excel"):
-                    st.session_state['df_segments_sta'] = df_uploaded[cols_excel]
-                    st.success("Data loaded!")
+            df_up = pd.read_excel(up_file)
+            if all(c in df_up.columns for c in cols_excel):
+                if st.button("Load Excel Data"):
+                    st.session_state['df_segments_sta'] = df_up[cols_excel]
                     st.rerun()
-            else: st.error("Kolom Excel tidak sesuai template.")
-        except Exception as e: st.error(f"Error: {e}")
+            else: st.error("Kolom tidak sesuai template.")
+        except: st.error("File error.")
 
-    # BACKUP
-    st.divider()
-    st.subheader("💾 Backup Data")
-    project_data = {'q': st.session_state['q_global'], 'segments': st.session_state['df_segments_sta'].to_dict(orient='records')}
-    st.download_button("Simpan (.json)", json.dumps(project_data, indent=2), "backup_sta.json", "application/json")
-    
-    up_json = st.file_uploader("Restore (.json)", type=['json'])
-    if up_json:
-        try:
-            loaded = json.load(up_json)
-            st.session_state['q_global'] = loaded['q']
-            st.session_state['df_segments_sta'] = pd.DataFrame(loaded['segments'])
-            st.success("Restored!")
-            st.rerun()
-        except: pass
+# === MAIN CONTENT ===
+# Tab Layout
+tab_input, tab_plot, tab_table = st.tabs(["📝 Geometry Data", "📈 Profile Plot (HEC-RAS Style)", "📋 Output Table"])
 
-# === MAIN TABS ===
-tab1, tab2, tab3 = st.tabs(["📝 Input Stationing (STA)", "📉 Profil Memanjang", "🔍 Detail & Rekomendasi"])
-
-with tab1:
-    st.subheader("1. Tabel Geometri & Stationing")
-    edited_df = st.data_editor(
-        st.session_state['df_segments_sta'],
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "STA Awal (m)": st.column_config.NumberColumn(format="%.1f", required=True),
-            "STA Akhir (m)": st.column_config.NumberColumn(format="%.1f", required=True),
-            "Elev Awal (m)": st.column_config.NumberColumn(format="%.2f m", required=True),
-            "Elev Akhir (m)": st.column_config.NumberColumn(format="%.2f m", required=True),
-        }
-    )
+# --- TAB 1: INPUT ---
+with tab_input:
+    st.subheader("Geometric Data Editor")
+    edited_df = st.data_editor(st.session_state['df_segments_sta'], num_rows="dynamic", use_container_width=True)
     st.session_state['df_segments_sta'] = edited_df
     
+    # --- CALCULATION CORE ---
     if len(edited_df) > 0:
         results = []
-        min_bed_plot = 9999
-        max_water_plot = -9999
+        plot_data = []
         
-        for idx, row in edited_df.iterrows():
+        # Sort by STA Awal just in case
+        calc_df = edited_df.sort_values(by="STA Awal (m)")
+        
+        for idx, row in calc_df.iterrows():
             try:
-                sta_start = float(row['STA Awal (m)'])
-                sta_end = float(row['STA Akhir (m)'])
-                Z1, Z2 = float(row['Elev Awal (m)']), float(row['Elev Akhir (m)'])
-                b, m, n = float(row['Lebar b (m)']), float(row['Talud m']), float(row['Kekasaran n'])
-            except: continue 
+                sta1, sta2 = row['STA Awal (m)'], row['STA Akhir (m)']
+                z1, z2 = row['Elev Awal (m)'], row['Elev Akhir (m)']
+                b, m, n = row['Lebar b (m)'], row['Talud m'], row['Kekasaran n']
+            except: continue
             
-            L = sta_end - sta_start
+            L = sta2 - sta1
             if L <= 0: continue
+            
+            S = (z1 - z2) / L
+            Q = st.session_state['q_global']
+            
+            # 1. Hydraulic Depth
+            yn = solve_manning_y(Q, n, b, S, m)
+            yc = solve_critical_y(Q, b, m)
+            
+            # 2. Hydraulic Properties
+            A = (b + m*yn) * yn
+            P = b + 2*yn * np.sqrt(1 + m**2)
+            R = A/P if P > 0 else 0
+            TopW = b + 2*m*yn
+            V = Q/A if A > 0 else 0
+            Fr = V / np.sqrt(9.81 * (A/TopW)) if TopW > 0 else 0
+            
+            # 3. Energy Grade
+            Vel_Head = (V**2) / (2*9.81)
+            EGL = (z2 + yn) + Vel_Head # Calculated at downstream end
+            EG_Slope = (n * V)**2 / (R**(4/3)) if R>0 else 0 # Friction Slope
+            
+            # Store Result for Table (Downstream Node)
+            results.append({
+                "Reach": "Main Channel",
+                "River Sta": sta2, # Reporting at End Station
+                "Profile": "PF 1",
+                "Q Total": Q,
+                "Min Ch El": z2,
+                "W.S. Elev": z2 + yn,
+                "Crit W.S.": z2 + yc,
+                "E.G. Elev": EGL,
+                "E.G. Slope": S, # Using Bed Slope as approx for Normal Depth assumption
+                "Vel Chnl": V,
+                "Flow Area": A,
+                "Top Width": TopW,
+                "Froude # Chl": Fr
+            })
+            
+            # Store Data for Plotting (Start & End points)
+            # Upstream Point
+            ws1 = z1 + yn
+            egl1 = z1 + yn + Vel_Head
+            crit1 = z1 + yc
+            
+            # Downstream Point
+            ws2 = z2 + yn
+            egl2 = z2 + yn + Vel_Head
+            crit2 = z2 + yc
+            
+            plot_data.append({
+                'x': [sta1, sta2],
+                'bed': [z1, z2],
+                'ws': [ws1, ws2],
+                'egl': [egl1, egl2],
+                'crit': [crit1, crit2],
+                'name': row['Nama Segmen']
+            })
+            
+        st.session_state['hec_results'] = results
+        st.session_state['plot_data'] = plot_data
 
-            dH = Z1 - Z2
-            S = dH / L 
-            
-            yn = solve_manning_y(st.session_state['q_global'], n, b, S, m)
-            yc = solve_critical_y(st.session_state['q_global'], b, m)
-            V = st.session_state['q_global'] / ((b + m*yn)*yn) if yn > 0 else 0
-            Fr = V / np.sqrt(9.81 * (((b+m*yn)*yn)/(b+2*m*yn))) if yn > 0 else 0
-            status = "SUPER-KRITIS" if yn < yc else "SUB-KRITIS"
-            
-            min_bed_plot = min(min_bed_plot, Z2)
-            max_water_plot = max(max_water_plot, Z1 + yn)
-            
-            p_start = {'x': sta_start, 'z_bed': Z1, 'z_water': Z1 + yn, 'z_crit': Z1 + yc}
-            p_end = {'x': sta_end, 'z_bed': Z2, 'z_water': Z2 + yn, 'z_crit': Z2 + yc}
-            
-            results.append({'data': row, 'calc': {'L': L, 'S': S, 'dH': dH, 'yn': yn, 'yc': yc, 'V': V, 'Fr': Fr, 'status': status}, 'plot': [p_start, p_end]})
-            
-        st.session_state['calc_results_sta'] = results
-        st.session_state['plot_limits'] = (min_bed_plot, max_water_plot)
-        if len(results) > 0: st.success(f"✅ Berhasil menghitung {len(results)} segmen!")
-
-with tab2:
-    st.subheader("2. Profil Memanjang (Long Section)")
-    if 'calc_results_sta' in st.session_state:
-        res = st.session_state['calc_results_sta']
-        fig, ax = plt.subplots(figsize=(14, 7))
+# --- TAB 2: HEC-RAS STYLE PLOT ---
+with tab_plot:
+    if 'plot_data' in st.session_state:
+        pdata = st.session_state['plot_data']
         
-        for i, r in enumerate(res):
-            pts = r['plot']
-            x = [pts[0]['x'], pts[1]['x']]
-            z_bed = [pts[0]['z_bed'], pts[1]['z_bed']]
-            z_water = [pts[0]['z_water'], pts[1]['z_water']]
-            z_crit = [pts[0]['z_crit'], pts[1]['z_crit']]
+        # Setup Figure
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.set_facecolor('white') # HEC-RAS default background
+        
+        # Iterasi Gambar
+        for i, p in enumerate(pdata):
+            x = p['x']
+            bed = p['bed']
+            ws = p['ws']
+            egl = p['egl']
+            crit = p['crit']
             
-            ax.plot(x, z_bed, 'k-', linewidth=2.5)
-            ax.plot(x, z_water, 'b-', linewidth=2)
-            if z_crit[0] < z_water[0] + 5: ax.plot(x, z_crit, 'r--', linewidth=1, alpha=0.6)
-            ax.fill_between(x, z_bed, z_water, color='cyan', alpha=0.3)
+            # 1. BED (Black Line)
+            ax.plot(x, bed, color='black', linewidth=2, label='Ground' if i==0 else "")
             
-            mid_x, mid_y = (x[0] + x[1]) / 2, (z_bed[0] + z_bed[1]) / 2
-            ax.text(mid_x, mid_y, str(r['data']['Nama Segmen']), ha='center', va='top', fontsize=8, bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+            # 2. WATER (Cyan Fill & Blue Line)
+            ax.plot(x, ws, color='blue', linewidth=1, label='WS' if i==0 else "")
+            ax.fill_between(x, bed, ws, color='#00FFFF', alpha=1.0) # HEC-RAS Cyan
             
-            # GAMBAR TERJUNAN
+            # 3. CRIT (Red Dashed)
+            # Filter error values for display
+            if crit[0] < ws[0] + 10:
+                ax.plot(x, crit, color='red', linestyle='--', linewidth=1, label='Crit' if i==0 else "")
+            
+            # 4. EGL (Green Dashed)
+            ax.plot(x, egl, color='green', linestyle='--', linewidth=1, label='EG' if i==0 else "")
+            
+            # Label Segmen
+            mid_x = np.mean(x)
+            mid_y = np.mean(bed)
+            ax.text(mid_x, mid_y, p['name'], fontsize=7, ha='center', va='top', bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+
+            # Drop Lines (Vertical Connection)
             if i > 0:
-                prev_end = res[i-1]['plot'][1]
-                curr_start = r['plot'][0]
-                if abs(prev_end['x'] - curr_start['x']) < 0.1: 
-                    if abs(prev_end['z_bed'] - curr_start['z_bed']) > 0.05:
-                        ax.plot([curr_start['x'], curr_start['x']], [prev_end['z_bed'], curr_start['z_bed']], color='gray', linestyle='--', linewidth=1.5)
-                        drop_h = prev_end['z_bed'] - curr_start['z_bed']
-                        if drop_h > 0: 
-                            # Label Drop dengan Elevasi
-                            ax.text(curr_start['x'], (prev_end['z_bed'] + curr_start['z_bed'])/2, 
-                                    f" Drop {drop_h:.2f}m\n ({prev_end['z_bed']:.2f}→{curr_start['z_bed']:.2f})", 
-                                    ha='left', va='center', fontsize=7, color='brown', fontweight='bold')
+                prev = pdata[i-1]
+                if abs(prev['x'][1] - x[0]) < 0.1: # Connected
+                    if abs(prev['bed'][1] - bed[0]) > 0.05:
+                         ax.plot([x[0], x[0]], [prev['bed'][1], bed[0]], color='gray', linestyle=':')
 
+        # Formatting
+        ax.set_xlabel("Main Channel Distance (m)", fontweight='bold')
+        ax.set_ylabel("Elevation (m)", fontweight='bold')
+        ax.set_title("Profile Plot", fontweight='bold')
+        ax.grid(True, which='both', linestyle=':', linewidth=0.5, color='gray')
+        
+        # Manual Zoom Logic
         if use_manual_zoom:
-            ax.set_xlim(left=x_min_manual, right=x_max_manual)
-            ax.set_ylim(bottom=y_min_manual, top=y_max_manual)
-        else:
-            min_z, max_z = st.session_state.get('plot_limits', (0, 10))
-            buffer = (max_z - min_z) * 0.5 
-            if buffer == 0: buffer = 1.0
-            ax.set_ylim(bottom=min_z - buffer*0.2, top=max_z + buffer)
-
+            ax.set_ylim(y_min, y_max)
+        
+        # Legend (Custom)
         from matplotlib.lines import Line2D
-        legend_elements = [
-            Line2D([0], [0], color='k', lw=2, label='Dasar Saluran'),
-            Line2D([0], [0], color='b', lw=2, label='Muka Air (NDL)'),
-            Line2D([0], [0], color='r', lw=1, linestyle='--', label='Kritis (CDL)'),
-            Line2D([0], [0], color='gray', lw=1.5, linestyle='--', label='Bangunan Terjun')
+        custom_lines = [
+            Line2D([0], [0], color='green', linestyle='--', lw=1),
+            Line2D([0], [0], color='blue', lw=1),
+            Line2D([0], [0], color='red', linestyle='--', lw=1),
+            Line2D([0], [0], color='black', lw=2),
         ]
-        ax.legend(handles=legend_elements, loc='upper right')
-        ax.set_xlabel("Stationing (m)"); ax.set_ylabel("Elevasi (m)"); ax.grid(True, linestyle=':', alpha=0.5); ax.set_title("Profil Aliran Berdasarkan STA")
+        ax.legend(custom_lines, ['EG', 'WS', 'Crit', 'Ground'], loc='upper right', frameon=True, edgecolor='black')
+        
         st.pyplot(fig)
 
-with tab3:
-    st.subheader("3. Detail & Rekomendasi")
-    if 'calc_results_sta' in st.session_state:
-        res = st.session_state['calc_results_sta']
-        nama_list = [str(r['data']['Nama Segmen']) for r in res]
-        pilih = st.selectbox("Pilih Segmen:", nama_list)
-        selected = next(item for item in res if str(item['data']['Nama Segmen']) == pilih)
-        c, d = selected['calc'], selected['data']
+# --- TAB 3: HEC-RAS STYLE TABLE ---
+with tab_table:
+    if 'hec_results' in st.session_state:
+        res = st.session_state['hec_results']
         
-        # --- KOTAK INFO ELEVASI (BARU) ---
-        st.markdown("#### 📐 Data Elevasi Penting")
-        ec1, ec2, ec3, ec4 = st.columns(4)
-        with ec1:
-            st.markdown(f"<div class='metric-card'><div class='metric-label'>Elv Dasar Hulu</div><div class='metric-value'>{d['Elev Awal (m)']:.2f} m</div></div>", unsafe_allow_html=True)
-        with ec2:
-            st.markdown(f"<div class='metric-card'><div class='metric-label'>Elv Dasar Hilir</div><div class='metric-value'>{d['Elev Akhir (m)']:.2f} m</div></div>", unsafe_allow_html=True)
-        with ec3:
-            elv_air_hulu = d['Elev Awal (m)'] + c['yn']
-            st.markdown(f"<div class='metric-card'><div class='metric-label'>Elv M.A.N (Hulu)</div><div class='metric-value'>{elv_air_hulu:.2f} m</div></div>", unsafe_allow_html=True)
-        with ec4:
-            elv_kritis_hulu = d['Elev Awal (m)'] + c['yc']
-            st.markdown(f"<div class='metric-card'><div class='metric-label'>Elv Kritis (Hulu)</div><div class='metric-value'>{elv_kritis_hulu:.2f} m</div></div>", unsafe_allow_html=True)
-
-        st.divider()
-
-        col1, col2 = st.columns([1, 1.5])
-        with col1:
-            st.markdown("#### ⚙️ Parameter Hidrolis")
-            st.metric("Panjang (L)", f"{c['L']:.1f} m", f"STA: {d['STA Awal (m)']} - {d['STA Akhir (m)']}")
-            st.metric("Kecepatan (V)", f"{c['V']:.2f} m/s", f"Fr: {c['Fr']:.2f}")
-            is_super = 'SUPER' in c['status']
-            st.metric("Status Aliran", c['status'], delta="- BAHAYA" if is_super else "+ AMAN")
-            
-            st.markdown("#### 💡 Saran Teknis")
-            for r in generate_recommendations(c['V'], c['Fr'], float(d['Kekasaran n'])): st.info(r)
+        # Create DataFrame
+        df_hec = pd.DataFrame(res)
         
-        with col2:
-            st.markdown("#### 🖼️ Cross Section")
-            b, m, yn = float(d['Lebar b (m)']), float(d['Talud m']), c['yn']
-            h_draw = max(yn * 1.5, 0.5) 
-            fig_cs, ax_cs = plt.subplots(figsize=(6, 3))
+        # Format Columns (Rounding)
+        cols_fmt = ["Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Top Width", "Froude # Chl"]
+        for c in cols_fmt:
+            if c in df_hec.columns:
+                df_hec[c] = df_hec[c].map('{:,.2f}'.format)
+        
+        # Display Table HEC-RAS Style
+        st.subheader("HEC-RAS Output Table")
+        st.dataframe(
+            df_hec, 
+            column_config={
+                "River Sta": st.column_config.NumberColumn(format="%.1f"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        # Export Buttons
+        c_ex1, c_ex2 = st.columns(2)
+        with c_ex1:
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+                df_hec.to_excel(writer, index=False, sheet_name='Profile Output Table')
+            st.download_button("💾 Export Table to Excel", buf.getvalue(), "HEC_RAS_Table.xlsx", "application/vnd.ms-excel", type="primary", use_container_width=True)
             
-            x_soil = [-m*h_draw, 0, b, b+m*h_draw]
-            y_soil = [h_draw, 0, 0, h_draw]
-            ax_cs.plot(x_soil, y_soil, 'k-', linewidth=2)
-            ax_cs.fill_between([-m*yn, 0, b, b+m*yn], [yn, 0, 0, yn], color='cyan', alpha=0.6)
-            
-            top_width = b + 2 * m * h_draw
-            center_x = b / 2
-            ax_cs.set_xlim(center_x - top_width/2 - 0.5, center_x + top_width/2 + 0.5)
-            ax_cs.set_ylim(0, h_draw * 1.2)
-            
-            if c['yc'] < h_draw * 2:
-                ax_cs.hlines(c['yc'], -m*c['yc'], b+m*c['yc'], colors='red', linestyles='--', label='Kritis')
-            else:
-                ax_cs.text(b/2, h_draw, "Garis Kritis > Tinggi Saluran", color='red', ha='center', fontsize=8)
-
-            ax_cs.legend(loc='upper right', fontsize='small'); ax_cs.set_aspect('equal')
-            st.pyplot(fig_cs)
-
-# === EXPORT ===
-st.divider()
-st.subheader("🖨️ Export Laporan")
-col_ex1, col_ex2 = st.columns(2)
-with col_ex1:
-    if 'calc_results_sta' in st.session_state and len(st.session_state['calc_results_sta']) > 0:
-        export_data = []
-        for r in st.session_state['calc_results_sta']:
-            row = r['data'].to_dict()
-            row.update(r['calc'])
-            export_data.append(row)
-        df_export = pd.DataFrame(export_data)
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_export.to_excel(writer, index=False, sheet_name='Data STA')
-        st.download_button("📊 Download Excel (.xlsx)", buffer.getvalue(), "Laporan_STA.xlsx", "application/vnd.ms-excel", type="primary", use_container_width=True)
-    else: st.button("📊 Download Excel", disabled=True, use_container_width=True)
-with col_ex2:
-    st.markdown("""<button onclick="window.print()" style="background-color: #4CAF50; border: none; color: white; padding: 10px 24px; text-align: center; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 8px; width: 100%; height: 42px; font-weight: bold;">🖨️ Cetak PDF (Print Page)</button>""", unsafe_allow_html=True)
+        with c_ex2:
+            st.markdown("""<button onclick="window.print()" style="width:100%; background:#4CAF50; color:white; border:none; padding:10px; border-radius:5px; font-weight:bold;">🖨️ Print Report</button>""", unsafe_allow_html=True)
