@@ -6,27 +6,18 @@ import json
 import io
 
 # --- CONFIG ---
-# Judul di Browser Tab diganti jadi Smart HEC-RAS Lite
 st.set_page_config(page_title="Smart HEC-RAS Lite", layout="wide", page_icon="🌊")
 
 st.markdown("""
 <style>
-    /* Header Box dengan Warna Biru HEC-RAS */
     .header-box {
-        padding: 25px; 
-        background: linear-gradient(90deg, #0d47a1, #1976d2); 
-        color: white;
-        border-radius: 12px; 
-        text-align: center; 
-        margin-bottom: 25px;
+        padding: 25px; background: linear-gradient(90deg, #0d47a1, #1976d2); 
+        color: white; border-radius: 12px; text-align: center; margin-bottom: 25px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     .metric-card {
         background-color: #e3f2fd; border-left: 5px solid #2196f3; padding: 10px; border-radius: 5px;
     }
-    .super-critical { color: red; font-weight: bold; }
-    .sub-critical { color: green; font-weight: bold; }
-    
     /* Hide Streamlit elements when printing */
     @media print {
         .stSidebar, header, footer, .stFileUploader, .stButton { display: none !important; }
@@ -35,20 +26,22 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- ENGINE HIDROLIKA (Manning & Critical Flow) ---
+# --- ENGINE HIDROLIKA ---
 def solve_manning_y(Q, n, b, S, m):
-    if S <= 0: return 0.001
+    if S <= 0: return 0.001 # Flat/Uphill flow
     y = 0.5
-    for _ in range(20):
+    for _ in range(30):
         A = (b + m*y) * y
         P = b + 2*y * np.sqrt(1 + m**2)
         R = A/P
         f = (1/n) * A * (R**(2/3)) * (S**0.5) - Q
+        
         dy = 0.001
         A_d = (b + m*(y+dy)) * (y+dy)
         P_d = b + 2*(y+dy) * np.sqrt(1 + m**2)
         R_d = A_d/P_d
         f_d = (1/n) * A_d * (R_d**(2/3)) * (S**0.5) - Q
+        
         df = (f_d - f) / dy
         if df == 0: break
         y_new = y - f/df
@@ -59,7 +52,7 @@ def solve_manning_y(Q, n, b, S, m):
 def solve_critical_y(Q, b, m):
     g = 9.81
     y = 0.5
-    for _ in range(20):
+    for _ in range(30):
         A = (b + m*y) * y
         T = b + 2*m*y
         if A <= 0: A = 0.01
@@ -81,31 +74,30 @@ def generate_recommendations(V, Fr, n):
     elif V > 3.0:
         if n > 0.020: recs.append("⚠️ **Risiko Erosi!** Material kasar tidak tahan V > 3 m/s. Ganti Lining Beton.")
         else: recs.append("ℹ️ Gunakan Beton Mutu K-225 atau lebih.")
-    elif V < 0.6: recs.append("⚠️ **Risiko Endapan.** V < 0.6 m/s. Perbesar slope.")
+    elif V < 0.6: recs.append("⚠️ **Risiko Endapan.** V < 0.6 m/s. Cek elevasi akhir.")
     
     if Fr > 1.0:
-        recs.append("🌊 **Superkritis.** Wajib Kolam Olak di hilir.")
-        if Fr > 4.5: recs.append("ℹ️ Froude Tinggi (>4.5). Gunakan Kolam Olak USBR III.")
+        recs.append("🌊 **Superkritis.** Wajib Kolam Olak di hilir segmen ini.")
     else: recs.append("✅ Subkritis. Aman.")
     return recs
 
 # --- INIT STATE ---
-if 'df_segments' not in st.session_state:
+if 'df_segments_v2' not in st.session_state:
+    # Format Baru: Elev Awal & Elev Akhir
     data = [
-        ["Segmen 1 (Hulu)", 200, 10, 1.5, 1.0, 0.017], 
-        ["Segmen 2 (Tengah)", 500, 25, 1.5, 0.5, 0.017], 
-        ["Segmen 3 (Hilir)", 300, 2, 2.0, 1.0, 0.025],   
+        ["Segmen 1 (Hulu)", 200, 100.0, 90.0, 1.5, 1.0, 0.017], # L=200, Turun 10m
+        ["Segmen 2 (Drop)", 50, 88.0, 85.0, 1.5, 0.5, 0.017],   # Ada terjunan 2m (90 -> 88)
+        ["Segmen 3 (Hilir)", 300, 85.0, 84.0, 2.0, 1.0, 0.025], # Landai
     ]
-    st.session_state['df_segments'] = pd.DataFrame(data, columns=["Nama Segmen", "Panjang L (m)", "Beda Tinggi dH (m)", "Lebar b (m)", "Talud m", "Kekasaran n"])
+    st.session_state['df_segments_v2'] = pd.DataFrame(data, columns=["Nama Segmen", "Panjang L (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"])
+    
 if 'q_global' not in st.session_state: st.session_state['q_global'] = 2.0
-if 'elev_start' not in st.session_state: st.session_state['elev_start'] = 100.0
 
 # --- UI UTAMA ---
-# JUDUL BARU SESUAI REQUEST
 st.markdown("""
 <div class="header-box">
     <h1 style="margin:0; font-size: 36px;">🌊 Smart HEC-RAS Lite</h1>
-    <p style="margin-top:5px; font-size: 16px; opacity: 0.9;">Simulasi Profil Hidrolis Menerus & Analisa Saluran Ekstrim</p>
+    <p style="margin-top:5px; font-size: 16px; opacity: 0.9;">Mode Elevasi Absolut (Cascade Modeling)</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -113,7 +105,6 @@ st.markdown("""
 with st.sidebar:
     st.header("⚙️ Parameter Global")
     st.session_state['q_global'] = st.number_input("Debit Desain (Q) m³/s", 0.1, 50.0, st.session_state['q_global'], 0.1)
-    st.session_state['elev_start'] = st.number_input("Elevasi Awal (m)", 0.0, 1000.0, st.session_state['elev_start'], 1.0)
     
     st.divider()
     
@@ -121,100 +112,166 @@ with st.sidebar:
     st.subheader("💾 Manajemen File")
     project_data = {
         'q': st.session_state['q_global'],
-        'elev': st.session_state['elev_start'],
-        'segments': st.session_state['df_segments'].to_dict(orient='records')
+        'segments': st.session_state['df_segments_v2'].to_dict(orient='records')
     }
     json_str = json.dumps(project_data, indent=2)
-    st.download_button("💾 Simpan Data (.json)", json_str, file_name="smart_hec_ras_data.json", mime="application/json")
+    st.download_button("💾 Simpan Data (.json)", json_str, file_name="hecras_lite_elev.json", mime="application/json")
     
     uploaded_json = st.file_uploader("Buka File Data", type=['json'])
     if uploaded_json is not None:
         try:
             loaded = json.load(uploaded_json)
             st.session_state['q_global'] = loaded['q']
-            st.session_state['elev_start'] = loaded['elev']
-            st.session_state['df_segments'] = pd.DataFrame(loaded['segments'])
+            st.session_state['df_segments_v2'] = pd.DataFrame(loaded['segments'])
             st.success("✅ Data Berhasil Dimuat!")
             st.rerun()
-        except: st.error("Format file salah.")
+        except: st.error("Format file salah/lama.")
 
     with st.expander("📘 Referensi Nilai n"):
         st.markdown("* Beton: 0.013-0.017\n* Batu: 0.025\n* Tanah: 0.030")
 
 # === MAIN TABS ===
-tab1, tab2, tab3 = st.tabs(["📝 Input Data", "📉 Profil Memanjang", "🔍 Detail & Rekomendasi"])
+tab1, tab2, tab3 = st.tabs(["📝 Input Elevasi", "📉 Profil Memanjang (Cascade)", "🔍 Detail & Rekomendasi"])
 
 with tab1:
-    st.subheader("1. Tabel Skema Saluran")
-    edited_df = st.data_editor(st.session_state['df_segments'], num_rows="dynamic", use_container_width=True)
-    st.session_state['df_segments'] = edited_df
+    st.subheader("1. Tabel Geometri & Elevasi")
+    st.caption("Masukkan Elevasi Awal dan Akhir per segmen sesuai gambar kerja (Long Section).")
+    
+    edited_df = st.data_editor(
+        st.session_state['df_segments_v2'],
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "Panjang L (m)": st.column_config.NumberColumn(format="%.1f m"),
+            "Elev Awal (m)": st.column_config.NumberColumn(format="%.2f m", required=True),
+            "Elev Akhir (m)": st.column_config.NumberColumn(format="%.2f m", required=True),
+        }
+    )
+    st.session_state['df_segments_v2'] = edited_df
     
     if len(edited_df) > 0:
         results = []
-        current_dist = 0
-        current_elev = st.session_state['elev_start']
+        cumulative_dist = 0
         
         for idx, row in edited_df.iterrows():
             try:
-                L, dH = float(row['Panjang L (m)']), float(row['Beda Tinggi dH (m)'])
+                L = float(row['Panjang L (m)'])
+                Z1 = float(row['Elev Awal (m)'])
+                Z2 = float(row['Elev Akhir (m)'])
                 b, m, n = float(row['Lebar b (m)']), float(row['Talud m']), float(row['Kekasaran n'])
             except: continue 
             
+            # Hitung Slope & dH otomatis
+            dH = Z1 - Z2
             S = dH / L if L > 0 else 0
+            
+            # Warning jika naik (uphill)
+            if S < 0: st.warning(f"⚠️ Segmen '{row['Nama Segmen']}' naik (Uphill)! Cek Elevasi Awal/Akhir.")
+            
+            # Hidrolika
             yn = solve_manning_y(st.session_state['q_global'], n, b, S, m)
             yc = solve_critical_y(st.session_state['q_global'], b, m)
-            status = "SUPER-KRITIS" if yn < yc else "SUB-KRITIS"
+            
             V = st.session_state['q_global'] / ((b + m*yn)*yn) if yn > 0 else 0
             Fr = V / np.sqrt(9.81 * (((b+m*yn)*yn)/(b+2*m*yn))) if yn > 0 else 0
+            status = "SUPER-KRITIS" if yn < yc else "SUB-KRITIS"
             
-            p_start = {'x': current_dist, 'z_bed': current_elev, 'z_water': current_elev + yn, 'z_crit': current_elev + yc}
-            current_dist += L
-            current_elev -= dH
-            p_end = {'x': current_dist, 'z_bed': current_elev, 'z_water': current_elev + yn, 'z_crit': current_elev + yc}
+            # Koordinat Plotting (X, Z)
+            # Start Point
+            p_start = {'x': cumulative_dist, 'z_bed': Z1, 'z_water': Z1 + yn, 'z_crit': Z1 + yc}
+            
+            cumulative_dist += L
+            
+            # End Point
+            p_end = {'x': cumulative_dist, 'z_bed': Z2, 'z_water': Z2 + yn, 'z_crit': Z2 + yc}
             
             results.append({
                 'data': row,
-                'calc': {'S': S, 'yn': yn, 'yc': yc, 'V': V, 'Fr': Fr, 'status': status},
+                'calc': {'S': S, 'dH': dH, 'yn': yn, 'yc': yc, 'V': V, 'Fr': Fr, 'status': status},
                 'plot': [p_start, p_end]
             })
-        st.session_state['calc_results'] = results
-        if len(results) > 0: st.success(f"✅ Berhasil menghitung {len(results)} segmen!")
+            
+        st.session_state['calc_results_v2'] = results
+        if len(results) > 0: st.success(f"✅ Berhasil menghitung {len(results)} segmen secara Absolut!")
 
 with tab2:
-    st.subheader("2. Profil Hidrolis Memanjang")
-    if 'calc_results' in st.session_state:
-        res = st.session_state['calc_results']
-        x_all, z_bed_all, z_water_all, z_crit_all = [], [], [], []
-        for r in res:
-            pts = r['plot']
-            x_all.extend([pts[0]['x'], pts[1]['x']])
-            z_bed_all.extend([pts[0]['z_bed'], pts[1]['z_bed']])
-            z_water_all.extend([pts[0]['z_water'], pts[1]['z_water']])
-            z_crit_all.extend([pts[0]['z_crit'], pts[1]['z_crit']])
+    st.subheader("2. Profil Memanjang (Long Section)")
+    if 'calc_results_v2' in st.session_state:
+        res = st.session_state['calc_results_v2']
         
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(x_all, z_bed_all, 'k-', linewidth=2, label='Dasar Saluran')
-        ax.plot(x_all, z_water_all, 'b-', linewidth=2, label='Muka Air (NDL)')
-        ax.plot(x_all, z_crit_all, 'r--', linewidth=1, label='Kritis (CDL)', alpha=0.7)
-        ax.fill_between(x_all, z_bed_all, z_water_all, color='cyan', alpha=0.3)
-        for r in res:
+        fig, ax = plt.subplots(figsize=(14, 7))
+        
+        # Plot Loop
+        for i, r in enumerate(res):
             pts = r['plot']
-            mid_x = (pts[0]['x'] + pts[1]['x']) / 2
-            mid_y = (pts[0]['z_bed'] + pts[1]['z_bed']) / 2
-            ax.text(mid_x, mid_y, str(r['data']['Nama Segmen']), ha='center', va='top', fontsize=8, bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
-        ax.set_xlabel("Jarak (m)"); ax.set_ylabel("Elevasi (m)"); ax.legend(); ax.grid(True, linestyle=':', alpha=0.5)
+            x = [pts[0]['x'], pts[1]['x']]
+            z_bed = [pts[0]['z_bed'], pts[1]['z_bed']]
+            z_water = [pts[0]['z_water'], pts[1]['z_water']]
+            z_crit = [pts[0]['z_crit'], pts[1]['z_crit']]
+            
+            # Plot Garis Utama
+            ax.plot(x, z_bed, 'k-', linewidth=2.5) # Dasar
+            ax.plot(x, z_water, 'b-', linewidth=2) # Air
+            ax.plot(x, z_crit, 'r--', linewidth=1, alpha=0.6) # Kritis
+            
+            # Fill Air
+            ax.fill_between(x, z_bed, z_water, color='cyan', alpha=0.3)
+            
+            # Label Segmen
+            mid_x = (x[0] + x[1]) / 2
+            mid_y = (z_bed[0] + z_bed[1]) / 2
+            ax.text(mid_x, mid_y, str(r['data']['Nama Segmen']), ha='center', va='top', fontsize=8, 
+                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+            
+            # GAMBAR TERJUNAN (VERTICAL DROP LINE)
+            # Cek hubungan dengan segmen sebelumnya
+            if i > 0:
+                prev_r = res[i-1]
+                prev_end = prev_r['plot'][1]
+                curr_start = r['plot'][0]
+                
+                # Jika ada beda tinggi di titik sambungan (X sama, Z beda)
+                if abs(prev_end['z_bed'] - curr_start['z_bed']) > 0.05:
+                    # Gambar garis putus-putus vertikal (Struktur Terjun)
+                    ax.plot([curr_start['x'], curr_start['x']], 
+                            [prev_end['z_bed'], curr_start['z_bed']], 
+                            color='gray', linestyle='--', linewidth=1.5, label='Bangunan Terjun' if i==1 else "")
+                    
+                    # Label Tinggi Terjun
+                    drop_h = prev_end['z_bed'] - curr_start['z_bed']
+                    if drop_h > 0:
+                        ax.text(curr_start['x'], (prev_end['z_bed'] + curr_start['z_bed'])/2, 
+                                f" Drop\n{drop_h:.2f}m", ha='left', va='center', fontsize=7, color='brown')
+
+        # Legend Manual satu kali saja
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], color='k', lw=2, label='Dasar Saluran'),
+            Line2D([0], [0], color='b', lw=2, label='Muka Air (NDL)'),
+            Line2D([0], [0], color='r', lw=1, linestyle='--', label='Kritis (CDL)'),
+            Line2D([0], [0], color='gray', lw=1.5, linestyle='--', label='Bangunan Terjun'),
+        ]
+        ax.legend(handles=legend_elements)
+        
+        ax.set_xlabel("Jarak Kumulatif (m)")
+        ax.set_ylabel("Elevasi (m)")
+        ax.grid(True, linestyle=':', alpha=0.5)
+        ax.set_title("Profil Aliran dengan Bangunan Terjun (Cascade)")
+        
         st.pyplot(fig)
+        st.info("ℹ️ Garis abu-abu putus-putus menandakan adanya **Bangunan Terjun** (Perbedaan Elevasi antar segmen).")
 
 with tab3:
     st.subheader("3. Detail & Rekomendasi")
-    if 'calc_results' in st.session_state:
-        res = st.session_state['calc_results']
+    if 'calc_results_v2' in st.session_state:
+        res = st.session_state['calc_results_v2']
         nama_list = [str(r['data']['Nama Segmen']) for r in res]
         pilih = st.selectbox("Pilih Segmen:", nama_list)
         selected = next(item for item in res if str(item['data']['Nama Segmen']) == pilih)
         c, d = selected['calc'], selected['data']
         col1, col2 = st.columns([1, 1.5])
         with col1:
+            st.metric("Slope (S)", f"{c['S']*100:.3f} %", f"dH: {c['dH']:.2f} m")
             st.metric("Kecepatan (V)", f"{c['V']:.2f} m/s", f"Fr: {c['Fr']:.2f}")
             is_super = 'SUPER' in c['status']
             st.metric("Status Aliran", c['status'], delta="- BAHAYA" if is_super else "+ AMAN")
@@ -238,20 +295,17 @@ st.subheader("🖨️ Export Laporan")
 col_ex1, col_ex2 = st.columns(2)
 
 with col_ex1:
-    if 'calc_results' in st.session_state and len(st.session_state['calc_results']) > 0:
+    if 'calc_results_v2' in st.session_state and len(st.session_state['calc_results_v2']) > 0:
         export_data = []
-        for r in st.session_state['calc_results']:
+        for r in st.session_state['calc_results_v2']:
             row = r['data'].to_dict()
             row.update(r['calc'])
             export_data.append(row)
         df_export = pd.DataFrame(export_data)
         buffer = io.BytesIO()
-        
-        # FIX: Gunakan engine openpyxl agar tidak error ModuleNotFoundError
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_export.to_excel(writer, index=False, sheet_name='Smart HEC-RAS Lite')
-            
-        st.download_button("📊 Download Excel (.xlsx)", buffer.getvalue(), "Laporan_Smart_HEC_RAS.xlsx", "application/vnd.ms-excel", type="primary", use_container_width=True)
+            df_export.to_excel(writer, index=False, sheet_name='HEC-RAS Lite Data')
+        st.download_button("📊 Download Excel (.xlsx)", buffer.getvalue(), "Laporan_Elevasi.xlsx", "application/vnd.ms-excel", type="primary", use_container_width=True)
     else:
         st.button("📊 Download Excel", disabled=True, use_container_width=True)
 
