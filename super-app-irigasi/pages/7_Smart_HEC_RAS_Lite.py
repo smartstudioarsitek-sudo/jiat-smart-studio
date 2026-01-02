@@ -25,78 +25,55 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- ENGINE HIDROLIKA (SUDAH DIPERBAIKI) ---
+# --- ENGINE HIDROLIKA (ULTRA STABLE) ---
 def solve_manning_y(Q, n, b, S, m):
     if S <= 0: return 0.001
-    y = 0.5
+    # Bisection Method for Manning (Sangat Stabil)
+    y_low = 0.001
+    y_high = 20.0 # Batas atas logis
     for _ in range(50):
-        try:
-            A = (b + m*y) * y
-            P = b + 2*y * np.sqrt(1 + m**2)
-            if A <= 0 or P <= 0: 
-                y = 0.01; continue
-            R = A/P
-            f = (1/n) * A * (R**(2/3)) * (S**0.5) - Q
-            
-            # Derivative numerical
-            dy = 0.0001
-            A_d = (b + m*(y+dy)) * (y+dy)
-            P_d = b + 2*(y+dy) * np.sqrt(1 + m**2)
-            R_d = A_d/P_d
-            f_d = (1/n) * A_d * (R_d**(2/3)) * (S**0.5) - Q
-            df = (f_d - f) / dy
-            
-            if df == 0: break
-            y_new = y - f/df
-            
-            # Safety
-            if y_new <= 0: y_new = 0.001
-            if y_new > 20: y_new = 20 # Batas atas logis
-            
-            if abs(y_new - y) < 0.0001: return y_new
-            y = y_new
-        except: return 0.001
-    return y
+        y_mid = (y_low + y_high) / 2
+        A = (b + m*y_mid) * y_mid
+        P = b + 2*y_mid * np.sqrt(1 + m**2)
+        R = A/P if P > 0 else 0
+        Q_calc = (1/n) * A * (R**(2/3)) * (S**0.5)
+        
+        if abs(Q_calc - Q) < 0.001: return y_mid
+        if Q_calc < Q: y_low = y_mid
+        else: y_high = y_mid
+    return (y_low + y_high) / 2
 
 def solve_critical_y(Q, b, m):
-    # Froude = 1 -> Q^2*T / g*A^3 = 1
     g = 9.81
-    y = 0.5 # Tebakan awal
+    # Bisection Method for Critical Depth (Anti-Explosion)
+    # Froude = 1 -> Q^2*T / g*A^3 = 1
+    y_low = 0.001
+    y_high = 10.0 # Batas atas logis
+    
     for _ in range(50):
-        try:
-            A = (b + m*y) * y
-            T = b + 2*m*y
-            if A <= 0.001: A = 0.001
+        y_mid = (y_low + y_high) / 2
+        A = (b + m*y_mid) * y_mid
+        T = b + 2*m*y_mid
+        
+        if A <= 0: val = 0
+        else: val = (Q**2 * T) / (g * A**3)
+        
+        if abs(val - 1.0) < 0.01: return y_mid
+        if val > 1.0: # Aliran Superkritis (y terlalu kecil)
+            y_low = y_mid
+        else: # Aliran Subkritis (y terlalu besar)
+            y_high = y_mid
             
-            f = (Q**2 * T) / (g * A**3) - 1
-            
-            dy = 0.0001
-            A_d = (b + m*(y+dy)) * (y+dy)
-            T_d = b + 2*m*(y+dy)
-            f_d = (Q**2 * T_d) / (g * A_d**3) - 1
-            df = (f_d - f) / dy
-            
-            if df == 0: break
-            y_new = y - f/df
-            
-            # --- PENJAGA GAWANG (BUG FIX) ---
-            # Agar tidak meledak ke 1400 meter
-            if y_new <= 0: y_new = 0.01
-            if y_new > 10.0: y_new = 5.0 # Reset ke angka wajar jika meledak
-            
-            if abs(y_new - y) < 0.0001: return y_new
-            y = y_new
-        except: return 0.5
-    return y
+    return (y_low + y_high) / 2
 
 # --- 1. INISIALISASI ---
 REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
 
 def reset_data():
     data = [
-        ["Saluran 1", 0.0, 64.0, 325.54, 323.00, 0.6, 1.0, 0.017],
-        ["Saluran 2", 64.0, 114.0, 322.00, 321.00, 0.6, 1.0, 0.017],
-        ["Saluran 3", 114.0, 142.0, 320.00, 319.00, 0.6, 1.0, 0.017],
+        ["S1", 0.0, 50.0, 325.54, 324.95, 0.6, 1.0, 0.017],
+        ["S2", 50.0, 64.0, 324.95, 323.54, 0.6, 1.0, 0.017],
+        ["S3", 64.0, 114.0, 321.47, 321.21, 0.6, 1.0, 0.017],
     ]
     return pd.DataFrame(data, columns=REQUIRED_COLS)
 
@@ -105,7 +82,7 @@ if 'df_segments_sta' not in st.session_state:
 
 if 'q_global' not in st.session_state: st.session_state['q_global'] = 0.24
 
-# --- 2. SIDEBAR ---
+# --- 2. HEADER & SIDEBAR ---
 st.markdown("""
 <div class="header-box">
     <h1 style="margin:0; font-size: 32px;">🌊 Smart HEC-RAS Lite</h1>
@@ -140,16 +117,17 @@ with st.sidebar:
     use_manual_zoom = st.checkbox("Manual Scaling", value=False)
     if use_manual_zoom:
         c1, c2 = st.columns(2)
-        with c1: y_min = st.number_input("Min Elev", 0.0, 1000.0, 318.0)
+        with c1: y_min = st.number_input("Min Elev", 0.0, 1000.0, 310.0)
         with c2: y_max = st.number_input("Max Elev", 0.0, 1000.0, 330.0)
     
     st.divider()
-    st.subheader("📥 Excel Import")
     
-    df_temp = pd.DataFrame([["Saluran 1", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=REQUIRED_COLS)
+    # EXCEL IMPORT
+    st.subheader("📥 Excel Import")
+    df_temp = pd.DataFrame([["S1", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=REQUIRED_COLS)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer: df_temp.to_excel(writer, index=False)
-    st.download_button("📄 Download Template Excel", buf.getvalue(), "Template_HECRAS.xlsx")
+    st.download_button("📄 Template Excel", buf.getvalue(), "Template_HECRAS.xlsx")
     
     up_file = st.file_uploader("Upload Excel (.xlsx)", type=['xlsx'])
     if up_file:
@@ -184,13 +162,13 @@ with st.sidebar:
                 if st.button("✅ Load Data Excel"):
                     st.session_state['df_segments_sta'] = new_data
                     st.rerun()
-            else: st.error("Gagal mencocokkan kolom. Gunakan Template.")
+            else: st.error("Gagal mencocokkan kolom.")
         except Exception as e: st.error(f"Error: {e}")
 
     if st.button("🔄 Reset Data Default"): 
         st.session_state['df_segments_sta'] = reset_data(); st.rerun()
 
-# --- 3. CALCULATIONS ---
+# --- 3. MAIN CALCULATION ---
 edited_df = st.session_state['df_segments_sta']
 results = []
 plot_x, plot_bed, plot_ws, plot_egl, plot_crit = [], [], [], [], []
@@ -220,7 +198,7 @@ if not edited_df.empty:
             Q = st.session_state['q_global']
             
             yn = solve_manning_y(Q, n, b, S, m)
-            yc = solve_critical_y(Q, b, m) # <-- Using fixed logic
+            yc = solve_critical_y(Q, b, m) 
             
             A = (b + m*yn) * yn
             P = b + 2*yn * np.sqrt(1 + m**2)
@@ -231,6 +209,7 @@ if not edited_df.empty:
             
             Vel_Head = (V**2) / (2*9.81)
             EGL = (z2 + yn) + Vel_Head
+            EG_Slope = (n * V)**2 / (R**(4/3)) if R>0 else 0
             
             status = "SUPERKRITIS" if Fr > 1.1 else ("SUBKRITIS" if Fr < 0.9 else "KRITIS")
             note = status
@@ -271,9 +250,16 @@ with tab2:
         ax.plot(plot_x, plot_ws, 'b-', lw=1.5, label='W.S.')
         ax.fill_between(plot_x, plot_bed, plot_ws, color='#00FFFF', alpha=1.0)
         
-        # FILTER VISUALISASI: Jangan gambar garis kritis jika nilainya tidak masuk akal (> 5m di atas air)
-        clean_crit = [c if (c - w) < 5.0 else np.nan for c, w in zip(plot_crit, plot_ws)]
-        
+        # Filter: Hanya gambar garis kritis jika nilainya wajar (misal < 5m dari dasar)
+        # Jika y_c sangat tinggi (bug), jangan digambar agar tidak merusak skala
+        clean_crit = []
+        for i in range(len(plot_crit)):
+            depth_crit = plot_crit[i] - plot_bed[i]
+            if depth_crit < 5.0: # Batas wajar
+                clean_crit.append(plot_crit[i])
+            else:
+                clean_crit.append(np.nan)
+
         ax.plot(plot_x, clean_crit, 'r--', lw=1, label='Crit')
         ax.plot(plot_x, plot_egl, 'g--', lw=1, label='E.G.')
         
@@ -283,6 +269,13 @@ with tab2:
         
         if use_manual_zoom: 
             ax.set_ylim(y_min, y_max)
+        else:
+            # Auto zoom pintar
+            y_vals = [y for y in plot_bed + plot_ws if not np.isnan(y)]
+            if y_vals:
+                min_y, max_y = min(y_vals), max(y_vals)
+                margin = (max_y - min_y) * 0.2
+                ax.set_ylim(min_y - margin, max_y + margin)
         
         st.pyplot(fig)
     else: st.info("Belum ada data.")
@@ -294,6 +287,7 @@ with tab3:
         
         b, m, y, yc = d['Bottom Width'], d['Talud'], d['W.S. Elev'] - d['Min Ch El'], d['Crit W.S.'] - d['Min Ch El']
         h_max = max(y, yc) * 1.5 if max(y, yc) > 0 else 1.0
+        if h_max > 5: h_max = y * 1.5 # Safety display
         
         x = [-(b/2 + m*h_max), -b/2, b/2, b/2 + m*h_max]
         y_g = [h_max, 0, 0, h_max]
