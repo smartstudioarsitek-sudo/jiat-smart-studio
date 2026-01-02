@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-import matplotlib.patches as patches
 import io
 
 # --- CONFIG ---
@@ -107,8 +106,6 @@ with st.sidebar:
     
     st.divider()
     
-    # SLIDER ASPEK RATIO GRAFIK
-    st.subheader("👁️ Plot Options")
     aspect_ratio_fix = st.slider("📐 Skala Vertikal (Long Section)", 0.1, 10.0, 1.0, 0.1)
     
     use_manual_zoom = st.checkbox("Manual Scaling", value=False)
@@ -270,11 +267,9 @@ with tab_plot:
 with tab_cross:
     st.subheader("Cross Section Plotter")
     if len(results) > 0:
-        # Pilihi Segmen
         seg_names = [r['Reach'] for r in results]
         selected_seg = st.selectbox("Pilih Segmen / Cross Section:", seg_names)
         
-        # Ambil Data
         data = next(item for item in results if item["Reach"] == selected_seg)
         
         b = data['Bottom Width']
@@ -284,83 +279,58 @@ with tab_cross:
         eg_elev = data['E.G. Elev']
         crit_elev = data['Crit W.S.']
         
-        # Geometri Tanah (Trapesium)
         max_h_draw = max(ws_elev, eg_elev) - z_min + 0.5
         if max_h_draw < 0.5: max_h_draw = 0.5
         
-        # Koordinat Titik Tanah
-        # Kiri Atas, Kiri Bawah, Kanan Bawah, Kanan Atas
         x_ground = [-(b/2 + m*max_h_draw), -b/2, b/2, b/2 + m*max_h_draw]
         y_ground = [z_min + max_h_draw, z_min, z_min, z_min + max_h_draw]
         
-        # Setup Figure
         fig_xs, ax_xs = plt.subplots(figsize=(10, 6))
         ax_xs.set_facecolor('white')
         
-        # 1. Plot Tanah
         ax_xs.plot(x_ground, y_ground, color='black', linewidth=2, marker='s', markersize=4, label='Ground')
-        
-        # 2. Bank Stations (Red Dots) - Visualisasi Tebing
-        # Titik tebing (Top of Bank)
         ax_xs.plot([x_ground[0], x_ground[-1]], [y_ground[0], y_ground[-1]], 'ro', markersize=6, label='Bank Sta')
 
-        # 3. Air
         depth = ws_elev - z_min
         if depth > 0:
             top_w_water = b + 2 * m * depth
             x_water = [-top_w_water/2, top_w_water/2]
             y_water = [ws_elev, ws_elev]
-            
             poly_x = [-top_w_water/2, -b/2, b/2, top_w_water/2]
             poly_y = [ws_elev, z_min, z_min, ws_elev]
             ax_xs.fill(poly_x, poly_y, color='#00FFFF', alpha=1.0, label='Water')
             ax_xs.plot(x_water, y_water, color='blue', linewidth=1.5, label='W.S.')
             
-            # --- SIMBOL AIR (Inverted Triangle) ---
             ax_xs.text(0, ws_elev, '▼', color='blue', fontsize=12, ha='center', va='bottom')
             ax_xs.text(0, ws_elev + 0.05, f"{ws_elev:.2f}", color='blue', fontsize=9, ha='center', va='bottom', fontweight='bold')
 
-        # 4. Garis EG & Crit
         xmin_plot, xmax_plot = min(x_ground), max(x_ground)
         ax_xs.hlines(eg_elev, xmin_plot, xmax_plot, colors='green', linestyles='--', label='E.G.')
         if crit_elev < z_min + max_h_draw + 2:
             ax_xs.hlines(crit_elev, xmin_plot, xmax_plot, colors='red', linestyles='--', label='Crit')
 
-        # --- ENGINEERING ANNOTATIONS (Informatif & Menarik) ---
-        # A. Dimensi Lebar (b)
-        ax_xs.annotate('', xy=(-b/2, z_min - 0.2), xytext=(b/2, z_min - 0.2),
-                       arrowprops=dict(arrowstyle='<->', color='black', lw=1.0))
+        ax_xs.annotate('', xy=(-b/2, z_min - 0.2), xytext=(b/2, z_min - 0.2), arrowprops=dict(arrowstyle='<->', color='black', lw=1.0))
         ax_xs.text(0, z_min - 0.35, f"b = {b:.2f} m", ha='center', va='top', fontsize=10, fontweight='bold')
         
-        # B. Garis Putus-putus Proyeksi Lebar
         ax_xs.plot([-b/2, -b/2], [z_min, z_min - 0.25], 'k--', lw=0.5)
         ax_xs.plot([b/2, b/2], [z_min, z_min - 0.25], 'k--', lw=0.5)
 
-        # C. Keterangan Slope (m)
         mid_slope_x = b/2 + (m * max_h_draw)/2
         mid_slope_y = z_min + max_h_draw/2
         if m > 0:
-            ax_xs.text(mid_slope_x, mid_slope_y, f"m = {m}", rotation=0, ha='left', va='center', fontsize=9, 
-                       bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
+            ax_xs.text(mid_slope_x, mid_slope_y, f"m = {m}", rotation=0, ha='left', va='center', fontsize=9, bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
 
-        # D. Info Box di Pojok Kiri Atas Gambar
-        info_text = (
-            f"Reach: {data['Reach']}\n"
-            f"Q = {data['Q Total']} m³/s\n"
-            f"V = {data['Vel Chnl']} m/s\n"
-            f"Fr = {data['Froude # Chl']}"
-        )
-        ax_xs.text(0.02, 0.98, info_text, transform=ax_xs.transAxes, fontsize=9,
-                   verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='gray'))
+        # --- FIX JUDUL GRAFIK (MENGGUNAKAN NAMA SEGMEN & STA) ---
+        ax_xs.set_title(f"Cross Section: {data['Reach']} (Sta {data['Sta Start']} - {data['Sta Finish']})", fontweight='bold')
+        
+        info_text = (f"Reach: {data['Reach']}\nQ = {data['Q Total']} m³/s\nV = {data['Vel Chnl']} m/s\nFr = {data['Froude # Chl']}")
+        ax_xs.text(0.02, 0.98, info_text, transform=ax_xs.transAxes, fontsize=9, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='gray'))
 
-        # Layout
-        ax_xs.set_title(f"Cross Section - Sta {data['River Sta']}", fontweight='bold')
         ax_xs.set_xlabel("Offset (m)")
         ax_xs.set_ylabel("Elevation (m)")
         ax_xs.grid(True, which='major', linestyle=':', linewidth=0.5, color='gray')
         ax_xs.set_aspect('equal')
         
-        # Legend
         legend_elements = [
             Line2D([0], [0], color='green', linestyle='--', lw=1.5, label='E.G.'),
             Line2D([0], [0], color='blue', lw=1.5, label='W.S.'),
@@ -371,9 +341,7 @@ with tab_cross:
         ax_xs.legend(handles=legend_elements, loc='upper right', frameon=True, facecolor='white', edgecolor='black')
         
         st.pyplot(fig_xs)
-        
-    else:
-        st.info("Belum ada data. Silakan hitung dulu di Tab 1.")
+    else: st.info("Belum ada data. Silakan hitung dulu di Tab 1.")
 
 with tab_table:
     if len(results) > 0:
