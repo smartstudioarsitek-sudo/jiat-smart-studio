@@ -7,3 +7,5 @@ scipy
 altair
 matplotlib
 xlsxwriter
+ezdxf
+geopandas
