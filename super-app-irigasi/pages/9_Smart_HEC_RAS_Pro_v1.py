@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import io
-import json
 
 # --- CONFIG ---
 st.set_page_config(page_title="Smart HEC-RAS Pro", layout="wide", page_icon="🌊")
@@ -139,6 +138,14 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         n['ws_sup'] = n['z'] + n['y_sup']
         n['crit_ws'] = n['z'] + n['yc']
         
+        # --- FREEBOARD CALCULATION ---
+        # Bank Elevation = Dasar + Tinggi Saluran (H)
+        # Jika user tidak input H, default 1.5m
+        H_ch = n.get('h_ch', 1.5) 
+        n['bank_elev'] = n['z'] + H_ch
+        n['freeboard'] = n['bank_elev'] - n['ws']
+        n['h_design'] = n['y_final'] + 0.4 # Saran teknis: y + 0.4m
+        
         A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
         V = Q/A if A > 0 else 0
         n['v'] = V # Store Velocity
@@ -153,10 +160,11 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
     return nodes
 
 # --- 3. UI SETUP ---
-REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
+# Menambah kolom Tinggi Saluran H (m)
+REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)"]
 
 def reset_data():
-    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017]], columns=REQUIRED_COLS)
+    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5]], columns=REQUIRED_COLS)
 
 if 'df_pro' not in st.session_state: st.session_state['df_pro'] = reset_data()
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
@@ -177,7 +185,7 @@ with st.sidebar:
     st.session_state['ws_down'] = st.number_input("Hilir (Sub): Kedalaman (m)", 0.01, 20.0, st.session_state['ws_down'])
     
     st.divider()
-    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_rekap_v5")
+    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_final_v6")
     if up_file:
         try:
             df = pd.read_excel(up_file)
@@ -187,7 +195,8 @@ with st.sidebar:
                 "Nama Segmen": ["nama", "reach", "segmen"], "STA Awal (m)": ["staawal", "start", "hulu"],
                 "STA Akhir (m)": ["staakhir", "end", "hilir"], "Elev Awal (m)": ["elevawal", "z1", "startelv"],
                 "Elev Akhir (m)": ["elevakhir", "z2", "endelv"], "Lebar b (m)": ["lebar", "width", "b"],
-                "Talud m": ["talud", "slope", "m", "z"], "Kekasaran n": ["kekasaran", "manning", "n"]
+                "Talud m": ["talud", "slope", "m", "z"], "Kekasaran n": ["kekasaran", "manning", "n"],
+                "Tinggi Saluran H (m)": ["tinggi", "height", "h", "depth_channel"]
             }
             new_df = pd.DataFrame()
             found=0
@@ -197,14 +206,16 @@ with st.sidebar:
                     if match: new_df[k]=df[match]; found+=1; break
             if found>=5: 
                 for r in REQUIRED_COLS: 
-                    if r not in new_df.columns: new_df[r] = 0
+                    if r not in new_df.columns: 
+                        if "Tinggi" in r: new_df[r] = 1.5 # Default H = 1.5m
+                        else: new_df[r] = 0
                 st.session_state['df_pro'] = new_df
         except: pass
     if st.button("Reset Data"): st.session_state['df_pro'] = reset_data(); st.rerun()
 
 # --- 4. MAIN PROCESS ---
 df = st.session_state['df_pro']
-profile = {'x': [], 'z': [], 'ws': [], 'eg': [], 'crit': []}
+profile = {'x': [], 'z': [], 'ws': [], 'eg': [], 'crit': [], 'bank': []}
 final_data = []
 all_nodes = [] 
 
@@ -225,13 +236,16 @@ if not df.empty:
             z_s, z_e = seg["Elev Awal (m)"], seg["Elev Akhir (m)"]
             slope = (z_s - z_e) / L
             
+            # Ambil H channel
+            h_ch_val = seg.get("Tinggi Saluran H (m)", 1.5)
+            
             start_i = 1 if idx > 0 else 0
             for i in range(start_i, n_steps + 1):
                 nodes.append({
                     "x": seg["STA Awal (m)"] + i * real_dx,
                     "z": z_s - (i * real_dx * slope),
                     "b": seg["Lebar b (m)"], "m": seg["Talud m"], "n": seg["Kekasaran n"], "seg": seg["Nama Segmen"],
-                    "slope_local": slope
+                    "h_ch": h_ch_val, "slope_local": slope
                 })
         
         # --- RUN SOLVER ---
@@ -242,58 +256,52 @@ if not df.empty:
             for n in nodes:
                 profile['x'].append(n['x']); profile['z'].append(n['z']); profile['ws'].append(n['ws'])
                 profile['eg'].append(n['eg']); profile['crit'].append(n['crit_ws'])
+                profile['bank'].append(n['bank_elev'])
                 final_data.append(n)
 
     except Exception as e: st.error(f"Error Calculation: {e}")
 
 # --- 5. TABS VISUALISASI ---
-t1, t2, t3, t4, t5 = st.tabs(["📝 Input Geometri", "📈 Profil Memanjang", "❌ Cross Section", "📑 Rekap per Segmen (AutoCAD)", "📋 Laporan Detail"])
+t1, t2, t3, t4, t5 = st.tabs(["📝 Input Geometri", "📈 Profil Memanjang", "❌ Cross Section", "📑 Rekap per Segmen", "📋 Laporan Detail"])
 
 with t1:
+    st.info("💡 **Info:** Kolom 'Tinggi Saluran H' digunakan untuk menghitung Tinggi Jagaan (Freeboard). Default = 1.5m.")
     st.data_editor(st.session_state['df_pro'], num_rows="dynamic", use_container_width=True)
 
 with t2:
     if len(profile['x']) > 0:
-        # PENGATURAN PLOT PROFESIONAL
-        fig, ax = plt.subplots(figsize=(14, 8)) # Ukuran lebih besar/lebar
+        fig, ax = plt.subplots(figsize=(14, 8))
         
-        # 1. Plot Utama
-        ax.plot(profile['x'], profile['z'], 'k-', lw=2.5, label='Dasar Saluran (Ground)')
+        # Plot Layers
+        ax.plot(profile['x'], profile['z'], 'k-', lw=2.5, label='Dasar Saluran')
         ax.plot(profile['x'], profile['ws'], 'b-', lw=2, label='Muka Air (W.S.)')
+        ax.plot(profile['x'], profile['bank'], 'brown', ls='--', lw=2, label='Bibir Tanggul (Bank)') # BANK PLOT
         ax.fill_between(profile['x'], profile['z'], profile['ws'], color='#00eaff', alpha=0.4)
-        ax.plot(profile['x'], profile['crit'], 'r--', lw=1.5, alpha=0.7, label='Kedalaman Kritis (Critical)')
-        ax.plot(profile['x'], profile['eg'], 'g-.', lw=1, alpha=0.8, label='Garis Energi (E.G.)')
+        ax.plot(profile['x'], profile['crit'], 'r--', lw=1.5, alpha=0.7, label='Kedalaman Kritis')
+        ax.plot(profile['x'], profile['eg'], 'g-.', lw=1, alpha=0.8, label='Garis Energi')
         
-        # 2. Grid Rinci (Informatif)
+        # Grid & Labels
         ax.minorticks_on()
         ax.grid(which='major', linestyle='-', linewidth='0.5', color='gray', alpha=0.7)
         ax.grid(which='minor', linestyle=':', linewidth='0.5', color='gray', alpha=0.3)
         
-        # 3. Label Segmen (Batas S1, S2, dst)
+        # Labels Segmen
         res_df = pd.DataFrame(final_data)
         seg_starts = res_df.groupby('seg')['x'].min().sort_values()
-        
-        # Cari batas Y untuk menaruh label text (di bagian atas grafik)
-        y_max_plot = max(max(profile['ws']), max(profile['eg'])) + 1.0
-        y_min_plot = min(profile['z']) - 1.0
+        y_max_plot = max(max(profile['bank']), max(profile['eg'])) + 0.5
+        y_min_plot = min(profile['z']) - 0.5
         
         for seg_name, x_start in seg_starts.items():
             ax.axvline(x=x_start, color='black', linestyle='--', linewidth=0.5, alpha=0.5)
-            # Taruh text label segmen sedikit di kanan garis
-            ax.text(x_start + 1, y_max_plot - 0.5, seg_name, rotation=90, fontsize=9, fontweight='bold', color='#333')
+            ax.text(x_start + 1, y_max_plot - 0.2, seg_name, rotation=90, fontsize=8, color='#333')
 
-        # 4. Limit Skala (Auto-Zoom ke area sungai)
         ax.set_ylim(y_min_plot, y_max_plot)
         ax.set_xlim(min(profile['x']), max(profile['x']))
-        
-        # 5. Labeling
         ax.set_title(f"Profil Memanjang Hidrolis - Q = {st.session_state['q_pro']} m³/s", fontsize=14, fontweight='bold')
-        ax.set_xlabel("Station / Jarak (m)", fontsize=11)
-        ax.set_ylabel("Elevasi (m)", fontsize=11)
-        ax.legend(loc='upper right', frameon=True, shadow=True)
+        ax.set_xlabel("Station (m)"); ax.set_ylabel("Elevasi (m)")
+        ax.legend(loc='upper right', frameon=True)
         
         st.pyplot(fig)
-        st.caption("✅ **Grafik Skala Teknik:** Menampilkan garis grid minor/mayor dan batas segmen untuk kemudahan pembacaan.")
     else: st.info("Data kosong.")
 
 with t3:
@@ -308,40 +316,44 @@ with t3:
             with c1:
                 fig_cs, ax_cs = plt.subplots(figsize=(8, 5))
                 b, m, z, y, ws = node['b'], node['m'], node['z'], node['y_final'], node['ws']
-                depth_draw = max(y, node['yc']) * 1.5 if y > 0 else 1.0
-                top_w_draw = b + 2 * m * depth_draw
+                H_draw = node['h_ch'] # Tinggi Saluran Asli
+                top_w_draw = b + 2 * m * H_draw
+                
+                # Gambar Tanah (Full Height)
                 x_ground = [-top_w_draw/2, -b/2, b/2, top_w_draw/2]
-                y_ground = [z + depth_draw, z, z, z + depth_draw]
+                y_ground = [z + H_draw, z, z, z + H_draw]
                 ax_cs.plot(x_ground, y_ground, 'k-', lw=3, label="Tanah")
                 ax_cs.fill_between(x_ground, y_ground, min(y_ground), color='gray', alpha=0.3)
+                
+                # Gambar Air
                 if y > 0.001:
                     T = b + 2*m*y
                     x_water = [-T/2, T/2]; y_water = [ws, ws]
                     ax_cs.plot(x_water, y_water, 'b-', lw=2, label="Muka Air")
                     ax_cs.fill([-T/2, T/2, b/2, -b/2], [ws, ws, z, z], color='#00eaff', alpha=0.6)
                     ax_cs.hlines(node['eg'], -top_w_draw/2, top_w_draw/2, colors='green', linestyles='--', label="Energy")
-                    ax_cs.hlines(node['crit_ws'], -top_w_draw/2, top_w_draw/2, colors='red', linestyles=':', label="Critical")
+                
                 ax_cs.set_title(f"Cross Section STA {sel_sta:.2f}"); ax_cs.legend(); ax_cs.grid(True, ls=':')
+                ax_cs.set_aspect('equal')
                 st.pyplot(fig_cs)
             with c2:
                 st.metric("Kedalaman Air (y)", f"{node['y_final']:.3f} m")
-                st.metric("Kecepatan (V)", f"{node['v']:.3f} m/s")
-                st.metric("Froude", f"{node['fr']:.2f}")
-                st.divider()
-                st.caption("Detail Dimensi:")
-                st.text(f"Lebar Bawah (b) : {node['b']:.2f} m")
-                st.text(f"Lebar Atas (T)  : {node['top_width']:.2f} m")
-                st.text(f"Luas Basah (A)  : {node['area']:.2f} m²")
+                
+                # Highlight Freeboard
+                fb = node['freeboard']
+                fb_color = "red" if fb < 0.3 else "green"
+                st.markdown(f"**Tinggi Jagaan (Freeboard):** <span style='color:{fb_color}; font-size:18px; font-weight:bold'>{fb:.3f} m</span>", unsafe_allow_html=True)
+                st.metric("Tinggi Saluran (H)", f"{node['h_ch']:.2f} m")
 
 with t4:
     if final_data:
-        st.subheader("📋 Rekapitulasi Data Per Segmen (Untuk AutoCAD)")
-        st.caption("Ringkasan data Hulu & Hilir per segmen, lengkap dengan dimensi lebar.")
+        st.subheader("📋 Rekapitulasi & Desain")
+        st.caption("Data Hulu & Hilir per segmen, lengkap dengan analisis Jagaan & Saran Desain.")
         
         res_df = pd.DataFrame(final_data)
         summary_list = []
-        
         unique_segs = res_df['seg'].unique()
+        
         for seg_name in unique_segs:
             seg_data = res_df[res_df['seg'] == seg_name]
             hulu = seg_data.iloc[0]
@@ -351,24 +363,32 @@ with t4:
                 "Segmen": seg_name,
                 "STA Awal": f"{hulu['x']:.2f}",
                 "STA Akhir": f"{hilir['x']:.2f}",
-                "Lebar Bawah (b)": f"{hulu['b']:.2f}",  
-                "Lebar Atas Hulu (T)": f"{hulu['top_width']:.2f}",
-                "Lebar Atas Hilir (T)": f"{hilir['top_width']:.2f}",
-                "Elv Dasar Hulu": f"{hulu['z']:.3f}",
-                "Elv Dasar Hilir": f"{hilir['z']:.3f}",
+                "Lebar Bawah (b)": f"{hulu['b']:.2f}",
+                "Tinggi Saluran (H)": f"{hulu['h_ch']:.2f}",
                 "M.A. Hulu": f"{hulu['ws']:.3f}",
                 "M.A. Hilir": f"{hilir['ws']:.3f}",
+                "Jagaan Hulu": f"{hulu['freeboard']:.3f}",
+                "Jagaan Hilir": f"{hilir['freeboard']:.3f}",
+                "Saran Tinggi Desain": f"{hulu['h_design']:.2f}", # y + 0.4
                 "V Hulu": f"{hulu['v']:.3f}",
                 "V Hilir": f"{hilir['v']:.3f}"
             })
             
         sum_df = pd.DataFrame(summary_list)
-        st.dataframe(sum_df, width='stretch')
+        
+        # Highlight Warning jika Jagaan < 0.3m
+        def highlight_danger(val):
+            try:
+                v = float(val)
+                return 'background-color: #ffcccc' if v < 0.3 else ''
+            except: return ''
+
+        st.dataframe(sum_df.style.map(highlight_danger, subset=['Jagaan Hulu', 'Jagaan Hilir']), width='stretch')
         st.download_button("Download Rekap AutoCAD (CSV)", sum_df.to_csv(index=False).encode('utf-8'), "Rekap_Segmen_AutoCAD.csv")
 
 with t5:
     if final_data:
-        res = pd.DataFrame(final_data)[["x", "seg", "z", "ws", "y_final", "fr", "regime", "v", "eg"]]
-        res.columns = ["Sta", "Segmen", "Elev Dasar", "W.S.", "Depth", "Froude", "Regime", "Velocity", "E.G."]
+        res = pd.DataFrame(final_data)[["x", "seg", "z", "ws", "y_final", "freeboard", "fr", "v", "eg"]]
+        res.columns = ["Sta", "Segmen", "Elev Dasar", "W.S.", "Depth", "Freeboard", "Froude", "Velocity", "E.G."]
         st.dataframe(res, width='stretch')
         st.download_button("Download Laporan Detail (CSV)", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
