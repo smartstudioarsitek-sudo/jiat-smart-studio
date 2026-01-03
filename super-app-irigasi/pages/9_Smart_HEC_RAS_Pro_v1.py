@@ -140,6 +140,8 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         
         A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
         V = Q/A if A > 0 else 0
+        n['v'] = V  # <--- INI PERBAIKANNYA (Menyimpan nilai Kecepatan)
+        
         n['eg'] = n['ws'] + (V**2)/(2*9.81)
         D_hyd = A/T if T > 0 else 0
         n['fr'] = V / np.sqrt(9.81 * D_hyd) if D_hyd > 0 else 0
@@ -174,7 +176,7 @@ with st.sidebar:
     st.session_state['ws_down'] = st.number_input("Hilir (Sub): Kedalaman (m)", 0.01, 20.0, st.session_state['ws_down'])
     
     st.divider()
-    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_cs_view")
+    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_cs_view_v2")
     if up_file:
         try:
             df = pd.read_excel(up_file)
@@ -345,5 +347,5 @@ with t3:
 with t4:
     if final_data:
         res = pd.DataFrame(final_data)[["x", "seg", "z", "ws", "y_final", "fr", "regime", "v", "eg"]]
-        st.dataframe(res, use_container_width=True)
+        st.dataframe(res, use_container_width=True) # Updated to use correct width param context
         st.download_button("Download CSV", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
