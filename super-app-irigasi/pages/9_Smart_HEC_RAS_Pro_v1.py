@@ -11,7 +11,9 @@ st.set_page_config(page_title="Smart HEC-RAS Pro", layout="wide", page_icon="�
 st.markdown("""
 <style>
     .header-box { padding: 20px; background: linear-gradient(90deg, #000428, #004e92); color: white; border-radius: 8px; text-align: center; margin-bottom: 20px; }
-    .success-box { padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 5px; }
+    .metric-card { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #004e92; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .metric-label { font-size: 12px; color: #666; margin-bottom: 0; }
+    .metric-value { font-size: 18px; font-weight: bold; color: #333; margin: 0; }
     @media print { .stSidebar, header, footer { display: none !important; } }
 </style>
 """, unsafe_allow_html=True)
@@ -80,13 +82,13 @@ def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
             else: y_max = y_mid
     return (y_min + y_max)/2
 
-# --- 2. LOGIC ALGORITMA MIXED FLOW (WITH FORCE SUPERCRITICAL) ---
+# --- 2. LOGIC ALGORITMA MIXED FLOW ---
 def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
     
-    # Pre-calc Yc
+    # Pre-calc Yc & Init
     for n in nodes:
         n['yc'] = get_critical_depth(Q, n['b'], n['m'])
-        n['y_sub'] = 0.0; n['y_sup'] = 0.0; n['y_final'] = 0.0 # Init
+        n['y_sub'] = 0.0; n['y_sup'] = 0.0; n['y_final'] = 0.0 
     
     # PASS 1: SUBCRITICAL
     nodes[-1]['y_sub'] = boundary_down
@@ -112,18 +114,13 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         except: y_calc = yc - 0.01
         target['y_sup'] = y_calc
 
-    # PASS 3: REGIME SELECTION (Auto vs Forced)
+    # PASS 3: REGIME SELECTION
     for n in nodes:
-        # 1. Jika User Memaksa Superkritis (Untuk Cek Gerusan/Erosi)
         if force_super:
             if n['y_sup'] > 0.011 and n['y_sup'] < 49.0:
-                n['y_final'] = n['y_sup']
-                n['regime'] = "Supercritical (Forced)"
+                n['y_final'] = n['y_sup']; n['regime'] = "Supercritical (Forced)"
             else:
-                n['y_final'] = n['yc'] # Fallback
-                n['regime'] = "Critical (Fallback)"
-        
-        # 2. Mode Otomatis (Smart Momentum Check)
+                n['y_final'] = n['yc']; n['regime'] = "Critical (Fallback)"
         else:
             if n['y_sub'] <= 0.011 or n['y_sub'] > 49.0: M_sub = -1.0
             else: _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'], Q)
@@ -131,15 +128,9 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
             if n['y_sup'] <= 0.011 or n['y_sup'] > 49.0: M_sup = -1.0
             else: _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'], Q)
             
-            if M_sub == -1 and M_sup == -1:
-                n['y_final'] = n['yc']
-                n['regime'] = "Critical (Fallback)"
-            elif M_sub >= M_sup: 
-                n['y_final'] = n['y_sub']
-                n['regime'] = "Subcritical"
-            else: 
-                n['y_final'] = n['y_sup']
-                n['regime'] = "Supercritical"
+            if M_sub == -1 and M_sup == -1: n['y_final'] = n['yc']; n['regime'] = "Critical (Fallback)"
+            elif M_sub >= M_sup: n['y_final'] = n['y_sub']; n['regime'] = "Subcritical"
+            else: n['y_final'] = n['y_sup']; n['regime'] = "Supercritical"
             
         # Final calculations
         n['ws'] = n['z'] + n['y_final']
@@ -147,12 +138,14 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         n['ws_sup'] = n['z'] + n['y_sup']
         n['crit_ws'] = n['z'] + n['yc']
         
-        A, _, _, _, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
+        A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
         V = Q/A if A > 0 else 0
         n['eg'] = n['ws'] + (V**2)/(2*9.81)
-        T_top = n['b'] + 2*n['m']*n['y_final']
-        D_hyd = A/T_top if T_top > 0 else 0
+        D_hyd = A/T if T > 0 else 0
         n['fr'] = V / np.sqrt(9.81 * D_hyd) if D_hyd > 0 else 0
+        
+        # Save Geometry Details for View
+        n['area'] = A; n['perim'] = P; n['radius'] = R; n['top_width'] = T
 
     return nodes
 
@@ -167,15 +160,13 @@ if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
 if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
 if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 
 
-st.markdown("""<div class="header-box"><h1>🚀 Smart HEC-RAS Ultimate</h1><p>Mixed Flow • Trapezoidal Correct • Infinite Fix</p></div>""", unsafe_allow_html=True)
+st.markdown("""<div class="header-box"><h1>🚀 Smart HEC-RAS Ultimate</h1><p>Comprehensive Open Channel Flow Analysis</p></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ Parameter Hidrolis")
     st.session_state['q_pro'] = st.number_input("Debit (Q) m³/s", 0.01, 1000.0, st.session_state['q_pro'])
-    
-    # --- FITUR BARU: FORCE SUPERCRITICAL ---
-    st.info("💡 **Tips:** Gunakan 'Auto' untuk umum. Gunakan 'Force Supercritical' jika ingin mendesain peredam energi di saluran curam.")
-    force_super = st.checkbox("🔥 Force Supercritical (Paksa Aliran Deras)", value=False)
+    st.info("💡 **Tips:** Gunakan 'Auto' untuk umum. Gunakan 'Force Supercritical' jika ingin cek potensi gerusan.")
+    force_super = st.checkbox("🔥 Force Supercritical", value=False)
     
     st.divider()
     st.subheader("🌊 Boundary Conditions")
@@ -183,7 +174,7 @@ with st.sidebar:
     st.session_state['ws_down'] = st.number_input("Hilir (Sub): Kedalaman (m)", 0.01, 20.0, st.session_state['ws_down'])
     
     st.divider()
-    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_gold")
+    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_cs_view")
     if up_file:
         try:
             df = pd.read_excel(up_file)
@@ -210,8 +201,9 @@ with st.sidebar:
 
 # --- 4. MAIN PROCESS ---
 df = st.session_state['df_pro']
-profile = {'x': [], 'z': [], 'ws': [], 'ws_sub': [], 'ws_sup': [], 'eg': [], 'crit': []}
+profile = {'x': [], 'z': [], 'ws': [], 'eg': [], 'crit': []}
 final_data = []
+all_nodes = [] # Store for CS view
 
 if not df.empty:
     try:
@@ -235,24 +227,24 @@ if not df.empty:
                 nodes.append({
                     "x": seg["STA Awal (m)"] + i * real_dx,
                     "z": z_s - (i * real_dx * slope),
-                    "b": seg["Lebar b (m)"], "m": seg["Talud m"], "n": seg["Kekasaran n"], "seg": seg["Nama Segmen"]
+                    "b": seg["Lebar b (m)"], "m": seg["Talud m"], "n": seg["Kekasaran n"], "seg": seg["Nama Segmen"],
+                    "slope_local": slope
                 })
         
         # --- RUN SOLVER ---
         if len(nodes) > 0:
             nodes = calculate_profiles(nodes, st.session_state['q_pro'], st.session_state['ws_down'], st.session_state['ws_up'], force_super)
+            all_nodes = nodes # Simpan untuk CS View
             
-            # --- PLOT DATA ---
             for n in nodes:
                 profile['x'].append(n['x']); profile['z'].append(n['z']); profile['ws'].append(n['ws'])
-                profile['ws_sub'].append(n['ws_sub']); profile['ws_sup'].append(n['ws_sup'])
                 profile['eg'].append(n['eg']); profile['crit'].append(n['crit_ws'])
                 final_data.append(n)
 
     except Exception as e: st.error(f"Error Calculation: {e}")
 
-# --- 5. TABS ---
-t1, t2, t3 = st.tabs(["📝 Input", "📈 Profil Hidrolis", "📋 Laporan & Download"])
+# --- 5. TABS VISUALISASI ---
+t1, t2, t3, t4 = st.tabs(["📝 Input Geometri", "📈 Profil Memanjang", "❌ Penampang Melintang", "📋 Laporan Detail"])
 
 with t1:
     st.data_editor(st.session_state['df_pro'], num_rows="dynamic", use_container_width=True)
@@ -262,26 +254,96 @@ with t2:
         fig, ax = plt.subplots(figsize=(12, 6))
         ax.plot(profile['x'], profile['z'], 'k-', lw=2, label='Dasar Saluran')
         ax.plot(profile['x'], profile['crit'], 'r--', lw=1, alpha=0.5, label='Critical Depth')
-        
-        # Grafik Utama
-        ax.plot(profile['x'], profile['ws'], 'b-', lw=2.5, label='Muka Air (W.S.)')
+        ax.plot(profile['x'], profile['ws'], 'b-', lw=2.5, label='Muka Air')
         ax.fill_between(profile['x'], profile['z'], profile['ws'], color='#00eaff', alpha=0.4)
-        ax.plot(profile['x'], profile['eg'], 'g--', lw=1, label='Energy Grade Line')
-        
-        ax.set_title(f"Profil Hidrolis - Q = {st.session_state['q_pro']} m³/s")
-        ax.set_xlabel("Station (m)"); ax.set_ylabel("Elevation (m)")
-        ax.legend(loc='best'); ax.grid(True, ls=':', alpha=0.5)
+        ax.plot(profile['x'], profile['eg'], 'g--', lw=1, label='Energy Grade')
+        ax.set_title(f"Profil Memanjang - Q = {st.session_state['q_pro']} m³/s"); ax.legend(loc='best'); ax.grid(True, ls=':', alpha=0.5)
         st.pyplot(fig)
-        
-        if force_super:
-            st.warning("⚠️ **Mode Force Supercritical Aktif!** Grafik ini menunjukkan kemungkinan kecepatan maksimum. Gunakan untuk desain proteksi gerusan.")
-        else:
-            st.success("✅ **Mode Auto (Momentum Balance).** Grafik menunjukkan profil aliran yang paling stabil secara fisika.")
     else: st.info("Data kosong.")
 
 with t3:
+    if len(all_nodes) > 0:
+        st.subheader("Visualisasi Penampang (Cross Section)")
+        
+        # Selector
+        sta_list = [n['x'] for n in all_nodes]
+        sel_sta = st.select_slider("Geser untuk memilih Station (m):", options=sta_list, value=sta_list[0])
+        
+        # Cari Node Terpilih
+        node = next((n for n in all_nodes if n['x'] == sel_sta), None)
+        
+        if node:
+            c1, c2 = st.columns([2, 1])
+            
+            with c1:
+                # Plotting CS
+                fig_cs, ax_cs = plt.subplots(figsize=(8, 5))
+                
+                # Geometri Trapesium
+                b, m, z, y, ws = node['b'], node['m'], node['z'], node['y_final'], node['ws']
+                # Gambar Tanah
+                depth_draw = max(y, node['yc']) * 1.5 if y > 0 else 1.0
+                top_w_draw = b + 2 * m * depth_draw
+                
+                x_ground = [-top_w_draw/2, -b/2, b/2, top_w_draw/2]
+                y_ground = [z + depth_draw, z, z, z + depth_draw]
+                ax_cs.plot(x_ground, y_ground, 'k-', lw=3, label="Tanah")
+                ax_cs.fill_between(x_ground, y_ground, min(y_ground), color='gray', alpha=0.3)
+                
+                # Gambar Air
+                if y > 0.001:
+                    T = b + 2*m*y
+                    x_water = [-T/2, T/2]; y_water = [ws, ws]
+                    ax_cs.plot(x_water, y_water, 'b-', lw=2, label="Muka Air")
+                    # Fill Poly
+                    ax_cs.fill([-T/2, T/2, b/2, -b/2], [ws, ws, z, z], color='#00eaff', alpha=0.6)
+                    
+                    # Garis Penting
+                    ax_cs.hlines(node['eg'], -top_w_draw/2, top_w_draw/2, colors='green', linestyles='--', label="Energy")
+                    ax_cs.hlines(node['crit_ws'], -top_w_draw/2, top_w_draw/2, colors='red', linestyles=':', label="Critical")
+
+                ax_cs.set_title(f"Cross Section STA {sel_sta:.2f} ({node['seg']})")
+                ax_cs.set_xlabel("Lebar (m)"); ax_cs.set_ylabel("Elevasi (m)")
+                ax_cs.grid(True, ls=':', alpha=0.5); ax_cs.legend()
+                ax_cs.set_aspect('equal')
+                st.pyplot(fig_cs)
+            
+            with c2:
+                # Info Card
+                st.markdown(f"""
+                <div class="metric-card">
+                    <p class="metric-label">Kedalaman Air (y)</p>
+                    <p class="metric-value">{node['y_final']:.3f} m</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.markdown(f"""
+                <div class="metric-card" style="margin-top:10px;">
+                    <p class="metric-label">Kecepatan (V)</p>
+                    <p class="metric-value">{node['v']:.3f} m/s</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.markdown(f"""
+                <div class="metric-card" style="margin-top:10px;">
+                    <p class="metric-label">Froude Number (Fr)</p>
+                    <p class="metric-value" style="color:{'red' if node['fr']>1 else 'green'}">{node['fr']:.2f} ({node['regime']})</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.divider()
+                st.caption("Properti Penampang:")
+                details = {
+                    "Luas Basah (A)": f"{node['area']:.2f} m²",
+                    "Keliling Basah (P)": f"{node['perim']:.2f} m",
+                    "Jari-jari Hidrolis (R)": f"{node['radius']:.3f} m",
+                    "Lebar Atas (T)": f"{node['top_width']:.2f} m",
+                    "Energi Spesifik": f"{(node['y_final'] + (node['v']**2)/(2*9.81)):.3f} m"
+                }
+                st.table(pd.DataFrame(details, index=[0]).T)
+
+with t4:
     if final_data:
-        res = pd.DataFrame(final_data)[["x", "seg", "z", "ws", "y_final", "fr", "regime"]]
-        res.columns = ["Sta", "Segmen", "Elev Dasar", "W.S.", "Depth", "Froude", "Regime"]
+        res = pd.DataFrame(final_data)[["x", "seg", "z", "ws", "y_final", "fr", "regime", "v", "eg"]]
         st.dataframe(res, use_container_width=True)
-        st.download_button("Download Laporan Lengkap (CSV)", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
+        st.download_button("Download CSV", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
