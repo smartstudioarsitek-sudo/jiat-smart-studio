@@ -6,6 +6,7 @@ import io
 import tempfile
 import os
 import zipfile
+import re
 
 # --- CONFIG ---
 st.set_page_config(page_title="Smart HEC-RAS Ultimate", layout="wide", page_icon="🏗️")
@@ -17,105 +18,70 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. SMART DXF PARSER V2.0 (Zero-Dependency) ---
-def parse_dxf_raw_v2(file_content, use_y_as_z=False):
+# --- 1. ENGINE PARSER DXF V3.0 (Aggressive Mode) ---
+def parse_dxf_aggressive(file_content):
     """
-    Parser DXF Manual yang lebih pintar. 
-    Bisa membaca LWPOLYLINE (2D) dan POLYLINE/VERTEX (3D).
+    Parser DXF tanpa library yang 'Agresif'. 
+    Mencari pola Group Code 10(X), 20(Y), 30(Z) di dalam blok VERTEX/LWPOLYLINE.
     """
     try:
         content = file_content.decode('utf-8', errors='ignore')
         lines = [line.strip() for line in content.splitlines()]
         
         points = []
-        
-        # State Variables
         in_entities = False
-        current_type = None # 'LWPOLYLINE' atau 'POLYLINE'
         
-        # Temp Storage for Polyline 3D
-        collecting_vertices = False
-        poly_3d_points = []
-        
-        # Temp Storage for LWPolyline
-        lw_points = []
-        lw_elevation = 0.0 # Default Z for LWPolyline
+        # Buffer koordinat sementara
+        curr_x, curr_y, curr_z = None, None, None
         
         i = 0
         while i < len(lines):
             code = lines[i]
-            value = lines[i+1] if i+1 < len(lines) else ""
+            val = lines[i+1] if i+1 < len(lines) else ""
             
-            # 1. Deteksi Section ENTITIES
-            if code == '0' and value == 'SECTION':
-                # Cek next code 2 = ENTITIES
+            # 1. Cek Masuk Area ENTITIES
+            if code == '0' and val == 'SECTION':
                 if i+2 < len(lines) and lines[i+2] == '2' and lines[i+3] == 'ENTITIES':
                     in_entities = True
                     i += 4; continue
-            
-            if code == '0' and value == 'ENDSEC':
+            if code == '0' and val == 'ENDSEC':
                 in_entities = False
-                
+            
             if in_entities:
-                # --- CASE A: POLYLINE (3D - Seperti File Global Mapper) ---
-                if code == '0' and value == 'POLYLINE':
-                    # Jika ada polyline sebelumnya yg belum disimpan, simpan dulu
-                    if poly_3d_points: return process_points(poly_3d_points)
-                    collecting_vertices = True
-                    poly_3d_points = []
-                    current_type = 'POLYLINE'
-                
-                elif code == '0' and value == 'VERTEX' and collecting_vertices:
-                    # Baca X, Y, Z dari VERTEX ini
-                    vx, vy, vz = 0.0, 0.0, 0.0
-                    # Scan forward sedikit untuk cari 10, 20, 30
-                    # Vertex attributes biasanya berdekatan
-                    j = 1
-                    found_coords = 0
-                    while j < 20 and (i+j*2) < len(lines):
-                        c = lines[i+j*2]
-                        v = lines[i+j*2+1]
-                        if c == '0': break # Ketemu entity lain
-                        if c == '10': vx = float(v)
-                        elif c == '20': vy = float(v)
-                        elif c == '30': vz = float(v)
-                        j += 1
+                # Jika ketemu Entity Baru (VERTEX, POINT, LWPOLYLINE), simpan data sebelumnya
+                if code == '0' and (val == 'VERTEX' or val == 'POINT' or val == 'LWPOLYLINE' or val == 'SEQEND'):
+                    if curr_x is not None and curr_y is not None:
+                        # Default Z = 0 jika tidak ada kode 30
+                        z_final = curr_z if curr_z is not None else 0.0
+                        points.append((curr_x, curr_y, z_final))
                     
-                    # Logic Pilih Elevasi
-                    elev = vy if use_y_as_z else vz
-                    poly_3d_points.append((vx, vy, elev))
+                    # Reset buffer
+                    curr_x, curr_y, curr_z = None, None, None
                 
-                elif code == '0' and value == 'SEQEND':
-                    if collecting_vertices and len(poly_3d_points) > 1:
-                        return process_points(poly_3d_points) # Return immediately first valid poly
-                    collecting_vertices = False
-
-                # --- CASE B: LWPOLYLINE (2D) ---
-                elif code == '0' and value == 'LWPOLYLINE':
-                    # Parse LWPOLYLINE logic (Simple 2D scan)
-                    # Ini agak kompleks kalau manual parsing, tapi kita coba tangkap elevasi global (38)
-                    pass # (Sederhananya kita fokus ke POLYLINE dulu karena file user tipe ini)
-
+                # Tangkap Koordinat (Tanpa peduli urutan/selingan)
+                if code == '10': curr_x = float(val)
+                elif code == '20': curr_y = float(val)
+                elif code == '30': curr_z = float(val) # INI KUNCI ELSVASI Z
+                elif code == '38': curr_z = float(val) # Kadang elevasi di LWPOLYLINE pakai kode 38
+            
             i += 2
             
-        return "Tidak ditemukan garis yang valid (POLYLINE/VERTEX) dalam DXF."
+        # Proses Points menjadi Stationing
+        if len(points) < 2:
+            return "Data koordinat tidak ditemukan atau kurang dari 2 titik."
+            
+        final_data = []
+        cum_dist = 0
+        for k, p in enumerate(points):
+            if k > 0:
+                dist = np.sqrt((p[0] - points[k-1][0])**2 + (p[1] - points[k-1][1])**2)
+                cum_dist += dist
+            final_data.append({"sta": cum_dist, "z": p[2]}) # p[2] adalah Z
+            
+        return final_data
 
     except Exception as e:
-        return f"Error: {str(e)}"
-
-def process_points(pts):
-    """Hitung Jarak Kumulatif (Stationing)"""
-    data = []
-    cum_dist = 0
-    for i, p in enumerate(pts):
-        x, y, z = p
-        if i > 0:
-            prev = pts[i-1]
-            # Jarak Datar (2D)
-            dist = np.sqrt((x - prev[0])**2 + (y - prev[1])**2)
-            cum_dist += dist
-        data.append({"sta": cum_dist, "z": z})
-    return data
+        return f"Error Parsing: {str(e)}"
 
 # --- 2. ENGINE SHP (Library Dependent) ---
 try:
@@ -132,16 +98,27 @@ def process_shp_zip(zip_file_obj):
                 zip_ref.extractall(tmpdirname)
             shp_file = next((os.path.join(root, f) for root, _, files in os.walk(tmpdirname) for f in files if f.endswith(".shp")), None)
             if not shp_file: return "File .shp tidak ditemukan."
+            
             gdf = gpd.read_file(shp_file)
             points = []
             if not gdf.empty:
+                # Cek Kolom Atribut Z jika Geometri 2D
+                z_col = next((c for c in gdf.columns if c.upper() in ['Z', 'ELEV', 'ELEVATION', 'HEIGHT', 'TINGGI']), None)
+                
                 geom = gdf.geometry.iloc[0]
                 if geom.geom_type in ['LineString', 'LineStringZ']:
                     coords = list(geom.coords)
                     cum_dist = 0
                     for i, p in enumerate(coords):
                         x, y = p[0], p[1]
-                        z = p[2] if len(p) > 2 else 0 
+                        
+                        # LOGIC AMBIL Z
+                        z = 0.0
+                        if len(p) > 2: # Jika Geometri 3D (X,Y,Z)
+                            z = p[2]
+                        elif z_col: # Jika Geometri 2D, ambil dari tabel
+                            z = gdf.iloc[0][z_col]
+                        
                         if i > 0:
                             dist = np.sqrt((x - coords[i-1][0])**2 + (y - coords[i-1][1])**2)
                             cum_dist += dist
@@ -228,7 +205,7 @@ if 'df_pro' not in st.session_state: st.session_state['df_pro'] = pd.DataFrame([
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
 
 # --- 5. UI ---
-st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>Excel • DXF v2.0 • SHP</p></div>""", unsafe_allow_html=True)
+st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>Excel • DXF v3.0 • SHP</p></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -254,17 +231,13 @@ with st.sidebar:
             except: pass
             
     with tab_cad:
-        st.info("Support: 3D Polyline (Global Mapper) & LWPolyline")
+        st.info("Support: 3D Polyline & 2D LWPolyline")
         up_dxf = st.file_uploader("Upload DXF", type=['dxf'])
-        
-        # Pilihan Mode Elevasi
-        dxf_mode = st.radio("Sumber Elevasi:", ["Z-Coordinate (3D Peta)", "Y-Coordinate (Gambar Profil)"])
-        use_y_mode = True if dxf_mode == "Y-Coordinate (Gambar Profil)" else False
         
         if up_dxf and st.button("🚀 Load DXF"):
             content = up_dxf.read()
-            # Panggil Parser v2.0
-            pts = parse_dxf_raw_v2(content, use_y_as_z=use_y_mode)
+            # Panggil Parser Agresif
+            pts = parse_dxf_aggressive(content)
             
             if isinstance(pts, list) and len(pts) > 1:
                 rows = []
@@ -276,7 +249,7 @@ with st.sidebar:
                         "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
                     })
                 st.session_state['df_pro'] = pd.DataFrame(rows)
-                st.success(f"Sukses! {len(rows)} segmen (Mode: {'Y' if use_y_mode else 'Z'}).")
+                st.success(f"Sukses! {len(rows)} segmen (Z Elevation Detected).")
                 st.rerun()
             else:
                 st.error(f"Gagal: {pts}")
