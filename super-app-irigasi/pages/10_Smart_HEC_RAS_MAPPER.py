@@ -6,15 +6,7 @@ import io
 import tempfile
 import os
 import zipfile
-
-# Library Khusus CAD & GIS
-try:
-    import ezdxf
-    import geopandas as gpd
-    from shapely.geometry import LineString, Point
-    HAS_GIS_LIB = True
-except ImportError:
-    HAS_GIS_LIB = False
+import re
 
 # --- CONFIG ---
 st.set_page_config(page_title="Smart HEC-RAS Ultimate", layout="wide", page_icon="🏗️")
@@ -26,77 +18,96 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. ENGINE PARSER DXF & SHP ---
-
-def process_dxf_file(dxf_file_obj, use_z_as_elev=True):
-    """Membaca DXF dan mengubah Polyline menjadi DataFrame (STA, Elev)"""
+# --- 1. ENGINE PARSER DXF (MANUAL - NO LIBRARY NEEDED) ---
+def parse_dxf_raw(file_content):
+    """Membaca ASCII DXF secara manual tanpa library ezdxf"""
     try:
-        # Save to temp because ezdxf needs seekable stream or file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp:
-            tmp.write(dxf_file_obj.getvalue())
-            tmp_path = tmp.name
-
-        doc = ezdxf.readfile(tmp_path)
-        msp = doc.modelspace()
+        # Decode bytes to string
+        content = file_content.decode('utf-8', errors='ignore')
+        lines = content.splitlines()
         
         points = []
+        in_entities = False
+        collecting_polyline = False
+        current_polyline = []
         
-        # Cari Entity LWPOLYLINE atau POLYLINE
-        for entity in msp:
-            if entity.dxftype() in ['LWPOLYLINE', 'POLYLINE']:
-                # Ambil titik-titik (Vertices)
-                if entity.dxftype() == 'LWPOLYLINE':
-                    pts = entity.get_points() # format (x, y, start_width, end_width, bulge)
-                    # LWPolyline usually 2D, Z is elevation in OPTION
-                    z_val = entity.dxf.elevation
-                    cleaned_pts = [(p[0], p[1], z_val) for p in pts]
-                else: # POLYLINE (3D)
-                    cleaned_pts = [(v.dxf.location.x, v.dxf.location.y, v.dxf.location.z) for v in entity.vertices]
+        # Simple State Machine Parser
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Cek Section Entities
+            if line == 'SECTION':
+                if i+2 < len(lines) and lines[i+2].strip() == 'ENTITIES':
+                    in_entities = True
+            if line == 'ENDSEC':
+                in_entities = False
+            
+            if in_entities:
+                # Deteksi Polyline
+                if line == 'LWPOLYLINE' or line == 'POLYLINE':
+                    if current_polyline: # Simpan yang sebelumnya jika ada
+                        return process_points(current_polyline)
+                    collecting_polyline = True
+                    current_polyline = []
                 
-                # Proses Hitung Jarak (STA)
-                cum_dist = 0
-                for i, p in enumerate(cleaned_pts):
-                    x, y, z = p
-                    if i > 0:
-                        prev = cleaned_pts[i-1]
-                        # Jarak Euclidean 2D (Plan View)
-                        dist = np.sqrt((x - prev[0])**2 + (y - prev[1])**2)
-                        cum_dist += dist
-                    
-                    # Elevasi: Bisa Z asli, atau Y jika itu adalah Gambar Grafik Profil
-                    elev = z if use_z_as_elev else y
-                    points.append({"sta": cum_dist, "z": elev})
-                
-                # Ambil Polyline pertama yg valid saja (asumsi 1 file = 1 trace)
-                if len(points) > 1:
-                    break
+                # Ambil Koordinat (Group Code 10=X, 20=Y, 30=Z)
+                if collecting_polyline:
+                    if line == '10': # X
+                        x = float(lines[i+1].strip())
+                        # Cari Y (biasanya berurutan)
+                        y = 0; z = 0
+                        # Scan forward dikit buat cari 20 dan 30
+                        for k in range(1, 10): 
+                            if i+k >= len(lines): break
+                            if lines[i+k].strip() == '20':
+                                y = float(lines[i+k+1].strip())
+                            if lines[i+k].strip() == '30':
+                                z = float(lines[i+k+1].strip())
+                        current_polyline.append((x, y, z))
+                        
+            i += 1
+            
+        if current_polyline:
+            return process_points(current_polyline)
+            
+        return "Tidak ditemukan garis (Polyline) di file DXF."
         
-        os.remove(tmp_path)
-        return points
     except Exception as e:
-        return str(e)
+        return f"Error parsing DXF: {str(e)}"
+
+def process_points(pts):
+    """Konversi list of points (x,y,z) ke format STA, Elev"""
+    data = []
+    cum_dist = 0
+    for i, p in enumerate(pts):
+        x, y, z = p
+        if i > 0:
+            prev = pts[i-1]
+            dist = np.sqrt((x - prev[0])**2 + (y - prev[1])**2)
+            cum_dist += dist
+        # Prioritas Z sebagai elevasi, kalau Z=0 pakai Y (untuk gambar profil 2D)
+        elev = z if abs(z) > 0.001 else y 
+        data.append({"sta": cum_dist, "z": elev})
+    return data
+
+# --- 2. ENGINE PARSER SHP (BUTUH LIBRARY) ---
+try:
+    import geopandas as gpd
+    HAS_GEOPANDAS = True
+except ImportError:
+    HAS_GEOPANDAS = False
 
 def process_shp_zip(zip_file_obj):
-    """Membaca SHP dari dalam ZIP"""
+    if not HAS_GEOPANDAS: return "Library 'geopandas' belum terinstall."
     try:
         with tempfile.TemporaryDirectory() as tmpdirname:
-            # Extract ZIP
             with zipfile.ZipFile(zip_file_obj, 'r') as zip_ref:
                 zip_ref.extractall(tmpdirname)
-            
-            # Cari file .shp
-            shp_file = None
-            for root, dirs, files in os.walk(tmpdirname):
-                for file in files:
-                    if file.endswith(".shp"):
-                        shp_file = os.path.join(root, file)
-                        break
-            
+            shp_file = next((os.path.join(root, f) for root, _, files in os.walk(tmpdirname) for f in files if f.endswith(".shp")), None)
             if not shp_file: return "File .shp tidak ditemukan dalam ZIP."
             
             gdf = gpd.read_file(shp_file)
-            
-            # Ambil LineString Pertama
             points = []
             if not gdf.empty:
                 geom = gdf.geometry.iloc[0]
@@ -104,23 +115,17 @@ def process_shp_zip(zip_file_obj):
                     coords = list(geom.coords)
                     cum_dist = 0
                     for i, p in enumerate(coords):
-                        # p is (x, y, z) or (x, y)
                         x, y = p[0], p[1]
-                        z = p[2] if len(p) > 2 else 0 # Default Z=0 if 2D SHP
-                        
+                        z = p[2] if len(p) > 2 else 0 
                         if i > 0:
                             prev = coords[i-1]
                             dist = np.sqrt((x - prev[0])**2 + (y - prev[1])**2)
                             cum_dist += dist
                         points.append({"sta": cum_dist, "z": z})
-            
             return points
-            
-    except Exception as e:
-        return str(e)
+    except Exception as e: return str(e)
 
-# --- 2. ENGINE HIDROLIKA (CACHED) ---
-# ... (Fungsi hidrolika sama seperti sebelumnya, dipersingkat untuk hemat tempat) ...
+# --- 3. ENGINE HIDROLIKA (CACHED) ---
 def get_critical_depth(Q, b, m):
     y_min, y_max = 0.01, 20.0
     for _ in range(25):
@@ -152,11 +157,9 @@ def solve_step(y_k, Q, n, Z1, Z2, b, m, dx, mode):
 @st.cache_data
 def run_sim(data, Q, ws_d, ws_u, fs, ts, db, md, mode):
     nodes = []; drops = []; dx_step = 2.0
-    
-    # Generate Nodes from Data Dicts
     temp_nodes = []
     for s in data:
-        L = s['STA Akhir (m)'] - s['STA Awal (m)']; n_st = int(L/dx_step) if L>0 else 1
+        L = s['STA Akhir (m)'] - s['STA Awal (m)']; n_st = max(1, int(L/dx_step))
         rdx = L/n_st; z1 = s['Elev Awal (m)']; slp = (z1 - s['Elev Akhir (m)'])/L
         for i in range(n_st+1):
             temp_nodes.append({
@@ -171,26 +174,22 @@ def run_sim(data, Q, ws_d, ws_u, fs, ts, db, md, mode):
         if temp_nodes:
             cz = temp_nodes[0]['z_orig']
             for i, n in enumerate(temp_nodes):
-                if i>0: cz -= (n['x']-temp_nodes[i-1]['x'])*ts
+                if i>0: cz -= (n['x'] - temp_nodes[i-1]['x'])*ts
                 if (cz - n['z_orig']) > md: cz = n['z_orig']; drops.append(n['x'])
                 nodes.append({"x":n['x'], "z":cz, "b":db, "m":1.0, "n":0.025, "seg":n['seg'], "h_ch":n['h_ch']})
 
-    # Solver Loop (Simplified for brevity)
     for n in nodes: n['yc'] = get_critical_depth(Q, n['b'], n['m'])
     nodes[-1]['y_sub'] = ws_d; nodes[0]['y_sup'] = ws_u
     
-    # Subcritical
     for i in range(len(nodes)-2, -1, -1):
         try: nodes[i]['y_sub'] = max(solve_step(nodes[i+1]['y_sub'], Q, nodes[i]['n'], nodes[i+1]['z'], nodes[i]['z'], nodes[i]['b'], nodes[i]['m'], nodes[i+1]['x']-nodes[i]['x'], 'sub'), nodes[i]['yc']+0.01)
         except: nodes[i]['y_sub'] = nodes[i]['yc']+0.01
-        
-    # Supercritical
     for i in range(1, len(nodes)):
         try: nodes[i]['y_sup'] = max(solve_step(nodes[i-1]['y_sup'], Q, nodes[i]['n'], nodes[i-1]['z'], nodes[i]['z'], nodes[i]['b'], nodes[i]['m'], nodes[i]['x']-nodes[i-1]['x'], 'sup'), 0.01)
         except: nodes[i]['y_sup'] = nodes[i]['yc']-0.01
 
     for n in nodes:
-        n['y_final'] = n['y_sup'] if fs else (n['y_sub'] if n['y_sub'] > n['yc'] else n['y_sup']) # Simple logic
+        n['y_final'] = n['y_sup'] if fs else (n['y_sub'] if n['y_sub'] > n['yc'] else n['y_sup'])
         n['ws'] = n['z'] + n['y_final']; n['crit_ws'] = n['z'] + n['yc']
         n['freeboard'] = (n['z']+n['h_ch']) - n['ws']
         A,_,_,T,_ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
@@ -199,13 +198,13 @@ def run_sim(data, Q, ws_d, ws_u, fs, ts, db, md, mode):
 
     return nodes, drops
 
-# --- 3. STATE ---
+# --- 4. STATE ---
 REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)"]
 if 'df_pro' not in st.session_state: st.session_state['df_pro'] = pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5]], columns=REQUIRED_COLS)
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
 
-# --- 4. UI ---
-st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>Excel • DXF (CAD) • SHP (GIS)</p></div>""", unsafe_allow_html=True)
+# --- 5. UI ---
+st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>Excel • DXF (No Lib) • SHP</p></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -225,48 +224,40 @@ with st.sidebar:
     
     tab_xl, tab_cad, tab_gis = st.tabs(["📊 Excel", "📐 DXF", "🌍 SHP"])
     
-    # 1. EXCEL INPUT
     with tab_xl:
         up_excel = st.file_uploader("Upload Excel", type=['xlsx'])
         if up_excel: 
             try: st.session_state['df_pro'] = pd.read_excel(up_excel); st.rerun()
             except: pass
             
-    # 2. DXF INPUT (NEW!)
     with tab_cad:
-        if not HAS_GIS_LIB: st.error("Library `ezdxf` belum terinstall.")
-        else:
-            up_dxf = st.file_uploader("Upload DXF (Polyline)", type=['dxf'])
-            dxf_mode = st.radio("Mode DXF:", ["3D Polyline (Z = Elev)", "Profile Graph (Y = Elev)"])
-            use_z = True if dxf_mode == "3D Polyline (Z = Elev)" else False
-            
-            if up_dxf and st.button("🚀 Load DXF"):
-                pts = process_dxf_file(up_dxf, use_z_as_elev=use_z)
-                if isinstance(pts, list) and len(pts) > 1:
-                    # Convert Points to Segments
-                    rows = []
-                    for i in range(len(pts)-1):
-                        rows.append({
-                            "Nama Segmen": f"S{i+1}", 
-                            "STA Awal (m)": pts[i]['sta'], "STA Akhir (m)": pts[i+1]['sta'],
-                            "Elev Awal (m)": pts[i]['z'], "Elev Akhir (m)": pts[i+1]['z'],
-                            "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
-                        })
-                    st.session_state['df_pro'] = pd.DataFrame(rows)
-                    st.success(f"Berhasil load {len(rows)} segmen dari DXF!")
-                    st.rerun()
-                else:
-                    st.error(f"Gagal baca DXF: {pts}")
+        st.info("Support ASCII DXF (R12/2000)")
+        up_dxf = st.file_uploader("Upload DXF", type=['dxf'])
+        if up_dxf and st.button("🚀 Load DXF"):
+            content = up_dxf.read()
+            pts = parse_dxf_raw(content) # Pakai parser manual kita
+            if isinstance(pts, list) and len(pts) > 1:
+                rows = []
+                for i in range(len(pts)-1):
+                    rows.append({
+                        "Nama Segmen": f"S{i+1}", 
+                        "STA Awal (m)": pts[i]['sta'], "STA Akhir (m)": pts[i+1]['sta'],
+                        "Elev Awal (m)": pts[i]['z'], "Elev Akhir (m)": pts[i+1]['z'],
+                        "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
+                    })
+                st.session_state['df_pro'] = pd.DataFrame(rows)
+                st.success(f"Sukses! {len(rows)} segmen.")
+                st.rerun()
+            else:
+                st.error(f"Gagal: {pts}")
 
-    # 3. SHP INPUT (NEW!)
     with tab_gis:
-        if not HAS_GIS_LIB: st.error("Library `geopandas` belum terinstall.")
+        if not HAS_GEOPANDAS: st.warning("⚠️ Butuh library 'geopandas' untuk file SHP.")
         else:
-            st.info("Upload file .ZIP yang berisi (.shp, .shx, .dbf)")
-            up_shp = st.file_uploader("Upload SHP (ZIP)", type=['zip'])
+            up_shp = st.file_uploader("Upload ZIP (.shp,.shx,.dbf)", type=['zip'])
             if up_shp and st.button("🚀 Load SHP"):
                 pts = process_shp_zip(up_shp)
-                if isinstance(pts, list) and len(pts) > 1:
+                if isinstance(pts, list):
                     rows = []
                     for i in range(len(pts)-1):
                         rows.append({
@@ -276,37 +267,30 @@ with st.sidebar:
                             "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
                         })
                     st.session_state['df_pro'] = pd.DataFrame(rows)
-                    st.success(f"Berhasil load {len(rows)} segmen dari SHP!")
+                    st.success("SHP Loaded!")
                     st.rerun()
-                else:
-                    st.error(f"Gagal baca SHP: {pts}")
 
     if st.button("Reset Default"): 
         st.session_state['df_pro'] = pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5]], columns=REQUIRED_COLS)
         st.rerun()
 
-# --- 5. EXECUTION & VIZ ---
+# --- 5. VIZ ---
 df = st.session_state['df_pro']
 data = df.to_dict('records')
-
 nodes_ex, _ = run_sim(data, st.session_state['q_pro'], 0.5, 0.2, force_super, 0, 0, 0, "existing")
 nodes_new, drops_new = ([], [])
 if use_redesign:
     nodes_new, drops_new = run_sim(data, st.session_state['q_pro'], 1.0, 1.0, False, ts, db, md, "redesign")
 
-# TABS
-tabs = ["📝 Input", "📈 Visualisasi", "📑 Rekap", "📘 Kriteria"]
-t1, t2, t3, t4 = st.tabs(tabs)
+t1, t2, t3, t4 = st.tabs(["📝 Input", "📈 Visualisasi", "📑 Rekap", "📘 Kriteria"])
 
-with t1:
-    st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch')
+with t1: st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch')
 
 with t2:
     if nodes_ex:
         st.subheader("Long & Cross Section")
         mode = st.radio("Tampilan:", ["Long Section", "Cross Section"], horizontal=True)
         fig, ax = plt.subplots(figsize=(10, 6))
-        
         if mode == "Long Section":
             x=[n['x'] for n in nodes_ex]; z=[n['z'] for n in nodes_ex]; w=[n['ws'] for n in nodes_ex]
             ax.plot(x, z, 'k--', label='Tanah Asli'); ax.plot(x, w, 'b:', label='WS Ex')
@@ -315,34 +299,23 @@ with t2:
                 ax.plot(xn, zn, 'brown', lw=2, label='Desain'); ax.plot(xn, wn, 'b-', label='WS Desain')
                 ax.fill_between(xn, zn, wn, color='cyan', alpha=0.3)
                 for d in drops_new: ax.axvline(x=d, color='red', ls='--')
-            else:
-                ax.fill_between(x, z, w, color='cyan', alpha=0.3)
+            else: ax.fill_between(x, z, w, color='cyan', alpha=0.3)
             ax.legend(); ax.grid(True, alpha=0.3)
-            
         else: # Cross
             sta_opts = [n['x'] for n in nodes_ex]
             sel = st.selectbox("STA:", sta_opts)
             nx = next((n for n in nodes_ex if n['x']==sel), None)
             nn = next((n for n in nodes_new if n['x']==sel), None) if use_redesign else None
             curr = nn if (use_redesign and nn) else nx
-            
             if curr:
-                # Simple Trapz Plot
-                H=curr['h_ch']; B=curr['b']; Z=curr['m']
-                tw = B + 2*Z*H
+                H=curr['h_ch']; B=curr['b']; Z=curr['m']; tw = B + 2*Z*H
                 pts = [(-tw/2, curr['z']+H), (-B/2, curr['z']), (B/2, curr['z']), (tw/2, curr['z']+H)]
-                poly = plt.Polygon(pts, closed=False, fc='none', ec='brown' if use_redesign else 'black', lw=2)
-                ax.add_patch(poly)
-                # Water
+                ax.add_patch(plt.Polygon(pts, closed=False, fc='none', ec='brown' if use_redesign else 'black', lw=2))
                 tw_w = B + 2*Z*curr['y_final']
                 w_pts = [(-tw_w/2, curr['ws']), (tw_w/2, curr['ws']), (B/2, curr['z']), (-B/2, curr['z'])]
                 ax.add_patch(plt.Polygon(w_pts, color='cyan', alpha=0.5))
-                # Ground Ref
                 if nx: ax.plot([-10, 10], [nx['z'], nx['z']], 'k--', alpha=0.3, label='Tanah Asli')
-                
-                ax.autoscale(); ax.set_aspect('equal')
-                st.metric("Freeboard", f"{curr['freeboard']:.2f} m")
-        
+                ax.autoscale(); ax.set_aspect('equal'); st.metric("Freeboard", f"{curr['freeboard']:.2f} m")
         st.pyplot(fig)
 
 with t3:
@@ -350,5 +323,4 @@ with t3:
         res = pd.DataFrame(nodes_new if use_redesign else nodes_ex)
         st.dataframe(res[['x', 'z', 'ws', 'fr', 'v', 'freeboard']].style.format("{:.2f}"), width='stretch')
 
-with t4:
-    st.info("Rumus: Manning & Standard Step Method")
+with t4: st.info("Rumus: Manning & Standard Step Method")
