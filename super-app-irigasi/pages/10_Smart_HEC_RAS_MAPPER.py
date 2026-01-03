@@ -2,167 +2,68 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import tempfile
-import os
-import zipfile
-import io
+import requests
+import folium
+from streamlit_folium import st_folium
+from folium.plugins import Draw
 
 # --- CONFIG ---
-st.set_page_config(page_title="Smart HEC-RAS Ultimate", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="Smart HEC-RAS GIS", layout="wide", page_icon="🛰️")
 
 st.markdown("""
 <style>
-    .header-box { padding: 20px; background: linear-gradient(90deg, #002B5B, #2B4865); color: white; border-radius: 8px; text-align: center; margin-bottom: 20px; }
-    .metric-card { background-color: #f0f4f8; padding: 15px; border-radius: 8px; border-left: 5px solid #002B5B; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .header-box { padding: 20px; background: linear-gradient(90deg, #0f0c29, #302b63, #24243e); color: white; border-radius: 8px; text-align: center; margin-bottom: 20px; }
+    .stAlert { padding: 10px; border-radius: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. SMART PARSER DXF (HEURISTIC) ---
-def parse_dxf_smart(file_content, use_y_as_z=False):
+# --- 1. ENGINE GIS (DEM FETCHING) ---
+def get_elevation_profile(coords):
     """
-    Membaca SEMUA Polyline, lalu memilih yang terpanjang (Heuristik: Garis Profil = Titik Terbanyak).
+    Mengambil data elevasi dari Open-Elevation API (Public DEM).
+    Input: List of [Lat, Lon]
+    Output: List of Dict {'sta': ..., 'z': ...}
     """
+    # Format koordinat untuk API
+    locations = [{"latitude": lat, "longitude": lon} for lat, lon in coords]
+    
     try:
-        content = file_content.decode('utf-8', errors='ignore')
-        lines = [line.strip() for line in content.splitlines()]
+        # Panggil API (Gratis, Global Coverage SRTM)
+        url = "https://api.open-elevation.com/api/v1/lookup"
+        resp = requests.post(url, json={"locations": locations}, timeout=10)
         
-        polylines = []
-        current_points = []
-        in_entities = False
-        collecting = False
-        
-        i = 0
-        while i < len(lines):
-            code = lines[i]
-            val = lines[i+1] if i+1 < len(lines) else ""
+        if resp.status_code == 200:
+            data = resp.json()['results']
             
-            if code == '0' and val == 'SECTION':
-                if i+2 < len(lines) and lines[i+2] == '2' and lines[i+3] == 'ENTITIES':
-                    in_entities = True
-                    i += 4; continue
+            # Hitung Jarak Kumulatif (Haversine)
+            profile = []
+            cum_dist = 0.0
             
-            if code == '0' and val == 'ENDSEC':
-                in_entities = False
-            
-            if in_entities:
-                # START NEW POLYLINE
-                if code == '0' and (val == 'LWPOLYLINE' or val == 'POLYLINE'):
-                    if current_points: 
-                        polylines.append(current_points)
-                    current_points = []
-                    collecting = True
+            for i, p in enumerate(data):
+                elev = p['elevation']
                 
-                # END POLYLINE
-                elif code == '0' and val == 'SEQEND':
-                    if current_points: 
-                        polylines.append(current_points)
-                    current_points = []
-                    collecting = False
+                if i > 0:
+                    lat1, lon1 = coords[i-1]
+                    lat2, lon2 = coords[i]
+                    # Haversine Formula (Jarak antar koordinat bumi)
+                    R = 6371000 # Radius bumi (meter)
+                    phi1, phi2 = np.radians(lat1), np.radians(lat2)
+                    dphi = np.radians(lat2 - lat1)
+                    dlam = np.radians(lon2 - lon1)
+                    a = np.sin(dphi/2)**2 + np.cos(phi1)*np.cos(phi2)*np.sin(dlam/2)**2
+                    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+                    dist = R * c
+                    cum_dist += dist
                 
-                # CAPTURE VERTEX (3D POLYLINE)
-                elif code == '0' and val == 'VERTEX' and collecting:
-                    # Scan vertex data
-                    vx, vy, vz = 0, 0, 0
-                    j = 1
-                    while j < 20 and (i+j*2) < len(lines):
-                        c = lines[i+j*2]; v = lines[i+j*2+1]
-                        if c == '0': break 
-                        if c == '10': vx = float(v)
-                        elif c == '20': vy = float(v)
-                        elif c == '30': vz = float(v)
-                        j += 1
-                    
-                    z_final = vy if use_y_as_z else vz
-                    current_points.append((vx, vy, z_final))
-
-                # CAPTURE POINT (LWPOLYLINE 2D) - Simple Logic
-                elif code == '10' and collecting:
-                    # Asumsi 10, 20 berurutan untuk LWPOLYLINE simple
-                    try:
-                        cx = float(val)
-                        cy = float(lines[i+3]) # Code 20
-                        cz = 0.0 # LW usually 0
-                        
-                        z_final = cy if use_y_as_z else cz
-                        current_points.append((cx, cy, z_final))
-                    except: pass
-
-            i += 2
-            
-        # Flush last
-        if current_points: polylines.append(current_points)
-        
-        if not polylines:
-            return "Tidak ada garis ditemukan.", None
-
-        # --- SMART SELECTION ---
-        # Cari Polyline dengan jumlah titik terbanyak (Garis Tanah)
-        # Garis grid biasanya cuma 2 titik. Garis tanah > 10.
-        best_poly = max(polylines, key=len)
-        
-        if len(best_poly) < 2:
-            return "Garis terlalu pendek / hanya berupa titik.", None
-            
-        # Convert to Stationing
-        data = []
-        cum_dist = 0
-        for k, p in enumerate(best_poly):
-            if k > 0:
-                dist = np.sqrt((p[0] - best_poly[k-1][0])**2 + (p[1] - best_poly[k-1][1])**2)
-                cum_dist += dist
-            
-            # PENTING: Untuk Profile Graph, X adalah Station (Jarak), Y adalah Elevasi
-            # Jika user memilih mode 'Profile Graph', kita pakai X asli sebagai STA (jika terurut) atau hitung ulang
-            # Kita pakai perhitungan jarak manual saja biar aman.
-            
-            data.append({"sta": cum_dist, "z": p[2]}) # p[2] sudah diset sesuai mode Y/Z di atas
-            
-        return None, data
-
+                profile.append({"sta": cum_dist, "z": elev})
+            return profile
+        else:
+            return None
     except Exception as e:
-        return f"Error: {str(e)}", None
+        st.error(f"Gagal koneksi ke Satelit DEM: {e}")
+        return None
 
-# --- 2. ENGINE SHP (Library Check) ---
-try:
-    import geopandas as gpd
-    HAS_GEOPANDAS = True
-except ImportError:
-    HAS_GEOPANDAS = False
-
-def process_shp_zip(zip_file_obj):
-    if not HAS_GEOPANDAS: return "Library 'geopandas' belum terinstall.", None
-    try:
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            with zipfile.ZipFile(zip_file_obj, 'r') as zip_ref:
-                zip_ref.extractall(tmpdirname)
-            shp_file = next((os.path.join(r, f) for r, _, fs in os.walk(tmpdirname) for f in fs if f.endswith(".shp")), None)
-            if not shp_file: return "File .shp tidak ditemukan.", None
-            
-            gdf = gpd.read_file(shp_file)
-            points = []
-            if not gdf.empty:
-                # Cek Z dari Geometri 3D atau Kolom Atribut
-                has_z_geom = gdf.geometry.has_z.any()
-                z_col = next((c for c in gdf.columns if c.upper() in ['Z', 'ELEV', 'ELEVATION', 'HEIGHT']), None)
-                
-                geom = gdf.geometry.iloc[0]
-                if geom.geom_type in ['LineString', 'LineStringZ']:
-                    coords = list(geom.coords)
-                    cum_dist = 0
-                    for i, p in enumerate(coords):
-                        if i > 0:
-                            dist = np.sqrt((coords[i][0]-coords[i-1][0])**2 + (coords[i][1]-coords[i-1][1])**2)
-                            cum_dist += dist
-                        
-                        z_val = 0.0
-                        if has_z_geom and len(p) > 2: z_val = p[2]
-                        elif z_col: z_val = gdf.iloc[0][z_col]
-                        
-                        points.append({"sta": cum_dist, "z": z_val})
-            return None, points
-    except Exception as e: return str(e), None
-
-# --- 3. ENGINE HIDROLIKA (CACHED) ---
+# --- 2. ENGINE HIDROLIKA (ROBUST) ---
 def get_critical_depth(Q, b, m):
     y_min, y_max = 0.01, 20.0
     for _ in range(25):
@@ -193,14 +94,16 @@ def solve_step(y_k, Q, n, Z1, Z2, b, m, dx, mode):
 
 @st.cache_data
 def run_sim(data, Q, ws_d, ws_u, fs, ts, db, md, mode):
-    nodes = []; drops = []; dx_step = 2.0
+    nodes = []; drops = []; dx_step = 5.0 # Step lebih besar untuk data DEM
     temp_nodes = []
     
-    # Pre-cleaning: sort by STA
     sorted_data = sorted(data, key=lambda x: x['STA Awal (m)'])
     
     for s in sorted_data:
-        L = s['STA Akhir (m)'] - s['STA Awal (m)']; n_st = max(1, int(L/dx_step))
+        L = s['STA Akhir (m)'] - s['STA Awal (m)']
+        if L <= 0.01: continue # FIX: Skip Zero Length (Masalah Kakak yang tadi)
+        
+        n_st = max(1, int(L/dx_step))
         rdx = L/n_st; z1 = s['Elev Awal (m)']; slp = (z1 - s['Elev Akhir (m)'])/L
         for i in range(n_st+1):
             temp_nodes.append({
@@ -233,143 +136,112 @@ def run_sim(data, Q, ws_d, ws_u, fs, ts, db, md, mode):
 
     for n in nodes:
         n['y_final'] = n['y_sup'] if fs else (n['y_sub'] if n['y_sub'] > n['yc'] else n['y_sup'])
-        n['ws'] = n['z'] + n['y_final']; n['crit_ws'] = n['z'] + n['yc']
+        n['ws'] = n['z'] + n['y_final']
         n['freeboard'] = (n['z']+n['h_ch']) - n['ws']
         A,_,_,T,_ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
         n['v'] = Q/A if A>0 else 0; n['fr'] = n['v']/np.sqrt(9.81*A/T) if T>0 else 0
-        n['eg'] = n['ws'] + n['v']**2/19.62
 
     return nodes, drops
 
-# --- 4. STATE ---
+# --- 3. STATE ---
 REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)"]
 if 'df_pro' not in st.session_state: st.session_state['df_pro'] = pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5]], columns=REQUIRED_COLS)
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
 
-# --- 5. UI ---
-st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>Excel • Smart DXF (Auto-Detect) • SHP</p></div>""", unsafe_allow_html=True)
+# --- 4. UI ---
+st.markdown("""<div class="header-box"><h1>🛰️ Smart HEC-RAS Satellite</h1><p>Draw on Map & Get Elevation Instantly</p></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("⚙️ Hydraulic Params")
     st.session_state['q_pro'] = st.number_input("Debit (Q)", 0.01, 1000.0, st.session_state['q_pro'])
-    force_super = st.checkbox("🔥 Force Supercritical", False)
     
     st.divider()
     use_redesign = st.checkbox("Aktifkan Redesain", False)
     ts = 0.001; db = 1.5; md = 1.5
     if use_redesign:
-        ts = st.number_input("Target S", 0.0001, 0.05, 0.001, format="%.4f")
-        db = st.number_input("Lebar Desain", 0.1, 50.0, 1.5)
+        ts = st.number_input("Target Slope", 0.0001, 0.05, 0.001, format="%.4f")
+        db = st.number_input("Design Width", 0.1, 50.0, 1.5)
         md = st.number_input("Max Drop", 0.5, 5.0, 1.5)
     
     st.divider()
-    st.subheader("📂 Input Data")
-    tab_xl, tab_cad, tab_gis = st.tabs(["📊 Excel", "📐 DXF", "🌍 SHP"])
-    
-    with tab_xl:
-        up_excel = st.file_uploader("Upload Excel", type=['xlsx'])
-        if up_excel: 
-            try: st.session_state['df_pro'] = pd.read_excel(up_excel); st.rerun()
-            except: pass
-            
-    with tab_cad:
-        st.info("Otomatis mencari garis profil terpanjang.")
-        up_dxf = st.file_uploader("Upload DXF", type=['dxf'])
-        
-        # Opsi Paksa Y sebagai Z
-        force_y = st.checkbox("Paksa Pakai Y sebagai Elevasi (Untuk Gambar Profil 2D)", value=True)
-        
-        if up_dxf and st.button("🚀 Load DXF"):
-            content = up_dxf.read()
-            err, pts = parse_dxf_smart(content, use_y_as_z=force_y)
-            
-            if err:
-                st.error(err)
-            elif pts:
-                rows = []
-                for i in range(len(pts)-1):
-                    rows.append({
-                        "Nama Segmen": f"S{i+1}", 
-                        "STA Awal (m)": pts[i]['sta'], "STA Akhir (m)": pts[i+1]['sta'],
-                        "Elev Awal (m)": pts[i]['z'], "Elev Akhir (m)": pts[i+1]['z'],
-                        "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
-                    })
-                st.session_state['df_pro'] = pd.DataFrame(rows)
-                st.success(f"Sukses! Garis terpanjang ({len(rows)} segmen) diambil.")
-                st.rerun()
-
-    with tab_gis:
-        if not HAS_GEOPANDAS: st.warning("⚠️ Library 'geopandas' tidak ditemukan. Import SHP dinonaktifkan.")
-        else:
-            up_shp = st.file_uploader("Upload ZIP (.shp,.shx,.dbf)", type=['zip'])
-            if up_shp and st.button("🚀 Load SHP"):
-                err, pts = process_shp_zip(up_shp)
-                if err:
-                    st.error(err)
-                elif pts:
-                    rows = []
-                    for i in range(len(pts)-1):
-                        rows.append({
-                            "Nama Segmen": f"S{i+1}", 
-                            "STA Awal (m)": pts[i]['sta'], "STA Akhir (m)": pts[i+1]['sta'],
-                            "Elev Awal (m)": pts[i]['z'], "Elev Akhir (m)": pts[i+1]['z'],
-                            "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
-                        })
-                    st.session_state['df_pro'] = pd.DataFrame(rows)
-                    st.success("SHP Loaded!")
-                    st.rerun()
-
-    if st.button("Reset Default"): 
+    if st.button("Reset All Data"):
         st.session_state['df_pro'] = pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5]], columns=REQUIRED_COLS)
         st.rerun()
 
-# --- 6. VIZ ---
+# --- 5. TABS ---
+t_map, t_res, t_tab = st.tabs(["🗺️ Draw Map (GIS)", "📈 Hydraulic Profile", "📝 Data Table"])
+
+with t_map:
+    st.info("👆 Gunakan tool **Polyline** (ikon segilima) di kiri peta untuk menggambar jalur sungai/saluran.")
+    
+    # 1. Render Map
+    m = folium.Map(location=[-6.200000, 106.816666], zoom_start=13) # Default Jakarta
+    draw = Draw(
+        draw_options={"polyline": True, "polygon": False, "circle": False, "marker": False, "circlemarker": False, "rectangle": False},
+        edit_options={"edit": False}
+    )
+    draw.add_to(m)
+    
+    output = st_folium(m, width=1200, height=500)
+    
+    # 2. Process Drawing
+    if output.get("all_drawings"):
+        drawings = output["all_drawings"]
+        if drawings:
+            # Ambil gambar terakhir
+            last_draw = drawings[-1]
+            coords = last_draw['geometry']['coordinates'] # [[lon, lat], ...]
+            # Swap to [lat, lon] for API
+            path_coords = [[p[1], p[0]] for p in coords]
+            
+            if st.button("🚀 Ambil Data Elevasi & Hitung"):
+                with st.spinner("Menghubungi Satelit DEM..."):
+                    profile = get_elevation_profile(path_coords)
+                    
+                    if profile:
+                        # Convert to DataFrame Format
+                        rows = []
+                        for i in range(len(profile)-1):
+                            rows.append({
+                                "Nama Segmen": f"S{i+1}", 
+                                "STA Awal (m)": profile[i]['sta'], "STA Akhir (m)": profile[i+1]['sta'],
+                                "Elev Awal (m)": profile[i]['z'], "Elev Akhir (m)": profile[i+1]['z'],
+                                "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
+                            })
+                        
+                        st.session_state['df_pro'] = pd.DataFrame(rows)
+                        st.success(f"Berhasil mengambil {len(rows)} titik elevasi dari Peta!")
+                        st.rerun() # Refresh to show results
+
+# EXECUTION
 df = st.session_state['df_pro']
 data = df.to_dict('records')
-nodes_ex, _ = run_sim(data, st.session_state['q_pro'], 0.5, 0.2, force_super, 0, 0, 0, "existing")
+nodes_ex, _ = run_sim(data, st.session_state['q_pro'], 0.5, 0.2, False, 0, 0, 0, "existing")
 nodes_new, drops_new = ([], [])
 if use_redesign:
     nodes_new, drops_new = run_sim(data, st.session_state['q_pro'], 1.0, 1.0, False, ts, db, md, "redesign")
 
-t1, t2, t3, t4 = st.tabs(["📝 Input", "📈 Visualisasi", "📑 Rekap", "📘 Kriteria"])
-
-with t1: st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch')
-
-with t2:
+with t_res:
     if nodes_ex:
-        st.subheader("Long & Cross Section")
-        mode = st.radio("Tampilan:", ["Long Section", "Cross Section"], horizontal=True)
-        fig, ax = plt.subplots(figsize=(10, 6))
-        if mode == "Long Section":
-            x=[n['x'] for n in nodes_ex]; z=[n['z'] for n in nodes_ex]; w=[n['ws'] for n in nodes_ex]
-            ax.plot(x, z, 'k--', label='Tanah Asli'); ax.plot(x, w, 'b:', label='WS Ex')
-            if use_redesign and nodes_new:
-                xn=[n['x'] for n in nodes_new]; zn=[n['z'] for n in nodes_new]; wn=[n['ws'] for n in nodes_new]
-                ax.plot(xn, zn, 'brown', lw=2, label='Desain'); ax.plot(xn, wn, 'b-', label='WS Desain')
-                ax.fill_between(xn, zn, wn, color='cyan', alpha=0.3)
-                for d in drops_new: ax.axvline(x=d, color='red', ls='--')
-            else: ax.fill_between(x, z, w, color='cyan', alpha=0.3)
-            ax.legend(); ax.grid(True, alpha=0.3)
-        else: # Cross
-            sta_opts = [n['x'] for n in nodes_ex]
-            sel = st.selectbox("STA:", sta_opts)
-            nx = next((n for n in nodes_ex if n['x']==sel), None)
-            nn = next((n for n in nodes_new if n['x']==sel), None) if use_redesign else None
-            curr = nn if (use_redesign and nn) else nx
-            if curr:
-                H=curr['h_ch']; B=curr['b']; Z=curr['m']; tw = B + 2*Z*H
-                pts = [(-tw/2, curr['z']+H), (-B/2, curr['z']), (B/2, curr['z']), (tw/2, curr['z']+H)]
-                ax.add_patch(plt.Polygon(pts, closed=False, fc='none', ec='brown' if use_redesign else 'black', lw=2))
-                tw_w = B + 2*Z*curr['y_final']
-                w_pts = [(-tw_w/2, curr['ws']), (tw_w/2, curr['ws']), (B/2, curr['z']), (-B/2, curr['z'])]
-                ax.add_patch(plt.Polygon(w_pts, color='cyan', alpha=0.5))
-                if nx: ax.plot([-10, 10], [nx['z'], nx['z']], 'k--', alpha=0.3, label='Tanah Asli')
-                ax.autoscale(); ax.set_aspect('equal'); st.metric("Freeboard", f"{curr['freeboard']:.2f} m")
+        st.subheader("Profil Hidrolis")
+        fig, ax = plt.subplots(figsize=(12, 6))
+        x=[n['x'] for n in nodes_ex]; z=[n['z'] for n in nodes_ex]; w=[n['ws'] for n in nodes_ex]
+        
+        ax.plot(x, z, 'k-', lw=1.5, label='Tanah Asli (DEM)')
+        ax.plot(x, w, 'b:', label='Muka Air Eksisting')
+        ax.fill_between(x, z, w, color='cyan', alpha=0.3)
+        
+        if use_redesign and nodes_new:
+            xn=[n['x'] for n in nodes_new]; zn=[n['z'] for n in nodes_new]; wn=[n['ws'] for n in nodes_new]
+            ax.plot(xn, zn, 'brown', lw=2, label='Desain Baru')
+            ax.plot(xn, wn, 'g-', label='Muka Air Desain')
+            # Drops
+            for d in drops_new: ax.axvline(x=d, color='red', ls='--', alpha=0.5)
+            
+        ax.legend(); ax.grid(True, alpha=0.3); ax.set_xlabel("Jarak (m)"); ax.set_ylabel("Elevasi (m)")
         st.pyplot(fig)
+    else:
+        st.info("Silakan gambar jalur di Tab 'Draw Map' dulu.")
 
-with t3:
-    if nodes_ex:
-        res = pd.DataFrame(nodes_new if use_redesign else nodes_ex)
-        st.dataframe(res[['x', 'z', 'ws', 'fr', 'v', 'freeboard']].style.format("{:.2f}"), width='stretch')
-
-with t4: st.info("Rumus: Manning & Standard Step Method")
+with t_tab:
+    st.data_editor(df, num_rows="dynamic", width='stretch')
