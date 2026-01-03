@@ -140,7 +140,7 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         
         A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
         V = Q/A if A > 0 else 0
-        n['v'] = V # STORE VELOCITY
+        n['v'] = V # Store Velocity
         
         n['eg'] = n['ws'] + (V**2)/(2*9.81)
         D_hyd = A/T if T > 0 else 0
@@ -176,7 +176,7 @@ with st.sidebar:
     st.session_state['ws_down'] = st.number_input("Hilir (Sub): Kedalaman (m)", 0.01, 20.0, st.session_state['ws_down'])
     
     st.divider()
-    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_rekap_v3")
+    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_rekap_v4")
     if up_file:
         try:
             df = pd.read_excel(up_file)
@@ -273,6 +273,7 @@ with t3:
         if node:
             c1, c2 = st.columns([2, 1])
             with c1:
+                # Plot Gambar
                 fig_cs, ax_cs = plt.subplots(figsize=(8, 5))
                 b, m, z, y, ws = node['b'], node['m'], node['z'], node['y_final'], node['ws']
                 depth_draw = max(y, node['yc']) * 1.5 if y > 0 else 1.0
@@ -291,14 +292,20 @@ with t3:
                 ax_cs.set_title(f"Cross Section STA {sel_sta:.2f}"); ax_cs.legend(); ax_cs.grid(True, ls=':')
                 st.pyplot(fig_cs)
             with c2:
+                # Info Angka
                 st.metric("Kedalaman Air (y)", f"{node['y_final']:.3f} m")
                 st.metric("Kecepatan (V)", f"{node['v']:.3f} m/s")
                 st.metric("Froude", f"{node['fr']:.2f}")
+                st.divider()
+                st.caption("Detail Dimensi:")
+                st.text(f"Lebar Bawah (b) : {node['b']:.2f} m")
+                st.text(f"Lebar Atas (T)  : {node['top_width']:.2f} m")
+                st.text(f"Luas Basah (A)  : {node['area']:.2f} m²")
 
 with t4:
     if final_data:
         st.subheader("📋 Rekapitulasi Data Per Segmen (Untuk AutoCAD)")
-        st.caption("Tabel ini merangkum nilai di **Hulu (Start)** dan **Hilir (End)** setiap segmen.")
+        st.caption("Ringkasan data Hulu & Hilir per segmen, lengkap dengan dimensi lebar.")
         
         res_df = pd.DataFrame(final_data)
         summary_list = []
@@ -311,26 +318,26 @@ with t4:
             
             summary_list.append({
                 "Segmen": seg_name,
-                "Panjang (m)": f"{(hilir['x'] - hulu['x']):.2f}",
                 "STA Awal": f"{hulu['x']:.2f}",
                 "STA Akhir": f"{hilir['x']:.2f}",
+                "Lebar Bawah (b)": f"{hulu['b']:.2f}",  # Asumsi b tetap dlm satu segmen
+                "Lebar Atas Hulu (T)": f"{hulu['top_width']:.2f}",
+                "Lebar Atas Hilir (T)": f"{hilir['top_width']:.2f}",
                 "Elv Dasar Hulu": f"{hulu['z']:.3f}",
                 "Elv Dasar Hilir": f"{hilir['z']:.3f}",
                 "M.A. Hulu": f"{hulu['ws']:.3f}",
                 "M.A. Hilir": f"{hilir['ws']:.3f}",
-                "Tinggi Jagaan Hulu": f"{(hulu['z'] + hulu['y_final'] + 0.5):.3f}", # Asumsi tinggi tanggul +0.5 dari air? Atau user hitung sendiri
-                "Kecepatan Hulu": f"{hulu['v']:.3f}",
-                "Kecepatan Hilir": f"{hilir['v']:.3f}",
-                "Froude Avg": f"{seg_data['fr'].mean():.2f}"
+                "V Hulu": f"{hulu['v']:.3f}",
+                "V Hilir": f"{hilir['v']:.3f}"
             })
             
         sum_df = pd.DataFrame(summary_list)
-        st.dataframe(sum_df, use_container_width=True)
-        st.download_button("Download Rekap Segmen (CSV)", sum_df.to_csv(index=False).encode('utf-8'), "Rekap_Segmen_AutoCAD.csv")
+        st.dataframe(sum_df, width='stretch') # Tabel lebih lebar
+        st.download_button("Download Rekap AutoCAD (CSV)", sum_df.to_csv(index=False).encode('utf-8'), "Rekap_Segmen_AutoCAD.csv")
 
 with t5:
     if final_data:
         res = pd.DataFrame(final_data)[["x", "seg", "z", "ws", "y_final", "fr", "regime", "v", "eg"]]
         res.columns = ["Sta", "Segmen", "Elev Dasar", "W.S.", "Depth", "Froude", "Regime", "Velocity", "E.G."]
-        st.dataframe(res, use_container_width=True)
+        st.dataframe(res, width='stretch')
         st.download_button("Download Laporan Detail (CSV)", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
