@@ -9,3 +9,6 @@ matplotlib
 xlsxwriter
 ezdxf
 geopandas
+requests
+folium
+streamlit-folium
