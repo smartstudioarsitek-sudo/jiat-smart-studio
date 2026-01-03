@@ -17,10 +17,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. SMART PARSER DXF (HEURISTIC) ---
+# --- 1. SMART PARSER DXF (ANTI-DUPLICATE) ---
 def parse_dxf_smart(file_content, use_y_as_z=False):
     """
-    Membaca SEMUA Polyline, lalu memilih yang terpanjang (Heuristik: Garis Profil = Titik Terbanyak).
+    Membaca SEMUA Polyline, memilih yang terpanjang, dan memfilter titik ganda.
     """
     try:
         content = file_content.decode('utf-8', errors='ignore')
@@ -47,21 +47,18 @@ def parse_dxf_smart(file_content, use_y_as_z=False):
             if in_entities:
                 # START NEW POLYLINE
                 if code == '0' and (val == 'LWPOLYLINE' or val == 'POLYLINE'):
-                    if current_points: 
-                        polylines.append(current_points)
+                    if current_points: polylines.append(current_points)
                     current_points = []
                     collecting = True
                 
                 # END POLYLINE
                 elif code == '0' and val == 'SEQEND':
-                    if current_points: 
-                        polylines.append(current_points)
+                    if current_points: polylines.append(current_points)
                     current_points = []
                     collecting = False
                 
-                # CAPTURE VERTEX (3D POLYLINE)
+                # CAPTURE VERTEX (3D)
                 elif code == '0' and val == 'VERTEX' and collecting:
-                    # Scan vertex data
                     vx, vy, vz = 0, 0, 0
                     j = 1
                     while j < 20 and (i+j*2) < len(lines):
@@ -71,53 +68,52 @@ def parse_dxf_smart(file_content, use_y_as_z=False):
                         elif c == '20': vy = float(v)
                         elif c == '30': vz = float(v)
                         j += 1
-                    
                     z_final = vy if use_y_as_z else vz
                     current_points.append((vx, vy, z_final))
 
-                # CAPTURE POINT (LWPOLYLINE 2D) - Simple Logic
+                # CAPTURE POINT (2D LWPOLYLINE)
                 elif code == '10' and collecting:
-                    # Asumsi 10, 20 berurutan untuk LWPOLYLINE simple
                     try:
                         cx = float(val)
                         cy = float(lines[i+3]) # Code 20
-                        cz = 0.0 # LW usually 0
-                        
+                        cz = 0.0 # LW default 0
                         z_final = cy if use_y_as_z else cz
                         current_points.append((cx, cy, z_final))
                     except: pass
 
             i += 2
             
-        # Flush last
         if current_points: polylines.append(current_points)
         
-        if not polylines:
-            return "Tidak ada garis ditemukan.", None
+        if not polylines: return "Tidak ada garis ditemukan.", None
 
-        # --- SMART SELECTION ---
-        # Cari Polyline dengan jumlah titik terbanyak (Garis Tanah)
-        # Garis grid biasanya cuma 2 titik. Garis tanah > 10.
+        # Pilih Polyline Terpanjang (Garis Tanah)
         best_poly = max(polylines, key=len)
         
-        if len(best_poly) < 2:
-            return "Garis terlalu pendek / hanya berupa titik.", None
-            
-        # Convert to Stationing
-        data = []
+        # --- CLEANING DUPLICATES ---
+        clean_data = []
         cum_dist = 0
-        for k, p in enumerate(best_poly):
-            if k > 0:
-                dist = np.sqrt((p[0] - best_poly[k-1][0])**2 + (p[1] - best_poly[k-1][1])**2)
-                cum_dist += dist
+        
+        if len(best_poly) > 0:
+            # Titik pertama
+            clean_data.append({"sta": 0.0, "z": best_poly[0][2]})
             
-            # PENTING: Untuk Profile Graph, X adalah Station (Jarak), Y adalah Elevasi
-            # Jika user memilih mode 'Profile Graph', kita pakai X asli sebagai STA (jika terurut) atau hitung ulang
-            # Kita pakai perhitungan jarak manual saja biar aman.
+            for k in range(1, len(best_poly)):
+                curr = best_poly[k]
+                prev = best_poly[k-1]
+                
+                # Hitung Jarak 2D
+                dist = np.sqrt((curr[0] - prev[0])**2 + (curr[1] - prev[1])**2)
+                
+                # FILTER: Hanya ambil jika jarak > 1mm (0.001 m)
+                if dist > 0.001:
+                    cum_dist += dist
+                    clean_data.append({"sta": cum_dist, "z": curr[2]})
             
-            data.append({"sta": cum_dist, "z": p[2]}) # p[2] sudah diset sesuai mode Y/Z di atas
+        if len(clean_data) < 2:
+            return "Garis valid terlalu pendek (mungkin semua titik bertumpuk).", None
             
-        return None, data
+        return None, clean_data
 
     except Exception as e:
         return f"Error: {str(e)}", None
@@ -141,28 +137,28 @@ def process_shp_zip(zip_file_obj):
             gdf = gpd.read_file(shp_file)
             points = []
             if not gdf.empty:
-                # Cek Z dari Geometri 3D atau Kolom Atribut
                 has_z_geom = gdf.geometry.has_z.any()
                 z_col = next((c for c in gdf.columns if c.upper() in ['Z', 'ELEV', 'ELEVATION', 'HEIGHT']), None)
-                
                 geom = gdf.geometry.iloc[0]
                 if geom.geom_type in ['LineString', 'LineStringZ']:
                     coords = list(geom.coords)
                     cum_dist = 0
-                    for i, p in enumerate(coords):
-                        if i > 0:
-                            dist = np.sqrt((coords[i][0]-coords[i-1][0])**2 + (coords[i][1]-coords[i-1][1])**2)
+                    # First Point
+                    z0 = coords[0][2] if (has_z_geom and len(coords[0])>2) else (gdf.iloc[0][z_col] if z_col else 0)
+                    points.append({"sta": 0.0, "z": z0})
+                    
+                    for i in range(1, len(coords)):
+                        dist = np.sqrt((coords[i][0]-coords[i-1][0])**2 + (coords[i][1]-coords[i-1][1])**2)
+                        
+                        # FILTER DUPLICATE
+                        if dist > 0.001:
                             cum_dist += dist
-                        
-                        z_val = 0.0
-                        if has_z_geom and len(p) > 2: z_val = p[2]
-                        elif z_col: z_val = gdf.iloc[0][z_col]
-                        
-                        points.append({"sta": cum_dist, "z": z_val})
+                            z_val = coords[i][2] if (has_z_geom and len(coords[i])>2) else (gdf.iloc[0][z_col] if z_col else 0)
+                            points.append({"sta": cum_dist, "z": z_val})
             return None, points
     except Exception as e: return str(e), None
 
-# --- 3. ENGINE HIDROLIKA (CACHED) ---
+# --- 3. ENGINE HIDROLIKA (ROBUST & CACHED) ---
 def get_critical_depth(Q, b, m):
     y_min, y_max = 0.01, 20.0
     for _ in range(25):
@@ -196,11 +192,16 @@ def run_sim(data, Q, ws_d, ws_u, fs, ts, db, md, mode):
     nodes = []; drops = []; dx_step = 2.0
     temp_nodes = []
     
-    # Pre-cleaning: sort by STA
+    # Sort Data by STA
     sorted_data = sorted(data, key=lambda x: x['STA Awal (m)'])
     
     for s in sorted_data:
-        L = s['STA Akhir (m)'] - s['STA Awal (m)']; n_st = max(1, int(L/dx_step))
+        L = s['STA Akhir (m)'] - s['STA Awal (m)']
+        
+        # --- CRASH PROTECTION: SKIP ZERO LENGTH SEGMENT ---
+        if L <= 0.001: continue 
+        
+        n_st = max(1, int(L/dx_step))
         rdx = L/n_st; z1 = s['Elev Awal (m)']; slp = (z1 - s['Elev Akhir (m)'])/L
         for i in range(n_st+1):
             temp_nodes.append({
@@ -247,7 +248,7 @@ if 'df_pro' not in st.session_state: st.session_state['df_pro'] = pd.DataFrame([
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
 
 # --- 5. UI ---
-st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>Excel • Smart DXF (Auto-Detect) • SHP</p></div>""", unsafe_allow_html=True)
+st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>Anti-Crash Edition (Zero Length Fix)</p></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -273,11 +274,9 @@ with st.sidebar:
             except: pass
             
     with tab_cad:
-        st.info("Otomatis mencari garis profil terpanjang.")
+        st.info("Otomatis filter titik ganda.")
         up_dxf = st.file_uploader("Upload DXF", type=['dxf'])
-        
-        # Opsi Paksa Y sebagai Z
-        force_y = st.checkbox("Paksa Pakai Y sebagai Elevasi (Untuk Gambar Profil 2D)", value=True)
+        force_y = st.checkbox("Gunakan Y sebagai Elevasi (Grafik 2D)", value=True)
         
         if up_dxf and st.button("🚀 Load DXF"):
             content = up_dxf.read()
@@ -295,11 +294,11 @@ with st.sidebar:
                         "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
                     })
                 st.session_state['df_pro'] = pd.DataFrame(rows)
-                st.success(f"Sukses! Garis terpanjang ({len(rows)} segmen) diambil.")
+                st.success(f"Sukses! {len(rows)} segmen (Duplikat dibersihkan).")
                 st.rerun()
 
     with tab_gis:
-        if not HAS_GEOPANDAS: st.warning("⚠️ Library 'geopandas' tidak ditemukan. Import SHP dinonaktifkan.")
+        if not HAS_GEOPANDAS: st.warning("⚠️ Library 'geopandas' tidak ditemukan.")
         else:
             up_shp = st.file_uploader("Upload ZIP (.shp,.shx,.dbf)", type=['zip'])
             if up_shp and st.button("🚀 Load SHP"):
@@ -316,7 +315,7 @@ with st.sidebar:
                             "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
                         })
                     st.session_state['df_pro'] = pd.DataFrame(rows)
-                    st.success("SHP Loaded!")
+                    st.success("SHP Loaded (Duplikat dibersihkan)!")
                     st.rerun()
 
     if st.button("Reset Default"): 
