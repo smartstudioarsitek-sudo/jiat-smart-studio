@@ -2,23 +2,25 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import io
 
 # --- CONFIG ---
-st.set_page_config(page_title="Smart HEC-RAS Ultimate", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="Smart HEC-RAS Ultimate", layout="wide", page_icon="⚡")
 
 st.markdown("""
 <style>
-    .header-box { padding: 20px; background: linear-gradient(90deg, #134E5E, #71B280); color: white; border-radius: 8px; text-align: center; margin-bottom: 20px; }
+    .header-box { padding: 20px; background: linear-gradient(90deg, #0f2027, #203a43, #2c5364); color: white; border-radius: 8px; text-align: center; margin-bottom: 20px; }
     .metric-card { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #28a745; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-    .metric-label { font-size: 12px; color: #666; margin-bottom: 0; }
-    .metric-value { font-size: 18px; font-weight: bold; color: #333; margin: 0; }
     @media print { .stSidebar, header, footer { display: none !important; } }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. ENGINE HIDROLIKA (CORE) ---
+# --- 1. ENGINE HIDROLIKA & CACHING (PERFORMANCE BOOST 🚀) ---
+
+@st.cache_data
+def convert_df_to_csv(df):
+    """Cache CSV conversion to prevent memory spikes"""
+    return df.to_csv(index=False).encode('utf-8')
 
 def get_critical_depth(Q, b, m):
     g = 9.81; y_min, y_max = 0.01, 20.0
@@ -74,13 +76,96 @@ def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
             else: y_max = y_mid
     return (y_min + y_max)/2
 
-def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
+# --- CORE SOLVER (CACHED) ---
+@st.cache_data(show_spinner=False)
+def run_hydraulic_simulation(df_data, Q, ws_down, ws_up, force_super, target_slope=None, design_b=None, max_drop=None, mode="existing"):
+    """
+    Fungsi utama simulasi yang di-cache. 
+    Streamlit hanya akan menghitung ulang jika input (df, Q, dll) berubah.
+    """
+    
+    # Pre-processing Dataframe ke Nodes
+    if "STA Awal (m)" in df_data.columns: 
+        df_data = df_data.sort_values(by="STA Awal (m)")
+    
+    segments = df_data.to_dict('records')
+    dx_step = 2.0 
+    nodes = []
+    drops = []
+    
+    # GENERATE NODES
+    # Mode 1: Existing Analysis
+    if mode == "existing":
+        for idx, seg in enumerate(segments):
+            sta1 = seg.get("STA Awal (m)", 0); sta2 = seg.get("STA Akhir (m)", 0)
+            z1 = seg.get("Elev Awal (m)", 0); z2 = seg.get("Elev Akhir (m)", 0)
+            L = sta2 - sta1
+            if L <= 0: continue
+            n_steps = int(L / dx_step); 
+            if n_steps < 1: n_steps = 1
+            real_dx = L / n_steps
+            slope = (z1 - z2) / L
+            h_ch = seg.get("Tinggi Saluran H (m)", 1.5)
+            
+            for i in range(n_steps + 1):
+                nodes.append({
+                    "x": sta1 + i * real_dx,
+                    "z": z1 - (i * real_dx * slope),
+                    "b": seg.get("Lebar b (m)", 1.0), "m": seg.get("Talud m", 1.0), 
+                    "n": seg.get("Kekasaran n", 0.025), "seg": seg.get("Nama Segmen", f"S{idx}"),
+                    "h_ch": h_ch
+                })
+                
+    # Mode 2: Auto-Redesign Analysis
+    elif mode == "redesign":
+        # Generate base nodes first (untuk referensi X)
+        temp_nodes = []
+        for idx, seg in enumerate(segments):
+            sta1 = seg.get("STA Awal (m)", 0); sta2 = seg.get("STA Akhir (m)", 0)
+            L = sta2 - sta1
+            if L <= 0: continue
+            n_steps = int(L / dx_step); 
+            if n_steps < 1: n_steps = 1
+            real_dx = L / n_steps
+            # Ambil Z original untuk referensi drop
+            z1_orig = seg.get("Elev Awal (m)", 0); z2_orig = seg.get("Elev Akhir (m)", 0)
+            slope_orig = (z1_orig - z2_orig) / L
+            
+            for i in range(n_steps + 1):
+                temp_nodes.append({
+                    "x": sta1 + i * real_dx,
+                    "z_orig": z1_orig - (i * real_dx * slope_orig),
+                    "seg": seg.get("Nama Segmen", f"S{idx}"),
+                    "h_ch": seg.get("Tinggi Saluran H (m)", 1.5)
+                })
+        
+        # Calculate Cascading Z
+        if len(temp_nodes) > 0:
+            current_z = temp_nodes[0]['z_orig']
+            for i, n in enumerate(temp_nodes):
+                if i > 0:
+                    dx = n['x'] - temp_nodes[i-1]['x']
+                    current_z -= dx * target_slope
+                
+                # Check Drop
+                if (current_z - n['z_orig']) > max_drop:
+                    current_z = n['z_orig'] # Reset to ground
+                    drops.append(n['x'])
+                
+                nodes.append({
+                    "x": n['x'], "z": current_z,
+                    "b": design_b, "m": 1.0, "n": 0.025, # New Design Params
+                    "seg": n['seg'], "h_ch": n['h_ch']
+                })
+
+    # --- HYDRAULIC SOLVER ---
+    # Init
     for n in nodes:
         n['yc'] = get_critical_depth(Q, n['b'], n['m'])
         n['y_sub'] = 0.0; n['y_sup'] = 0.0; n['y_final'] = 0.0 
     
-    # SUBCRITICAL (Mundur)
-    nodes[-1]['y_sub'] = boundary_down
+    # Subcritical Pass
+    nodes[-1]['y_sub'] = ws_down
     for i in range(len(nodes)-2, -1, -1):
         dx = nodes[i+1]['x'] - nodes[i]['x']
         known, target = nodes[i+1], nodes[i]
@@ -91,8 +176,8 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         except: y_calc = yc + 0.01
         target['y_sub'] = y_calc
 
-    # SUPERCRITICAL (Maju)
-    nodes[0]['y_sup'] = boundary_up
+    # Supercritical Pass
+    nodes[0]['y_sup'] = ws_up
     for i in range(1, len(nodes)):
         dx = nodes[i]['x'] - nodes[i-1]['x']
         known, target = nodes[i-1], nodes[i]
@@ -103,7 +188,7 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         except: y_calc = yc - 0.01
         target['y_sup'] = y_calc
 
-    # SELECTION & FREEBOARD
+    # Selection & Properties
     for n in nodes:
         if force_super:
             if n['y_sup'] > 0.011 and n['y_sup'] < 49.0: n['y_final'] = n['y_sup']; n['regime'] = "Supercritical (Forced)"
@@ -121,7 +206,7 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         n['ws'] = n['z'] + n['y_final']
         n['crit_ws'] = n['z'] + n['yc']
         
-        H_ch = n.get('h_ch', 1.5) # Default H=1.5
+        H_ch = n.get('h_ch', 1.5)
         n['bank_elev'] = n['z'] + H_ch
         n['freeboard'] = n['bank_elev'] - n['ws']
         n['h_design'] = n['y_final'] + 0.4
@@ -134,9 +219,9 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         n['fr'] = V / np.sqrt(9.81 * D_hyd) if D_hyd > 0 else 0
         n['top_width'] = T
 
-    return nodes
+    return nodes, drops
 
-# --- 2. SETUP & STATE ---
+# --- 2. STATE MANAGEMENT ---
 REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)"]
 
 def reset_data():
@@ -147,240 +232,178 @@ if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
 if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
 if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 
 
-# --- UI SIDEBAR ---
-st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>GIS Import • Auto-Redesign • Freeboard Check</p></div>""", unsafe_allow_html=True)
+# --- UI HEADER & SIDEBAR ---
+st.markdown("""<div class="header-box"><h1>⚡ Smart HEC-RAS Ultimate</h1><p>High Performance • Caching • Pandas Styling</p></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ Parameter Hidrolis")
     st.session_state['q_pro'] = st.number_input("Debit (Q) m³/s", 0.01, 1000.0, st.session_state['q_pro'])
-    force_super = st.checkbox("🔥 Force Supercritical (Cek Gerusan)", value=False)
+    force_super = st.checkbox("🔥 Force Supercritical", value=False)
     
     st.divider()
-    st.subheader("🛠️ Auto-Redesign (Opsional)")
-    use_redesign = st.checkbox("Aktifkan Fitur Redesain", value=False)
+    st.subheader("🛠️ Auto-Redesign")
+    use_redesign = st.checkbox("Aktifkan Redesain", value=False)
+    target_slope = 0.001; design_b = 1.5; max_drop = 1.5
     if use_redesign:
-        target_slope = st.number_input("Target Kemiringan (S)", 0.0001, 0.05, 0.001, format="%.4f")
+        target_slope = st.number_input("Target S", 0.0001, 0.05, 0.001, format="%.4f")
         design_b = st.number_input("Lebar Desain (m)", 0.1, 50.0, 1.5)
         max_drop = st.number_input("Max Drop (m)", 0.5, 5.0, 1.5)
     
     st.divider()
     st.subheader("📂 Input Data")
-    
-    tab_file1, tab_file2 = st.tabs(["🌍 GIS/CSV", "📄 Excel"])
+    tab_file1, tab_file2 = st.tabs(["🌍 GIS", "📄 Excel"])
     
     with tab_file1:
-        up_gis = st.file_uploader("Upload CSV Global Mapper", type=['csv', 'txt'], key="gis_up")
-        if up_gis and st.button("🚀 Konversi GIS"):
+        up_gis = st.file_uploader("Upload CSV GIS", type=['csv', 'txt'], key="gis_up")
+        if up_gis and st.button("🚀 Load GIS"):
             try:
                 df_gis = pd.read_csv(up_gis)
                 df_gis.columns = [c.lower() for c in df_gis.columns]
                 col_dist = next((c for c in df_gis.columns if any(x in c for x in ['dist', 'len', 'x', 'sta'])), None)
                 col_elev = next((c for c in df_gis.columns if any(x in c for x in ['elev', 'z', 'height'])), None)
-                
                 if col_dist and col_elev:
                     new_rows = []
                     for i in range(len(df_gis) - 1):
                         d1 = df_gis.iloc[i][col_dist]; d2 = df_gis.iloc[i+1][col_dist]
                         z1 = df_gis.iloc[i][col_elev]; z2 = df_gis.iloc[i+1][col_elev]
                         if abs(d2 - d1) < 0.01: continue
-                        new_rows.append({
-                            "Nama Segmen": f"S{i+1}", "STA Awal (m)": d1, "STA Akhir (m)": d2,
-                            "Elev Awal (m)": z1, "Elev Akhir (m)": z2,
-                            "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
-                        })
+                        new_rows.append({"Nama Segmen": f"S{i+1}", "STA Awal (m)": d1, "STA Akhir (m)": d2, "Elev Awal (m)": z1, "Elev Akhir (m)": z2, "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5})
                     st.session_state['df_pro'] = pd.DataFrame(new_rows)
-                    st.success(f"Import {len(new_rows)} segmen sukses!")
                     st.rerun()
-            except Exception as e: st.error(f"Error: {e}")
+            except: st.error("Format GIS Salah")
 
     with tab_file2:
         up_excel = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_up")
         if up_excel:
-            try:
-                df = pd.read_excel(up_excel)
-                st.session_state['df_pro'] = df
-                st.rerun()
+            try: st.session_state['df_pro'] = pd.read_excel(up_excel); st.rerun()
             except: pass
 
-    if st.button("Reset Data"): st.session_state['df_pro'] = reset_data(); st.rerun()
+    if st.button("Reset"): st.session_state['df_pro'] = reset_data(); st.rerun()
 
-# --- MAIN LOGIC ---
+# --- MAIN EXECUTION ---
+# Kita gunakan Caching function di sini
 df = st.session_state['df_pro']
-# FIXED: Init with all keys needed to avoid KeyError
-profile_ex = {'x': [], 'z': [], 'ws': [], 'crit': [], 'bank': [], 'eg': []} 
-profile_new = {'x': [], 'z': [], 'ws': [], 'drops': []} 
-
-final_data_ex = []
-final_data_new = []
-all_nodes_ex = []
 
 if not df.empty:
-    try:
-        if "STA Awal (m)" in df.columns: df = df.sort_values(by="STA Awal (m)")
-        segments = df.to_dict('records')
-        dx_step = 2.0 
-        
-        # 1. GENERATE NODES EKSISTING
-        nodes_ex = []
-        for idx, seg in enumerate(segments):
-            sta1 = seg.get("STA Awal (m)", 0); sta2 = seg.get("STA Akhir (m)", 0)
-            z1 = seg.get("Elev Awal (m)", 0); z2 = seg.get("Elev Akhir (m)", 0)
-            L = sta2 - sta1
-            if L <= 0: continue
-            n_steps = int(L / dx_step); 
-            if n_steps < 1: n_steps = 1
-            real_dx = L / n_steps
-            slope = (z1 - z2) / L
-            h_ch = seg.get("Tinggi Saluran H (m)", 1.5)
-            
-            for i in range(n_steps + 1):
-                nodes_ex.append({
-                    "x": sta1 + i * real_dx,
-                    "z": z1 - (i * real_dx * slope),
-                    "b": seg.get("Lebar b (m)", 1.0), "m": seg.get("Talud m", 1.0), 
-                    "n": seg.get("Kekasaran n", 0.025), "seg": seg.get("Nama Segmen", f"S{idx}"),
-                    "h_ch": h_ch
-                })
-        
-        # 2. RUN EKSISTING
-        if len(nodes_ex) > 0:
-            nodes_ex = calculate_profiles(nodes_ex, st.session_state['q_pro'], st.session_state['ws_down'], st.session_state['ws_up'], force_super)
-            all_nodes_ex = nodes_ex
-            for n in nodes_ex:
-                profile_ex['x'].append(n['x']); profile_ex['z'].append(n['z'])
-                profile_ex['ws'].append(n['ws']); profile_ex['crit'].append(n['crit_ws'])
-                profile_ex['bank'].append(n['bank_elev'])
-                profile_ex['eg'].append(n['eg']) # Fixed EG Append
-                final_data_ex.append(n)
+    # 1. Hitung Eksisting (Selalu Run)
+    nodes_ex, _ = run_hydraulic_simulation(df, st.session_state['q_pro'], st.session_state['ws_down'], st.session_state['ws_up'], force_super, mode="existing")
+    
+    # 2. Hitung Redesain (Jika Aktif)
+    nodes_new = []
+    drops_new = []
+    if use_redesign:
+        nodes_new, drops_new = run_hydraulic_simulation(df, st.session_state['q_pro'], 1.0, 1.0, False, target_slope, design_b, max_drop, mode="redesign")
 
-        # 3. RUN REDESAIN (JIKA AKTIF)
-        if use_redesign and len(nodes_ex) > 0:
-            nodes_new = []
-            current_z = nodes_ex[0]['z']
-            
-            for i, n in enumerate(nodes_ex):
-                if i > 0:
-                    dx = n['x'] - nodes_ex[i-1]['x']
-                    current_z -= dx * target_slope
-                
-                # Cek Terjunan
-                if (current_z - n['z']) > max_drop:
-                    current_z = n['z']
-                    profile_new['drops'].append(n['x'])
-                
-                nodes_new.append({
-                    "x": n['x'], "z": current_z,
-                    "b": design_b, "m": 1.0, "n": 0.025,
-                    "seg": n['seg'], "h_ch": n['h_ch']
-                })
-            
-            res_new = calculate_profiles(nodes_new, st.session_state['q_pro'], 1.0, 1.0, False) # Force Subcritical
-            for n in res_new:
-                profile_new['x'].append(n['x']); profile_new['z'].append(n['z']); profile_new['ws'].append(n['ws'])
-                final_data_new.append(n)
+    # --- DATA PREP FOR PLOTTING ---
+    # Convert nodes to simple lists for matplotlib
+    def extract_plot_data(nodes):
+        return {
+            'x': [n['x'] for n in nodes], 'z': [n['z'] for n in nodes], 
+            'ws': [n['ws'] for n in nodes], 'eg': [n['eg'] for n in nodes],
+            'crit': [n['crit_ws'] for n in nodes], 'bank': [n['bank_elev'] for n in nodes]
+        }
+    
+    p_ex = extract_plot_data(nodes_ex)
+    p_new = extract_plot_data(nodes_new) if use_redesign else {}
 
-    except Exception as e: st.error(f"Error: {e}")
+    # --- TABS ---
+    if use_redesign:
+        tabs = ["📝 Input Data", "🛠️ Hasil Redesain", "📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan"]
+    else:
+        tabs = ["📝 Input Data", "📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan"]
+    
+    active_tabs = st.tabs(tabs)
 
-# --- TABS LOGIC (INPUT FIRST) ---
-# Mengatur Urutan Tabs: Input Dulu, Baru Hasil
-if use_redesign:
-    tab_titles = ["📝 Input Data", "🛠️ Hasil Redesain", "📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan"]
-else:
-    tab_titles = ["📝 Input Data", "📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan"]
+    # TAB 1: INPUT (Data Editor)
+    with active_tabs[0]:
+        st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch')
 
-active_tabs = st.tabs(tab_titles)
-
-# 1. TAB INPUT (SELALU PERTAMA)
-with active_tabs[0]:
-    st.info("💡 **Tips:** Edit data di tabel ini atau Upload Excel di sidebar.")
-    st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch')
-
-# 2. LOGIC TABS LAINNYA
-idx = 1 # Start index for results
-
-# TAB REDESAIN (JIKA ADA)
-if use_redesign:
-    with active_tabs[idx]:
-        if len(profile_new['x']) > 0:
+    idx = 1
+    # TAB 2: REDESAIN (Optional)
+    if use_redesign:
+        with active_tabs[idx]:
             fig, ax = plt.subplots(figsize=(14, 8))
-            ax.plot(profile_ex['x'], profile_ex['z'], 'k-', lw=1, alpha=0.3, label='Tanah Asli')
-            ax.plot(profile_new['x'], profile_new['z'], 'brown', lw=2.5, label='Saluran Baru (Cascading)')
-            ax.plot(profile_new['x'], profile_new['ws'], 'g-', lw=2, label='Muka Air (Subkritis)')
-            ax.fill_between(profile_new['x'], profile_new['z'], profile_new['ws'], color='#ccffcc', alpha=0.6)
-            
-            for d in profile_new['drops']:
-                ax.axvline(x=d, color='red', ls='--'); ax.text(d, max(profile_ex['z']), "DROP", color='red', rotation=90)
-            
-            ax.set_title("Redesain Saluran Berjenjang"); ax.legend(); ax.grid(True, alpha=0.5)
+            ax.plot(p_ex['x'], p_ex['z'], 'k-', lw=1, alpha=0.3, label='Tanah Asli')
+            ax.plot(p_new['x'], p_new['z'], 'brown', lw=2.5, label='Desain Baru')
+            ax.plot(p_new['x'], p_new['ws'], 'g-', lw=2, label='Muka Air Baru')
+            ax.fill_between(p_new['x'], p_new['z'], p_new['ws'], color='#ccffcc', alpha=0.6)
+            for d in drops_new: ax.axvline(x=d, color='red', ls='--'); ax.text(d, max(p_ex['z']), "DROP", color='red', rotation=90)
+            ax.set_title("Auto-Redesign (Cascading Profile)"); ax.legend(); ax.grid(True, alpha=0.5)
             st.pyplot(fig)
-            st.success(f"Jumlah Terjunan: {len(profile_new['drops'])} | Kecepatan Rata2 Baru: {np.mean([n['v'] for n in final_data_new]):.2f} m/s")
+        idx += 1
+
+    # TAB 3: PROFIL EKSISTING
+    with active_tabs[idx]:
+        fig, ax = plt.subplots(figsize=(14, 8))
+        ax.plot(p_ex['x'], p_ex['z'], 'k-', lw=2.5, label='Dasar Saluran')
+        ax.plot(p_ex['x'], p_ex['ws'], 'b-', lw=2, label='Muka Air')
+        ax.plot(p_ex['x'], p_ex['bank'], 'brown', ls='--', lw=2, label='Bibir Tanggul')
+        ax.fill_between(p_ex['x'], p_ex['z'], p_ex['ws'], color='#00eaff', alpha=0.4)
+        ax.plot(p_ex['x'], p_ex['eg'], 'g-.', lw=1, label='Energy Grade')
+        ax.minorticks_on(); ax.grid(which='major', alpha=0.7); ax.grid(which='minor', alpha=0.3)
+        ax.set_title(f"Profil Memanjang Eksisting"); ax.legend()
+        st.pyplot(fig)
     idx += 1
 
-# TAB PROFIL EKSISTING
-with active_tabs[idx]:
-    if len(profile_ex['x']) > 0:
-        fig, ax = plt.subplots(figsize=(14, 8))
-        ax.plot(profile_ex['x'], profile_ex['z'], 'k-', lw=2.5, label='Dasar Saluran')
-        ax.plot(profile_ex['x'], profile_ex['ws'], 'b-', lw=2, label='Muka Air')
-        ax.plot(profile_ex['x'], profile_ex['bank'], 'brown', ls='--', lw=2, label='Bibir Tanggul')
-        ax.fill_between(profile_ex['x'], profile_ex['z'], profile_ex['ws'], color='#00eaff', alpha=0.4)
-        
-        # Safe plot EG
-        if len(profile_ex['eg']) > 0:
-            ax.plot(profile_ex['x'], profile_ex['eg'], 'g-.', lw=1, label='Energy Grade')
-        
-        ax.minorticks_on(); ax.grid(which='major', alpha=0.7); ax.grid(which='minor', alpha=0.3)
-        ax.set_title(f"Profil Memanjang Eksisting - Q={st.session_state['q_pro']}"); ax.legend()
-        st.pyplot(fig)
-idx += 1
+    # TAB 4: CROSS SECTION
+    with active_tabs[idx]:
+        if nodes_ex:
+            sta_list = [n['x'] for n in nodes_ex]
+            sel_sta = st.select_slider("Station", options=sta_list)
+            node = next((n for n in nodes_ex if n['x'] == sel_sta), None)
+            if node:
+                c1, c2 = st.columns([2,1])
+                with c1:
+                    fig_cs, ax_cs = plt.subplots(figsize=(8,5))
+                    b, m, z, y, ws = node['b'], node['m'], node['z'], node['y_final'], node['ws']
+                    H, T, TopW = node['h_ch'], node['top_width'], node['b'] + 2*node['m']*node['h_ch']
+                    x_g = [-TopW/2, -b/2, b/2, TopW/2]; y_g = [z+H, z, z, z+H]
+                    ax_cs.plot(x_g, y_g, 'k-', lw=3); ax_cs.fill_between(x_g, y_g, min(y_g), color='gray', alpha=0.3)
+                    if y > 0.001:
+                        ax_cs.plot([-T/2, T/2], [ws, ws], 'b-', lw=2)
+                        ax_cs.fill([-T/2, T/2, b/2, -b/2], [ws, ws, z, z], color='#00eaff', alpha=0.6)
+                    ax_cs.set_title(f"CS STA {sel_sta:.2f}"); ax_cs.grid(True)
+                    st.pyplot(fig_cs)
+                with c2:
+                    st.metric("Freeboard", f"{node['freeboard']:.3f} m")
+                    st.metric("Froude", f"{node['fr']:.2f}")
+    idx += 1
 
-# TAB CROSS SECTION
-with active_tabs[idx]:
-    if len(all_nodes_ex) > 0:
-        st.subheader("Visualisasi Penampang")
-        sta_list = [n['x'] for n in all_nodes_ex]
-        sel_sta = st.select_slider("Station (m)", options=sta_list, value=sta_list[0])
-        node = next((n for n in all_nodes_ex if n['x'] == sel_sta), None)
-        if node:
-            c1, c2 = st.columns([2,1])
-            with c1:
-                fig_cs, ax_cs = plt.subplots(figsize=(8,5))
-                b, m, z, y, ws = node['b'], node['m'], node['z'], node['y_final'], node['ws']
-                H = node['h_ch']; T = b + 2*m*y; TopW = b + 2*m*H
-                x_g = [-TopW/2, -b/2, b/2, TopW/2]; y_g = [z+H, z, z, z+H]
-                ax_cs.plot(x_g, y_g, 'k-', lw=3); ax_cs.fill_between(x_g, y_g, min(y_g), color='gray', alpha=0.3)
-                if y > 0.001:
-                    ax_cs.plot([-T/2, T/2], [ws, ws], 'b-', lw=2)
-                    ax_cs.fill([-T/2, T/2, b/2, -b/2], [ws, ws, z, z], color='#00eaff', alpha=0.6)
-                ax_cs.set_title(f"CS STA {sel_sta:.2f}"); ax_cs.grid(True)
-                st.pyplot(fig_cs)
-            with c2:
-                fb = node['freeboard']
-                clr = "red" if fb < 0.3 else "green"
-                st.markdown(f"**Freeboard:** <span style='color:{clr}; font-size:18px'>{fb:.3f} m</span>", unsafe_allow_html=True)
-                st.metric("Kecepatan", f"{node['v']:.2f} m/s")
-idx += 1
+    # TAB 5: REKAP AUTOCAD
+    with active_tabs[idx]:
+        if nodes_ex:
+            res_df = pd.DataFrame(nodes_ex)
+            summ = []
+            for s in res_df['seg'].unique():
+                d = res_df[res_df['seg'] == s]
+                hulu, hilir = d.iloc[0], d.iloc[-1]
+                summ.append({
+                    "Segmen": s, "STA Awal": hulu['x'], "STA Akhir": hilir['x'],
+                    "Elev Hulu": hulu['z'], "Elev Hilir": hilir['z'],
+                    "MA Hulu": hulu['ws'], "MA Hilir": hilir['ws'], "Jagaan Hulu": hulu['freeboard']
+                })
+            
+            # Styling Format
+            sum_df = pd.DataFrame(summ)
+            fmt = {'STA Awal':'{:.2f}', 'STA Akhir':'{:.2f}', 'Elev Hulu':'{:.3f}', 'Elev Hilir':'{:.3f}', 'MA Hulu':'{:.3f}', 'MA Hilir':'{:.3f}', 'Jagaan Hulu':'{:.3f}'}
+            
+            # Highlight Warning
+            def highlight_low_fb(val): return 'background-color: #ffcccc' if val < 0.3 else ''
+            
+            st.dataframe(sum_df.style.format(fmt).map(highlight_low_fb, subset=['Jagaan Hulu']), width='stretch')
+            st.download_button("Download CSV AutoCAD", convert_df_to_csv(sum_df), "Rekap_AutoCAD.csv")
+    idx += 1
 
-# TAB REKAP
-with active_tabs[idx]:
-    if final_data_ex:
-        res_df = pd.DataFrame(final_data_ex)
-        summ = []
-        for s in res_df['seg'].unique():
-            d = res_df[res_df['seg'] == s]
-            hulu, hilir = d.iloc[0], d.iloc[-1]
-            summ.append({
-                "Segmen": s, "STA Awal": f"{hulu['x']:.2f}", "STA Akhir": f"{hilir['x']:.2f}",
-                "Elev Hulu": f"{hulu['z']:.2f}", "Elev Hilir": f"{hilir['z']:.2f}",
-                "MA Hulu": f"{hulu['ws']:.2f}", "Jagaan Hulu": f"{hulu['freeboard']:.2f}",
-                "Saran Tinggi Desain": f"{hulu['h_design']:.2f}"
-            })
-        st.dataframe(pd.DataFrame(summ), width='stretch')
-idx += 1
-
-# TAB LAPORAN
-with active_tabs[idx]:
-    if final_data_ex:
-        res = pd.DataFrame(final_data_ex)[["x", "seg", "z", "ws", "y_final", "freeboard", "fr", "v", "eg"]]
-        st.dataframe(res, width='stretch')
-        st.download_button("Download Laporan Detail", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
+    # TAB 6: LAPORAN (REPORT)
+    with active_tabs[idx]:
+        if nodes_ex:
+            res = pd.DataFrame(nodes_ex)[["x", "seg", "z", "ws", "y_final", "freeboard", "fr", "v", "eg"]]
+            res.columns = ["Sta", "Segmen", "Elev Dasar", "W.S.", "Depth", "Freeboard", "Froude", "Velocity", "E.G."]
+            
+            # Styling Professional
+            format_dict = {'Elev Dasar': '{:.3f}', 'W.S.': '{:.3f}', 'Depth': '{:.3f}', 'Freeboard': '{:.3f}', 'Froude': '{:.2f}', 'Velocity': '{:.2f}', 'E.G.': '{:.3f}'}
+            
+            def highlight_super(val): return 'color: red; font-weight: bold' if val > 1.0 else 'color: green'
+            
+            st.dataframe(res.style.format(format_dict).map(highlight_super, subset=['Froude']), width='stretch')
+            st.download_button("Download Full Report", convert_df_to_csv(res), "Full_Report_Hydraulics.csv")
