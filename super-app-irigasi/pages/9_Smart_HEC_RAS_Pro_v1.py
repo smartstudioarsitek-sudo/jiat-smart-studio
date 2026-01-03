@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import io
 import json
 
@@ -176,7 +177,7 @@ with st.sidebar:
     st.session_state['ws_down'] = st.number_input("Hilir (Sub): Kedalaman (m)", 0.01, 20.0, st.session_state['ws_down'])
     
     st.divider()
-    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_rekap_v4")
+    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_rekap_v5")
     if up_file:
         try:
             df = pd.read_excel(up_file)
@@ -253,14 +254,46 @@ with t1:
 
 with t2:
     if len(profile['x']) > 0:
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(profile['x'], profile['z'], 'k-', lw=2, label='Dasar Saluran')
-        ax.plot(profile['x'], profile['crit'], 'r--', lw=1, alpha=0.5, label='Critical Depth')
-        ax.plot(profile['x'], profile['ws'], 'b-', lw=2.5, label='Muka Air')
+        # PENGATURAN PLOT PROFESIONAL
+        fig, ax = plt.subplots(figsize=(14, 8)) # Ukuran lebih besar/lebar
+        
+        # 1. Plot Utama
+        ax.plot(profile['x'], profile['z'], 'k-', lw=2.5, label='Dasar Saluran (Ground)')
+        ax.plot(profile['x'], profile['ws'], 'b-', lw=2, label='Muka Air (W.S.)')
         ax.fill_between(profile['x'], profile['z'], profile['ws'], color='#00eaff', alpha=0.4)
-        ax.plot(profile['x'], profile['eg'], 'g--', lw=1, label='Energy Grade')
-        ax.set_title(f"Profil Memanjang - Q = {st.session_state['q_pro']} m³/s"); ax.legend(loc='best'); ax.grid(True, ls=':', alpha=0.5)
+        ax.plot(profile['x'], profile['crit'], 'r--', lw=1.5, alpha=0.7, label='Kedalaman Kritis (Critical)')
+        ax.plot(profile['x'], profile['eg'], 'g-.', lw=1, alpha=0.8, label='Garis Energi (E.G.)')
+        
+        # 2. Grid Rinci (Informatif)
+        ax.minorticks_on()
+        ax.grid(which='major', linestyle='-', linewidth='0.5', color='gray', alpha=0.7)
+        ax.grid(which='minor', linestyle=':', linewidth='0.5', color='gray', alpha=0.3)
+        
+        # 3. Label Segmen (Batas S1, S2, dst)
+        res_df = pd.DataFrame(final_data)
+        seg_starts = res_df.groupby('seg')['x'].min().sort_values()
+        
+        # Cari batas Y untuk menaruh label text (di bagian atas grafik)
+        y_max_plot = max(max(profile['ws']), max(profile['eg'])) + 1.0
+        y_min_plot = min(profile['z']) - 1.0
+        
+        for seg_name, x_start in seg_starts.items():
+            ax.axvline(x=x_start, color='black', linestyle='--', linewidth=0.5, alpha=0.5)
+            # Taruh text label segmen sedikit di kanan garis
+            ax.text(x_start + 1, y_max_plot - 0.5, seg_name, rotation=90, fontsize=9, fontweight='bold', color='#333')
+
+        # 4. Limit Skala (Auto-Zoom ke area sungai)
+        ax.set_ylim(y_min_plot, y_max_plot)
+        ax.set_xlim(min(profile['x']), max(profile['x']))
+        
+        # 5. Labeling
+        ax.set_title(f"Profil Memanjang Hidrolis - Q = {st.session_state['q_pro']} m³/s", fontsize=14, fontweight='bold')
+        ax.set_xlabel("Station / Jarak (m)", fontsize=11)
+        ax.set_ylabel("Elevasi (m)", fontsize=11)
+        ax.legend(loc='upper right', frameon=True, shadow=True)
+        
         st.pyplot(fig)
+        st.caption("✅ **Grafik Skala Teknik:** Menampilkan garis grid minor/mayor dan batas segmen untuk kemudahan pembacaan.")
     else: st.info("Data kosong.")
 
 with t3:
@@ -273,7 +306,6 @@ with t3:
         if node:
             c1, c2 = st.columns([2, 1])
             with c1:
-                # Plot Gambar
                 fig_cs, ax_cs = plt.subplots(figsize=(8, 5))
                 b, m, z, y, ws = node['b'], node['m'], node['z'], node['y_final'], node['ws']
                 depth_draw = max(y, node['yc']) * 1.5 if y > 0 else 1.0
@@ -292,7 +324,6 @@ with t3:
                 ax_cs.set_title(f"Cross Section STA {sel_sta:.2f}"); ax_cs.legend(); ax_cs.grid(True, ls=':')
                 st.pyplot(fig_cs)
             with c2:
-                # Info Angka
                 st.metric("Kedalaman Air (y)", f"{node['y_final']:.3f} m")
                 st.metric("Kecepatan (V)", f"{node['v']:.3f} m/s")
                 st.metric("Froude", f"{node['fr']:.2f}")
@@ -320,7 +351,7 @@ with t4:
                 "Segmen": seg_name,
                 "STA Awal": f"{hulu['x']:.2f}",
                 "STA Akhir": f"{hilir['x']:.2f}",
-                "Lebar Bawah (b)": f"{hulu['b']:.2f}",  # Asumsi b tetap dlm satu segmen
+                "Lebar Bawah (b)": f"{hulu['b']:.2f}",  
                 "Lebar Atas Hulu (T)": f"{hulu['top_width']:.2f}",
                 "Lebar Atas Hilir (T)": f"{hilir['top_width']:.2f}",
                 "Elv Dasar Hulu": f"{hulu['z']:.3f}",
@@ -332,7 +363,7 @@ with t4:
             })
             
         sum_df = pd.DataFrame(summary_list)
-        st.dataframe(sum_df, width='stretch') # Tabel lebih lebar
+        st.dataframe(sum_df, width='stretch')
         st.download_button("Download Rekap AutoCAD (CSV)", sum_df.to_csv(index=False).encode('utf-8'), "Rekap_Segmen_AutoCAD.csv")
 
 with t5:
