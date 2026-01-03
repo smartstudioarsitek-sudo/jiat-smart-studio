@@ -124,7 +124,6 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         H_ch = n.get('h_ch', 1.5) # Default H=1.5
         n['bank_elev'] = n['z'] + H_ch
         n['freeboard'] = n['bank_elev'] - n['ws']
-        n['h_design'] = n['y_final'] + 0.4
         
         A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
         V = Q/A if A > 0 else 0
@@ -206,8 +205,9 @@ with st.sidebar:
 
 # --- MAIN LOGIC ---
 df = st.session_state['df_pro']
-profile_ex = {'x': [], 'z': [], 'ws': [], 'crit': [], 'bank': []} # Existing
-profile_new = {'x': [], 'z': [], 'ws': [], 'drops': []} # Redesign
+# FIXED: Menambahkan 'eg' ke list inisialisasi agar tidak KeyError
+profile_ex = {'x': [], 'z': [], 'ws': [], 'crit': [], 'bank': [], 'eg': []} 
+profile_new = {'x': [], 'z': [], 'ws': [], 'drops': []} 
 
 final_data_ex = []
 final_data_new = []
@@ -249,6 +249,7 @@ if not df.empty:
                 profile_ex['x'].append(n['x']); profile_ex['z'].append(n['z'])
                 profile_ex['ws'].append(n['ws']); profile_ex['crit'].append(n['crit_ws'])
                 profile_ex['bank'].append(n['bank_elev'])
+                profile_ex['eg'].append(n['eg']) # FIXED: Append EG Data
                 final_data_ex.append(n)
 
         # 3. RUN REDESAIN (JIKA AKTIF)
@@ -281,7 +282,7 @@ if not df.empty:
 
 # --- TABS ---
 if use_redesign:
-    tabs = ["🛠️ Hasil Redesain", "📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📝 Input"]
+    tabs = ["🛠️ Hasil Redesain", "📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan", "📝 Input"]
 else:
     tabs = ["📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan", "📝 Input"]
 
@@ -314,7 +315,10 @@ with active_tabs[target_tab_idx]:
         ax.plot(profile_ex['x'], profile_ex['ws'], 'b-', lw=2, label='Muka Air')
         ax.plot(profile_ex['x'], profile_ex['bank'], 'brown', ls='--', lw=2, label='Bibir Tanggul')
         ax.fill_between(profile_ex['x'], profile_ex['z'], profile_ex['ws'], color='#00eaff', alpha=0.4)
-        ax.plot(profile_ex['x'], profile_ex['eg'], 'g-.', lw=1, label='Energy Grade')
+        
+        # Plot Energy Grade (FIXED: Sekarang datanya sudah ada)
+        if len(profile_ex['eg']) == len(profile_ex['x']):
+            ax.plot(profile_ex['x'], profile_ex['eg'], 'g-.', lw=1, label='Energy Grade')
         
         ax.minorticks_on(); ax.grid(which='major', alpha=0.7); ax.grid(which='minor', alpha=0.3)
         ax.set_title(f"Profil Memanjang Eksisting - Q={st.session_state['q_pro']}"); ax.legend()
@@ -363,6 +367,14 @@ with active_tabs[target_tab_idx]:
                 "Saran Tinggi Desain": f"{hulu['h_design']:.2f}"
             })
         st.dataframe(pd.DataFrame(summ), width='stretch')
+
+# LOGIC REPORT DETAIL
+target_tab_idx += 1
+with active_tabs[target_tab_idx]:
+    if final_data_ex:
+        res = pd.DataFrame(final_data_ex)[["x", "seg", "z", "ws", "y_final", "freeboard", "fr", "v", "eg"]]
+        st.dataframe(res, width='stretch')
+        st.download_button("Download Laporan Detail", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
 
 # LOGIC INPUT
 with active_tabs[-1]:
