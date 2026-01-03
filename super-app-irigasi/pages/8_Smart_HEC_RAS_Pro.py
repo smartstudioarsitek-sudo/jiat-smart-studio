@@ -24,7 +24,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. ENGINE HIDROLIKA: STANDARD STEP METHOD ---
+# --- 1. ENGINE HIDROLIKA (STANDARD STEP + MANNING HELPER) ---
 def get_geom_props(y, b, m):
     if y <= 0: return 0.001, 0.001, 0.001, 0.001
     A = (b + m * y) * y
@@ -32,6 +32,21 @@ def get_geom_props(y, b, m):
     R = A / P if P > 0 else 0
     T = b + 2 * m * y
     return A, P, R, T
+
+# Helper: Hitung Normal Depth untuk Boundary Condition
+def solve_manning_y(Q, n, b, S, m):
+    if S <= 0: S = 0.0001 # Safety for adverse slope
+    y_low, y_high = 0.001, 50.0
+    for _ in range(50):
+        y_mid = (y_low + y_high) / 2
+        A = (b + m*y_mid) * y_mid
+        P = b + 2*y_mid * np.sqrt(1 + m**2)
+        R = A/P if P > 0 else 0
+        Q_calc = (1/n) * A * (R**(2/3)) * (S**0.5)
+        if abs(Q_calc - Q) < 0.001: return y_mid
+        if Q_calc < Q: y_low = y_mid
+        else: y_high = y_mid
+    return (y_low + y_high) / 2
 
 def solve_energy_equation(y_guess, Q, n, Z1, Z2, y1, b, m, L, dx, mode='subcritical'):
     g = 9.81
@@ -48,15 +63,12 @@ def solve_energy_equation(y_guess, Q, n, Z1, Z2, y1, b, m, L, dx, mode='subcriti
         Sf1 = (n * V1)**2 / (R1**(4/3)) if R1 > 0 else 0
         Sf2 = (n * V2)**2 / (R2**(4/3)) if R2 > 0 else 0
         Sf_avg = (Sf1 + Sf2) / 2
-        
         h_f = Sf_avg * dx
         
-        if mode == 'subcritical':
-            return H2 - (H1 + h_f)
-        else:
-            return H1 - (H2 + h_f)
+        if mode == 'subcritical': return H2 - (H1 + h_f)
+        else: return H1 - (H2 + h_f)
 
-    y_min, y_max = 0.01, 20.0
+    y_min, y_max = 0.01, 50.0
     for _ in range(50):
         y_mid = (y_min + y_max) / 2
         err = energy_func(y_mid)
@@ -68,7 +80,6 @@ def solve_energy_equation(y_guess, Q, n, Z1, Z2, y1, b, m, L, dx, mode='subcriti
         else:
             if err > 0: y_min = y_mid
             else: y_max = y_mid
-            
     return (y_min + y_max) / 2
 
 # --- 2. INISIALISASI DATA ---
@@ -76,17 +87,17 @@ REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)"
 
 def reset_data():
     data = [
-        ["S1 (Hulu)", 0.0, 100.0, 105.0, 104.5, 2.0, 1.0, 0.015],
-        ["S2 (Tengah)", 100.0, 200.0, 104.5, 104.0, 2.0, 1.0, 0.015],
-        ["S3 (Hilir)", 200.0, 300.0, 104.0, 103.5, 2.0, 1.0, 0.015],
+        ["S1", 0.0, 50.0, 325.54, 324.95, 0.6, 1.0, 0.017],
+        ["S2", 50.0, 64.0, 324.95, 323.54, 0.6, 1.0, 0.017],
+        ["S3", 64.0, 114.0, 321.47, 321.21, 0.6, 1.0, 0.017],
     ]
     return pd.DataFrame(data, columns=REQUIRED_COLS)
 
 if 'df_pro' not in st.session_state: st.session_state['df_pro'] = reset_data()
-if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 5.0
-if 'ws_known' not in st.session_state: st.session_state['ws_known'] = 1.5
+if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
+if 'ws_known' not in st.session_state: st.session_state['ws_known'] = 0.5 # Default wajar
 
-# --- 3. SIDEBAR LENGKAP ---
+# --- 3. SIDEBAR ---
 st.markdown("""
 <div class="header-box">
     <h1 style="margin:0; font-size: 32px;">🚀 Smart HEC-RAS Pro</h1>
@@ -103,20 +114,41 @@ with st.sidebar:
     
     st.divider()
     
+    # --- FITUR BARU: AUTO BOUNDARY ---
+    df_curr = st.session_state['df_pro']
+    
     if mode_key == 'subcritical':
         st.subheader("🌊 Batas Hilir (Downstream)")
-        st.info("Masukkan kedalaman air yang diketahui di ujung paling hilir.")
-        boundary_y = st.number_input("Kedalaman Air Hilir (m)", 0.1, 20.0, st.session_state['ws_known'])
+        # Ambil data segmen paling hilir (terakhir)
+        if not df_curr.empty:
+            last_seg = df_curr.iloc[-1]
+            S0_hilir = (last_seg['Elev Awal (m)'] - last_seg['Elev Akhir (m)']) / (last_seg['STA Akhir (m)'] - last_seg['STA Awal (m)'])
+            yn_hilir = solve_manning_y(st.session_state['q_pro'], last_seg['Kekasaran n'], last_seg['Lebar b (m)'], S0_hilir, last_seg['Talud m'])
+            
+            st.caption(f"Normal Depth Hilir: {yn_hilir:.2f} m")
+            if st.button("Gunakan Normal Depth"):
+                st.session_state['ws_known'] = float(yn_hilir)
+                st.rerun()
+                
+        boundary_y = st.number_input("Kedalaman Air Hilir (m)", 0.01, 50.0, st.session_state['ws_known'])
     else:
         st.subheader("🌊 Batas Hulu (Upstream)")
-        boundary_y = st.number_input("Kedalaman Air Hulu (m)", 0.1, 20.0, st.session_state['ws_known'])
+        if not df_curr.empty:
+            first_seg = df_curr.iloc[0]
+            S0_hulu = (first_seg['Elev Awal (m)'] - first_seg['Elev Akhir (m)']) / (first_seg['STA Akhir (m)'] - first_seg['STA Awal (m)'])
+            yn_hulu = solve_manning_y(st.session_state['q_pro'], first_seg['Kekasaran n'], first_seg['Lebar b (m)'], S0_hulu, first_seg['Talud m'])
+            
+            st.caption(f"Normal Depth Hulu: {yn_hulu:.2f} m")
+            if st.button("Gunakan Normal Depth"):
+                st.session_state['ws_known'] = float(yn_hulu)
+                st.rerun()
+                
+        boundary_y = st.number_input("Kedalaman Air Hulu (m)", 0.01, 50.0, st.session_state['ws_known'])
         
     st.divider()
 
-    # --- FITUR IMPORT EXCEL (DIPULIHKAN) ---
     st.subheader("📥 Excel Import")
-    
-    df_temp = pd.DataFrame([["Saluran 1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017]], columns=REQUIRED_COLS)
+    df_temp = pd.DataFrame([["S1", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=REQUIRED_COLS)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer: df_temp.to_excel(writer, index=False)
     st.download_button("📄 Template Excel", buf.getvalue(), "Template_Pro.xlsx")
@@ -125,8 +157,6 @@ with st.sidebar:
     if up_file:
         try:
             df_up = pd.read_excel(up_file)
-            
-            # Smart Column Matcher
             def clean(t): return str(t).lower().replace(" ", "").replace("(m)", "").replace(".", "")
             df_up.columns = [clean(c) for c in df_up.columns]
             
@@ -156,10 +186,9 @@ with st.sidebar:
                     st.session_state['df_pro'] = new_data
                     st.success("Data berhasil di-load!")
                     st.rerun()
-            else: st.error("Format Excel tidak dikenali. Gunakan template.")
+            else: st.error("Format Excel tidak dikenali.")
         except Exception as e: st.error(f"Error: {e}")
 
-    # --- FITUR SAVE/LOAD PROJECT ---
     st.subheader("💾 Manajemen Project")
     project_data = {'q': st.session_state['q_pro'], 'segments': st.session_state['df_pro'].to_dict(orient='records')}
     st.download_button("Simpan Project (.json)", json.dumps(project_data, indent=2), "pro_project.json", "application/json")
@@ -187,19 +216,16 @@ if not df.empty:
         df = df.sort_values(by="STA Awal (m)")
         segments = df.to_dict('records')
         
-        dx_step = 5.0 # Resolusi lebih halus
+        dx_step = 5.0 
         nodes = []
         
         for seg in segments:
             L = seg["STA Akhir (m)"] - seg["STA Awal (m)"]
             if L <= 0: continue
-            
             n_steps = int(L / dx_step)
             if n_steps < 1: n_steps = 1
             real_dx = L / n_steps
-            
-            z_start = seg["Elev Awal (m)"]
-            z_end = seg["Elev Akhir (m)"]
+            z_start, z_end = seg["Elev Awal (m)"], seg["Elev Akhir (m)"]
             slope_seg = (z_start - z_end) / L
             
             for i in range(n_steps + 1):
@@ -214,7 +240,6 @@ if not df.empty:
         Q = st.session_state['q_pro']
         
         if mode_key == 'subcritical':
-            # Hilir ke Hulu
             nodes[-1]['y'] = boundary_y
             nodes[-1]['ws'] = nodes[-1]['z'] + boundary_y
             
@@ -228,7 +253,6 @@ if not df.empty:
                 nodes[i]['y'] = y_res
                 nodes[i]['ws'] = nodes[i]['z'] + y_res
         else:
-            # Hulu ke Hilir
             nodes[0]['y'] = boundary_y
             nodes[0]['ws'] = nodes[0]['z'] + boundary_y
             
@@ -259,7 +283,7 @@ if not df.empty:
 
     except Exception as e: st.error(f"Error Calculation: {e}")
 
-# --- 5. TABS VISUALISASI ---
+# --- 5. TABS ---
 tab_geom, tab_prof, tab_res = st.tabs(["📝 Input Geometri", "📈 Standard Step Profile", "📋 Laporan Hasil"])
 
 with tab_geom:
@@ -286,7 +310,8 @@ with tab_prof:
         ax.legend(); ax.grid(True, linestyle=':', alpha=0.5)
         st.pyplot(fig)
         
-        st.success("✅ Profil dihitung menggunakan Standard Step Method (Iterasi Energi).")
+        if max(profile_coords['ws']) - min(profile_coords['z']) > 10:
+            st.warning("⚠️ **Peringatan Kedalaman Ekstrim!** Kedalaman air terdeteksi sangat tinggi. Cek kembali 'Boundary Condition' di sidebar. Coba gunakan tombol 'Gunakan Normal Depth' untuk reset ke nilai wajar.")
     else: st.info("Silakan isi data geometri.")
 
 with tab_res:
