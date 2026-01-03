@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import io
 import json
 
@@ -141,7 +140,7 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         
         A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
         V = Q/A if A > 0 else 0
-        n['v'] = V # Store Velocity
+        n['v'] = V  # <--- INI PERBAIKANNYA (Menyimpan nilai Kecepatan)
         
         n['eg'] = n['ws'] + (V**2)/(2*9.81)
         D_hyd = A/T if T > 0 else 0
@@ -177,7 +176,7 @@ with st.sidebar:
     st.session_state['ws_down'] = st.number_input("Hilir (Sub): Kedalaman (m)", 0.01, 20.0, st.session_state['ws_down'])
     
     st.divider()
-    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_rekap_v5")
+    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_cs_view_v2")
     if up_file:
         try:
             df = pd.read_excel(up_file)
@@ -206,7 +205,7 @@ with st.sidebar:
 df = st.session_state['df_pro']
 profile = {'x': [], 'z': [], 'ws': [], 'eg': [], 'crit': []}
 final_data = []
-all_nodes = [] 
+all_nodes = [] # Store for CS view
 
 if not df.empty:
     try:
@@ -237,7 +236,7 @@ if not df.empty:
         # --- RUN SOLVER ---
         if len(nodes) > 0:
             nodes = calculate_profiles(nodes, st.session_state['q_pro'], st.session_state['ws_down'], st.session_state['ws_up'], force_super)
-            all_nodes = nodes 
+            all_nodes = nodes # Simpan untuk CS View
             
             for n in nodes:
                 profile['x'].append(n['x']); profile['z'].append(n['z']); profile['ws'].append(n['ws'])
@@ -247,128 +246,106 @@ if not df.empty:
     except Exception as e: st.error(f"Error Calculation: {e}")
 
 # --- 5. TABS VISUALISASI ---
-t1, t2, t3, t4, t5 = st.tabs(["📝 Input Geometri", "📈 Profil Memanjang", "❌ Cross Section", "📑 Rekap per Segmen (AutoCAD)", "📋 Laporan Detail"])
+t1, t2, t3, t4 = st.tabs(["📝 Input Geometri", "📈 Profil Memanjang", "❌ Penampang Melintang", "📋 Laporan Detail"])
 
 with t1:
     st.data_editor(st.session_state['df_pro'], num_rows="dynamic", use_container_width=True)
 
 with t2:
     if len(profile['x']) > 0:
-        # PENGATURAN PLOT PROFESIONAL
-        fig, ax = plt.subplots(figsize=(14, 8)) # Ukuran lebih besar/lebar
-        
-        # 1. Plot Utama
-        ax.plot(profile['x'], profile['z'], 'k-', lw=2.5, label='Dasar Saluran (Ground)')
-        ax.plot(profile['x'], profile['ws'], 'b-', lw=2, label='Muka Air (W.S.)')
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.plot(profile['x'], profile['z'], 'k-', lw=2, label='Dasar Saluran')
+        ax.plot(profile['x'], profile['crit'], 'r--', lw=1, alpha=0.5, label='Critical Depth')
+        ax.plot(profile['x'], profile['ws'], 'b-', lw=2.5, label='Muka Air')
         ax.fill_between(profile['x'], profile['z'], profile['ws'], color='#00eaff', alpha=0.4)
-        ax.plot(profile['x'], profile['crit'], 'r--', lw=1.5, alpha=0.7, label='Kedalaman Kritis (Critical)')
-        ax.plot(profile['x'], profile['eg'], 'g-.', lw=1, alpha=0.8, label='Garis Energi (E.G.)')
-        
-        # 2. Grid Rinci (Informatif)
-        ax.minorticks_on()
-        ax.grid(which='major', linestyle='-', linewidth='0.5', color='gray', alpha=0.7)
-        ax.grid(which='minor', linestyle=':', linewidth='0.5', color='gray', alpha=0.3)
-        
-        # 3. Label Segmen (Batas S1, S2, dst)
-        res_df = pd.DataFrame(final_data)
-        seg_starts = res_df.groupby('seg')['x'].min().sort_values()
-        
-        # Cari batas Y untuk menaruh label text (di bagian atas grafik)
-        y_max_plot = max(max(profile['ws']), max(profile['eg'])) + 1.0
-        y_min_plot = min(profile['z']) - 1.0
-        
-        for seg_name, x_start in seg_starts.items():
-            ax.axvline(x=x_start, color='black', linestyle='--', linewidth=0.5, alpha=0.5)
-            # Taruh text label segmen sedikit di kanan garis
-            ax.text(x_start + 1, y_max_plot - 0.5, seg_name, rotation=90, fontsize=9, fontweight='bold', color='#333')
-
-        # 4. Limit Skala (Auto-Zoom ke area sungai)
-        ax.set_ylim(y_min_plot, y_max_plot)
-        ax.set_xlim(min(profile['x']), max(profile['x']))
-        
-        # 5. Labeling
-        ax.set_title(f"Profil Memanjang Hidrolis - Q = {st.session_state['q_pro']} m³/s", fontsize=14, fontweight='bold')
-        ax.set_xlabel("Station / Jarak (m)", fontsize=11)
-        ax.set_ylabel("Elevasi (m)", fontsize=11)
-        ax.legend(loc='upper right', frameon=True, shadow=True)
-        
+        ax.plot(profile['x'], profile['eg'], 'g--', lw=1, label='Energy Grade')
+        ax.set_title(f"Profil Memanjang - Q = {st.session_state['q_pro']} m³/s"); ax.legend(loc='best'); ax.grid(True, ls=':', alpha=0.5)
         st.pyplot(fig)
-        st.caption("✅ **Grafik Skala Teknik:** Menampilkan garis grid minor/mayor dan batas segmen untuk kemudahan pembacaan.")
     else: st.info("Data kosong.")
 
 with t3:
     if len(all_nodes) > 0:
         st.subheader("Visualisasi Penampang (Cross Section)")
+        
+        # Selector
         sta_list = [n['x'] for n in all_nodes]
-        sel_sta = st.select_slider("Pilih Station (m):", options=sta_list, value=sta_list[0])
+        sel_sta = st.select_slider("Geser untuk memilih Station (m):", options=sta_list, value=sta_list[0])
+        
+        # Cari Node Terpilih
         node = next((n for n in all_nodes if n['x'] == sel_sta), None)
         
         if node:
             c1, c2 = st.columns([2, 1])
+            
             with c1:
+                # Plotting CS
                 fig_cs, ax_cs = plt.subplots(figsize=(8, 5))
+                
+                # Geometri Trapesium
                 b, m, z, y, ws = node['b'], node['m'], node['z'], node['y_final'], node['ws']
+                # Gambar Tanah
                 depth_draw = max(y, node['yc']) * 1.5 if y > 0 else 1.0
                 top_w_draw = b + 2 * m * depth_draw
+                
                 x_ground = [-top_w_draw/2, -b/2, b/2, top_w_draw/2]
                 y_ground = [z + depth_draw, z, z, z + depth_draw]
                 ax_cs.plot(x_ground, y_ground, 'k-', lw=3, label="Tanah")
                 ax_cs.fill_between(x_ground, y_ground, min(y_ground), color='gray', alpha=0.3)
+                
+                # Gambar Air
                 if y > 0.001:
                     T = b + 2*m*y
                     x_water = [-T/2, T/2]; y_water = [ws, ws]
                     ax_cs.plot(x_water, y_water, 'b-', lw=2, label="Muka Air")
+                    # Fill Poly
                     ax_cs.fill([-T/2, T/2, b/2, -b/2], [ws, ws, z, z], color='#00eaff', alpha=0.6)
+                    
+                    # Garis Penting
                     ax_cs.hlines(node['eg'], -top_w_draw/2, top_w_draw/2, colors='green', linestyles='--', label="Energy")
                     ax_cs.hlines(node['crit_ws'], -top_w_draw/2, top_w_draw/2, colors='red', linestyles=':', label="Critical")
-                ax_cs.set_title(f"Cross Section STA {sel_sta:.2f}"); ax_cs.legend(); ax_cs.grid(True, ls=':')
+
+                ax_cs.set_title(f"Cross Section STA {sel_sta:.2f} ({node['seg']})")
+                ax_cs.set_xlabel("Lebar (m)"); ax_cs.set_ylabel("Elevasi (m)")
+                ax_cs.grid(True, ls=':', alpha=0.5); ax_cs.legend()
+                ax_cs.set_aspect('equal')
                 st.pyplot(fig_cs)
+            
             with c2:
-                st.metric("Kedalaman Air (y)", f"{node['y_final']:.3f} m")
-                st.metric("Kecepatan (V)", f"{node['v']:.3f} m/s")
-                st.metric("Froude", f"{node['fr']:.2f}")
+                # Info Card
+                st.markdown(f"""
+                <div class="metric-card">
+                    <p class="metric-label">Kedalaman Air (y)</p>
+                    <p class="metric-value">{node['y_final']:.3f} m</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.markdown(f"""
+                <div class="metric-card" style="margin-top:10px;">
+                    <p class="metric-label">Kecepatan (V)</p>
+                    <p class="metric-value">{node['v']:.3f} m/s</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.markdown(f"""
+                <div class="metric-card" style="margin-top:10px;">
+                    <p class="metric-label">Froude Number (Fr)</p>
+                    <p class="metric-value" style="color:{'red' if node['fr']>1 else 'green'}">{node['fr']:.2f} ({node['regime']})</p>
+                </div>
+                """, unsafe_allow_html=True)
+
                 st.divider()
-                st.caption("Detail Dimensi:")
-                st.text(f"Lebar Bawah (b) : {node['b']:.2f} m")
-                st.text(f"Lebar Atas (T)  : {node['top_width']:.2f} m")
-                st.text(f"Luas Basah (A)  : {node['area']:.2f} m²")
+                st.caption("Properti Penampang:")
+                details = {
+                    "Luas Basah (A)": f"{node['area']:.2f} m²",
+                    "Keliling Basah (P)": f"{node['perim']:.2f} m",
+                    "Jari-jari Hidrolis (R)": f"{node['radius']:.3f} m",
+                    "Lebar Atas (T)": f"{node['top_width']:.2f} m",
+                    "Energi Spesifik": f"{(node['y_final'] + (node['v']**2)/(2*9.81)):.3f} m"
+                }
+                st.table(pd.DataFrame(details, index=[0]).T)
 
 with t4:
     if final_data:
-        st.subheader("📋 Rekapitulasi Data Per Segmen (Untuk AutoCAD)")
-        st.caption("Ringkasan data Hulu & Hilir per segmen, lengkap dengan dimensi lebar.")
-        
-        res_df = pd.DataFrame(final_data)
-        summary_list = []
-        
-        unique_segs = res_df['seg'].unique()
-        for seg_name in unique_segs:
-            seg_data = res_df[res_df['seg'] == seg_name]
-            hulu = seg_data.iloc[0]
-            hilir = seg_data.iloc[-1]
-            
-            summary_list.append({
-                "Segmen": seg_name,
-                "STA Awal": f"{hulu['x']:.2f}",
-                "STA Akhir": f"{hilir['x']:.2f}",
-                "Lebar Bawah (b)": f"{hulu['b']:.2f}",  
-                "Lebar Atas Hulu (T)": f"{hulu['top_width']:.2f}",
-                "Lebar Atas Hilir (T)": f"{hilir['top_width']:.2f}",
-                "Elv Dasar Hulu": f"{hulu['z']:.3f}",
-                "Elv Dasar Hilir": f"{hilir['z']:.3f}",
-                "M.A. Hulu": f"{hulu['ws']:.3f}",
-                "M.A. Hilir": f"{hilir['ws']:.3f}",
-                "V Hulu": f"{hulu['v']:.3f}",
-                "V Hilir": f"{hilir['v']:.3f}"
-            })
-            
-        sum_df = pd.DataFrame(summary_list)
-        st.dataframe(sum_df, width='stretch')
-        st.download_button("Download Rekap AutoCAD (CSV)", sum_df.to_csv(index=False).encode('utf-8'), "Rekap_Segmen_AutoCAD.csv")
-
-with t5:
-    if final_data:
         res = pd.DataFrame(final_data)[["x", "seg", "z", "ws", "y_final", "fr", "regime", "v", "eg"]]
-        res.columns = ["Sta", "Segmen", "Elev Dasar", "W.S.", "Depth", "Froude", "Regime", "Velocity", "E.G."]
-        st.dataframe(res, width='stretch')
-        st.download_button("Download Laporan Detail (CSV)", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
+        st.dataframe(res, use_container_width=True) # Updated to use correct width param context
+        st.download_button("Download CSV", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
