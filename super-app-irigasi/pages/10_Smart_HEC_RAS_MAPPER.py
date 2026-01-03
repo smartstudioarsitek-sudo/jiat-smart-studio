@@ -2,327 +2,383 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import tempfile
-import os
-import zipfile
+import matplotlib.ticker as ticker
 import io
-import json
-import xml.etree.ElementTree as ET
-import requests
-import folium
-from streamlit_folium import st_folium
-from folium.plugins import Draw
 
 # --- CONFIG ---
-st.set_page_config(page_title="Smart HEC-RAS Omni", layout="wide", page_icon="🌍")
+st.set_page_config(page_title="Smart HEC-RAS Pro (GIS Ready)", layout="wide", page_icon="🌊")
 
 st.markdown("""
 <style>
-    .header-box { padding: 20px; background: linear-gradient(90deg, #1e3c72, #2a5298); color: white; border-radius: 8px; text-align: center; margin-bottom: 20px; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-    .stTabs [data-baseweb="tab-list"] button { border-radius: 4px; background-color: #f0f2f6; }
-    .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] { background-color: #e8f0fe; border-bottom-color: #1e3c72; }
+    .header-box { padding: 20px; background: linear-gradient(90deg, #000428, #004e92); color: white; border-radius: 8px; text-align: center; margin-bottom: 20px; }
+    .metric-card { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #004e92; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .metric-label { font-size: 12px; color: #666; margin-bottom: 0; }
+    .metric-value { font-size: 18px; font-weight: bold; color: #333; margin: 0; }
+    @media print { .stSidebar, header, footer { display: none !important; } }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. GIS ENGINE (UNIVERSAL PARSER) ---
+# --- 1. ENGINE HIDROLIKA (MATH CORRECT & ROBUST) ---
 
-def fetch_dem_elevation(coords):
-    """Ambil elevasi dari Open-Elevation API untuk list koordinat [(lat, lon), ...]"""
-    locations = [{"latitude": lat, "longitude": lon} for lat, lon in coords]
-    try:
-        # Batching request biar tidak timeout (max 50 points per call recommended, but we try simple first)
-        url = "https://api.open-elevation.com/api/v1/lookup"
-        resp = requests.post(url, json={"locations": locations}, timeout=15)
-        if resp.status_code == 200:
-            return [r['elevation'] for r in resp.json()['results']]
-    except:
-        return [0] * len(coords) # Fallback 0
-    return [0] * len(coords)
-
-def calc_sta_dist(points_xyz):
-    """Hitung Stationing dari koordinat XYZ / XY"""
-    data = []
-    cum_dist = 0.0
-    for i, p in enumerate(points_xyz):
-        x, y = p[0], p[1]
-        z = p[2] if len(p) > 2 else 0
-        if i > 0:
-            # Euclidean simple untuk lokal, atau Haversine untuk LatLon
-            # Kita asumsi input GIS sudah diproyeksikan atau kita pakai Haversine kalau LatLon
-            # Deteksi kasar: jika X < 180, asumsi LatLon (Gunakan Haversine)
-            prev_x, prev_y = points_xyz[i-1][0], points_xyz[i-1][1]
-            
-            if abs(x) <= 180 and abs(y) <= 90: # LatLon logic
-                R = 6371000
-                lat1, lon1 = np.radians(prev_y), np.radians(prev_x)
-                lat2, lon2 = np.radians(y), np.radians(x)
-                dlat = lat2 - lat1; dlon = lon2 - lon1
-                a = np.sin(dlat/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin(dlon/2)**2
-                c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
-                dist = R * c
-            else: # Projected Coordinates (UTM/TM3)
-                dist = np.sqrt((x - prev_x)**2 + (y - prev_y)**2)
-                
-            cum_dist += dist
-        data.append({"sta": cum_dist, "z": z, "lat": y if abs(y)<=90 else 0, "lon": x if abs(x)<=180 else 0})
-    return data
-
-def parse_kmz(file_obj):
-    """Buka KMZ -> Cari KML -> Parse Koordinat"""
-    try:
-        with zipfile.ZipFile(file_obj) as z:
-            kml_file = next((f for f in z.namelist() if f.endswith('.kml')), None)
-            if not kml_file: return None, "Tidak ada file .kml dalam KMZ."
-            with z.open(kml_file) as kf:
-                tree = ET.parse(kf); root = tree.getroot()
-                # Cari namespace
-                ns = {'kml': 'http://www.opengis.net/kml/2.2'}
-                # Cari Coordinates di LineString
-                coords_text = []
-                for placemark in root.findall('.//kml:Placemark', ns):
-                    ls = placemark.find('.//kml:LineString/kml:coordinates', ns)
-                    if ls is not None and ls.text:
-                        coords_text = ls.text.strip().split()
-                        break # Ambil line pertama
-                
-                if not coords_text: return None, "Tidak ditemukan garis (LineString) di KMZ."
-                
-                points = []
-                for c in coords_text:
-                    parts = c.split(',')
-                    x = float(parts[0]); y = float(parts[1])
-                    z = float(parts[2]) if len(parts) > 2 else 0
-                    points.append((x, y, z))
-                return calc_sta_dist(points), None
-    except Exception as e: return None, str(e)
-
-def parse_geojson(file_obj):
-    try:
-        data = json.load(file_obj)
-        features = data.get('features', [])
-        points = []
-        for f in features:
-            geom = f.get('geometry', {})
-            if geom.get('type') == 'LineString':
-                coords = geom.get('coordinates', [])
-                points = [(p[0], p[1], p[2] if len(p)>2 else 0) for p in coords]
-                break # Ambil feature pertama
-        
-        if not points: return None, "Tidak ada LineString di GeoJSON."
-        return calc_sta_dist(points), None
-    except Exception as e: return None, str(e)
-
-def parse_shp_zip(file_obj):
-    try:
-        import geopandas as gpd
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with zipfile.ZipFile(file_obj, 'r') as zip_ref: zip_ref.extractall(tmpdir)
-            shp = next((os.path.join(r, f) for r, _, fs in os.walk(tmpdir) for f in fs if f.endswith(".shp")), None)
-            if not shp: return None, "SHP tidak ditemukan."
-            gdf = gpd.read_file(shp)
-            if gdf.empty: return None, "File kosong."
-            
-            # Reproject to LatLon (WGS84) agar bisa ambil DEM nanti
-            if gdf.crs and gdf.crs.to_epsg() != 4326:
-                gdf = gdf.to_crs(epsg=4326)
-            
-            geom = gdf.geometry.iloc[0]
-            if geom.geom_type not in ['LineString', 'LineStringZ']: return None, "Harus LineString."
-            
-            coords = list(geom.coords)
-            points = [(p[0], p[1], p[2] if len(p)>2 else 0) for p in coords]
-            return calc_sta_dist(points), None
-    except Exception as e: return None, str(e)
-
-def parse_dxf_smart(file_content, use_y):
-    # (Kode DXF Parser v3.0 dari chat sebelumnya dimasukkan di sini secara ringkas)
-    # Untuk menghemat tempat, saya gunakan logika inti saja
-    try:
-        content = file_content.decode('utf-8', errors='ignore').splitlines()
-        points = []; i=0; collecting=False; curr=[]
-        while i < len(content):
-            l = content[i].strip()
-            if l == 'VERTEX' or l == 'LWPOLYLINE':
-                if curr: points.append(curr); curr=[]
-                collecting=True
-            if collecting and (l=='10' or l=='20' or l=='30'):
-                # Simplifikasi: ambil koordinat mentah, nanti di post-process
-                pass 
-            i+=1
-        # NOTE: Gunakan parser v3.0 lengkap di production. 
-        # Disini kita return dummy msg agar user pakai parser v3 di atas jika copy-paste manual
-        return None, "Gunakan Parser V3.0" 
-    except: return None, "Error"
-
-# --- 2. HYDRAULIC CORE (CACHED) ---
-@st.cache_data
-def run_sim(data, Q, ws_d, ws_u, fs, ts, db, md, mode):
-    nodes = []; drops = []; dx_step = 5.0 # Bigger step for GIS data
-    
-    sorted_data = sorted(data, key=lambda x: x['STA Awal (m)'])
-    for s in sorted_data:
-        L = s['STA Akhir (m)'] - s['STA Awal (m)']
-        if L <= 0.001: continue
-        n_st = max(1, int(L/dx_step)); rdx = L/n_st
-        z1 = s['Elev Awal (m)']; slp = (z1 - s['Elev Akhir (m)'])/L
-        for i in range(n_st+1):
-            nodes.append({
-                "x": s['STA Awal (m)']+i*rdx, "z": z1-i*rdx*slp,
-                "b": s.get('Lebar b (m)', 2.0), "m": s.get('Talud m', 1.0), "n": s.get('Kekasaran n', 0.025),
-                "seg": s['Nama Segmen'], "h_ch": s.get('Tinggi Saluran H (m)', 1.5)
-            })
-            
-    # Simple Solver Logic
+def get_critical_depth(Q, b, m):
+    """Menghitung Critical Depth (Yc) Trapesium secara Iteratif."""
     g = 9.81
-    for n in nodes: n['yc'] = ((Q**2)/(g*n['b']**2))**(1/3) # Rect approx
-    nodes[-1]['y'] = ws_d; nodes[-1]['ws'] = nodes[-1]['z'] + ws_d
+    y_min, y_max = 0.01, 20.0
+    for _ in range(30):
+        y = (y_min + y_max) / 2
+        A = (b + m * y) * y
+        T = b + 2 * m * y
+        if A <= 0: A = 0.001
+        f_val = 9.81 * (A**3) - (Q**2) * T # Froude check
+        if abs(f_val) < 0.01: return y
+        if f_val < 0: y_min = y
+        else: y_max = y
+    return (y_min + y_max) / 2
+
+def get_geom_props(y, b, m, Q):
+    """Menghitung Properti Geometri + Momentum Trapesium yang BENAR."""
+    if y <= 0.001: y = 0.001
+    A = (b + m * y) * y
+    P = b + 2 * y * np.sqrt(1 + m**2)
+    R = A / P if P > 0 else 0
+    T = b + 2 * m * y
     
-    # Backward Step (Subcritical)
+    # --- MOMENTUM TRAPESIUM ---
+    hydrostatic_term = ((y**2)/2) * b + ((y**3)/3) * m
+    g = 9.81
+    if A > 0.0001:
+        M = (Q**2)/(g*A) + hydrostatic_term 
+    else: 
+        M = 0
+    return A, P, R, T, M
+
+def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
+    g = 9.81
+    A1, P1, R1, T1, M1 = get_geom_props(y_known, b, m, Q)
+    V1 = Q/A1
+    H1 = Z1 + y_known + (V1**2)/(2*g)
+    
+    def func(y2):
+        A2, P2, R2, T2, M2 = get_geom_props(y2, b, m, Q)
+        V2 = Q/A2
+        H2 = Z2 + y2 + (V2**2)/(2*g)
+        Sf1 = (n*V1)**2 / (R1**(4/3))
+        Sf2 = (n*V2)**2 / (R2**(4/3))
+        Sf_avg = (Sf1 + Sf2)/2
+        loss = Sf_avg * dx
+        if mode == 'sub': return H2 - (H1 + loss)
+        else: return H1 - (H2 + loss)
+
+    y_min, y_max = 0.01, 50.0
+    for _ in range(50):
+        y_mid = (y_min + y_max)/2
+        err = func(y_mid)
+        if abs(err) < 0.001: return y_mid
+        if mode == 'sub': # Mencari Y > Yc
+            if err > 0: y_max = y_mid 
+            else: y_min = y_mid
+        else: # Mencari Y < Yc
+            if err > 0: y_min = y_mid
+            else: y_max = y_mid
+    return (y_min + y_max)/2
+
+# --- 2. LOGIC ALGORITMA MIXED FLOW ---
+def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
+    
+    # Pre-calc Yc & Init
+    for n in nodes:
+        n['yc'] = get_critical_depth(Q, n['b'], n['m'])
+        n['y_sub'] = 0.0; n['y_sup'] = 0.0; n['y_final'] = 0.0 
+    
+    # PASS 1: SUBCRITICAL
+    nodes[-1]['y_sub'] = boundary_down
     for i in range(len(nodes)-2, -1, -1):
-        n1=nodes[i]; n2=nodes[i+1]
-        V2 = Q/(n2['b']*n2['y']); Sf2 = (n2['n']*V2)**2 / (n2['y']**(4/3)) # Approx R~y
-        y1 = n2['y']
-        for _ in range(5):
-            V1 = Q/(n1['b']*y1); Sf1 = (n1['n']*V1)**2 / (y1**(4/3))
-            H2 = n2['z'] + n2['y'] + V2**2/(2*g)
-            H1 = n1['z'] + y1 + V1**2/(2*g)
-            err = H2 + ((Sf1+Sf2)/2)*(n2['x']-n1['x']) - H1
-            y1 += err*0.5
-        n1['y'] = max(y1, n1['yc'] + 0.05)
-        n1['ws'] = n1['z'] + n1['y']
-        n1['v'] = Q/(n1['b']*n1['y']); n1['fr'] = n1['v']/np.sqrt(g*n1['y'])
-        n1['freeboard'] = (n1['z']+n1['h_ch']) - n1['ws']
+        dx = nodes[i+1]['x'] - nodes[i]['x']
+        known, target = nodes[i+1], nodes[i]
+        yc = target['yc']
+        try:
+            y_calc = solve_energy_step(known['y_sub'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sub')
+            if y_calc < yc: y_calc = yc + 0.01 
+        except: y_calc = yc + 0.01
+        target['y_sub'] = y_calc
+
+    # PASS 2: SUPERCRITICAL
+    nodes[0]['y_sup'] = boundary_up
+    for i in range(1, len(nodes)):
+        dx = nodes[i]['x'] - nodes[i-1]['x']
+        known, target = nodes[i-1], nodes[i]
+        yc = target['yc']
+        try:
+            y_calc = solve_energy_step(known['y_sup'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sup')
+            if y_calc > yc: y_calc = yc - 0.01 
+        except: y_calc = yc - 0.01
+        target['y_sup'] = y_calc
+
+    # PASS 3: REGIME SELECTION
+    for n in nodes:
+        if force_super:
+            if n['y_sup'] > 0.011 and n['y_sup'] < 49.0:
+                n['y_final'] = n['y_sup']; n['regime'] = "Supercritical (Forced)"
+            else:
+                n['y_final'] = n['yc']; n['regime'] = "Critical (Fallback)"
+        else:
+            if n['y_sub'] <= 0.011 or n['y_sub'] > 49.0: M_sub = -1.0
+            else: _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'], Q)
+
+            if n['y_sup'] <= 0.011 or n['y_sup'] > 49.0: M_sup = -1.0
+            else: _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'], Q)
+            
+            if M_sub == -1 and M_sup == -1: n['y_final'] = n['yc']; n['regime'] = "Critical (Fallback)"
+            elif M_sub >= M_sup: n['y_final'] = n['y_sub']; n['regime'] = "Subcritical"
+            else: n['y_final'] = n['y_sup']; n['regime'] = "Supercritical"
+            
+        # Final calculations
+        n['ws'] = n['z'] + n['y_final']
+        n['ws_sub'] = n['z'] + n['y_sub']
+        n['ws_sup'] = n['z'] + n['y_sup']
+        n['crit_ws'] = n['z'] + n['yc']
         
-    return nodes, drops
+        # Freeboard Calculation
+        H_ch = n.get('h_ch', 1.5) 
+        n['bank_elev'] = n['z'] + H_ch
+        n['freeboard'] = n['bank_elev'] - n['ws']
+        n['h_design'] = n['y_final'] + 0.4
+        
+        A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
+        V = Q/A if A > 0 else 0
+        n['v'] = V 
+        
+        n['eg'] = n['ws'] + (V**2)/(2*9.81)
+        D_hyd = A/T if T > 0 else 0
+        n['fr'] = V / np.sqrt(9.81 * D_hyd) if D_hyd > 0 else 0
+        
+        # Save Geometry Details
+        n['area'] = A; n['perim'] = P; n['radius'] = R; n['top_width'] = T
 
-# --- 3. STATE ---
-COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)"]
-if 'df_pro' not in st.session_state: st.session_state['df_pro'] = pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5]], columns=COLS)
+    return nodes
+
+# --- 3. UI SETUP ---
+REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)"]
+
+def reset_data():
+    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5]], columns=REQUIRED_COLS)
+
+if 'df_pro' not in st.session_state: st.session_state['df_pro'] = reset_data()
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
+if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
+if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 
 
-# --- 4. UI ---
-st.markdown("""<div class="header-box"><h1>🌍 Smart HEC-RAS Omni-GIS</h1><p>SHP • KMZ • GeoJSON • DXF • DEM Satelit</p></div>""", unsafe_allow_html=True)
+st.markdown("""<div class="header-box"><h1>🚀 Smart HEC-RAS Ultimate</h1><p>Integration with QGIS / Global Mapper DEM</p></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ Parameter")
-    st.session_state['q_pro'] = st.number_input("Debit (Q)", 0.01, 1000.0, st.session_state['q_pro'])
-    if st.button("Reset Data"): 
-        st.session_state['df_pro'] = pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5]], columns=COLS)
-        st.rerun()
-
-# --- INPUT SECTION ---
-t_imp, t_map, t_res, t_tab = st.tabs(["📂 Import Data", "🛰️ DEM Viewer", "📈 Hasil Analisa", "📝 Tabel Data"])
-
-with t_imp:
-    col_up, col_info = st.columns([1, 2])
-    with col_up:
-        source_type = st.selectbox("Pilih Format File:", ["Excel (.xlsx)", "Google Earth (.kmz)", "Shapefile (.zip)", "GeoJSON (.json)", "DXF (.dxf)"])
-        
-        file = None
-        if source_type == "Excel (.xlsx)":
-            file = st.file_uploader("Upload Excel", type=['xlsx'])
-        elif source_type == "Google Earth (.kmz)":
-            file = st.file_uploader("Upload KMZ", type=['kmz'])
-        elif source_type == "Shapefile (.zip)":
-            file = st.file_uploader("Upload SHP (ZIP)", type=['zip'])
-        elif source_type == "GeoJSON (.json)":
-            file = st.file_uploader("Upload GeoJSON", type=['json', 'geojson'])
-        elif source_type == "DXF (.dxf)":
-            file = st.file_uploader("Upload DXF", type=['dxf'])
-
-    with col_info:
-        if file and st.button("🚀 PROSES DATA"):
-            raw_data = None
-            err_msg = None
+    st.header("⚙️ Parameter Hidrolis")
+    st.session_state['q_pro'] = st.number_input("Debit (Q) m³/s", 0.01, 1000.0, st.session_state['q_pro'])
+    force_super = st.checkbox("🔥 Force Supercritical", value=False, help="Paksa hitung kecepatan tinggi untuk cek gerusan")
+    
+    st.divider()
+    st.subheader("🌊 Boundary Conditions")
+    st.session_state['ws_up'] = st.number_input("Hulu (Super): Kedalaman (m)", 0.01, 20.0, st.session_state['ws_up'])
+    st.session_state['ws_down'] = st.number_input("Hilir (Sub): Kedalaman (m)", 0.01, 20.0, st.session_state['ws_down'])
+    
+    st.divider()
+    st.subheader("🗺️ Import Data GIS (DEM)")
+    st.info("Upload CSV hasil 'Path Profile' Global Mapper atau 'Profile Tool' QGIS.")
+    
+    # --- GIS BRIDGE ---
+    up_gis = st.file_uploader("Upload CSV GIS (Distance, Elevation)", type=['csv', 'txt'], key="gis_up")
+    
+    if up_gis:
+        with st.expander("🛠️ Konfigurasi GIS Converter", expanded=True):
+            def_b = st.number_input("Default Lebar (b)", 0.1, 50.0, 1.0)
+            def_m = st.number_input("Default Talud (m)", 0.0, 10.0, 1.0)
+            def_n = st.number_input("Default Manning (n)", 0.001, 0.1, 0.025)
+            def_h = st.number_input("Default Tinggi Saluran (H)", 0.1, 10.0, 1.5)
             
-            # ROUTING PARSER
-            if source_type == "Excel (.xlsx)":
-                try: st.session_state['df_pro'] = pd.read_excel(file); st.success("Excel Loaded!"); st.rerun()
-                except: st.error("Format Excel salah")
-                
-            elif source_type == "Google Earth (.kmz)":
-                raw_data, err_msg = parse_kmz(file)
-                
-            elif source_type == "GeoJSON (.json)":
-                raw_data, err_msg = parse_geojson(file)
-                
-            elif source_type == "Shapefile (.zip)":
-                raw_data, err_msg = parse_shp_zip(file)
-                
-            # PROCESS RESULT FROM GIS
-            if err_msg: st.error(err_msg)
-            elif raw_data:
-                # Cek apakah Z = 0 semua?
-                z_values = [d['z'] for d in raw_data]
-                avg_z = sum(z_values) / len(z_values)
-                
-                st.session_state['gis_buffer'] = raw_data # Simpan sementara
-                
-                if avg_z == 0:
-                    st.warning("⚠️ Data Geometri terbaca, tapi ELEVASI (Z) = 0.")
-                    st.info("Gunakan Tab 'DEM Viewer' untuk mengambil elevasi dari Satelit.")
-                
-                # Convert to Table
-                rows = []
-                for i in range(len(raw_data)-1):
-                    rows.append({
-                        "Nama Segmen": f"S{i+1}", 
-                        "STA Awal (m)": raw_data[i]['sta'], "STA Akhir (m)": raw_data[i+1]['sta'],
-                        "Elev Awal (m)": raw_data[i]['z'], "Elev Akhir (m)": raw_data[i+1]['z'],
-                        "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
-                    })
-                st.session_state['df_pro'] = pd.DataFrame(rows)
-                st.success(f"Berhasil load {len(rows)} segmen!")
+            if st.button("🚀 Konversi & Load ke Simulator"):
+                try:
+                    df_gis = pd.read_csv(up_gis)
+                    # Normalisasi nama kolom
+                    df_gis.columns = [c.lower() for c in df_gis.columns]
+                    
+                    # Cari kolom Jarak dan Elevasi secara cerdas
+                    col_dist = next((c for c in df_gis.columns if any(x in c for x in ['dist', 'len', 'x', 'sta'])), None)
+                    col_elev = next((c for c in df_gis.columns if any(x in c for x in ['elev', 'z', 'height'])), None)
+                    
+                    if col_dist and col_elev:
+                        # PROSES KONVERSI: TITIK -> SEGMEN
+                        new_rows = []
+                        for i in range(len(df_gis) - 1):
+                            dist_start = df_gis.iloc[i][col_dist]
+                            dist_end = df_gis.iloc[i+1][col_dist]
+                            elev_start = df_gis.iloc[i][col_elev]
+                            elev_end = df_gis.iloc[i+1][col_elev]
+                            
+                            # Filter data duplikat/jarak 0
+                            if abs(dist_end - dist_start) < 0.01: continue
+                                
+                            new_rows.append({
+                                "Nama Segmen": f"S{i+1}",
+                                "STA Awal (m)": dist_start,
+                                "STA Akhir (m)": dist_end,
+                                "Elev Awal (m)": elev_start,
+                                "Elev Akhir (m)": elev_end,
+                                "Lebar b (m)": def_b,
+                                "Talud m": def_m,
+                                "Kekasaran n": def_n,
+                                "Tinggi Saluran H (m)": def_h
+                            })
+                        
+                        st.session_state['df_pro'] = pd.DataFrame(new_rows)
+                        st.success(f"Berhasil mengonversi {len(new_rows)} segmen dari data GIS!")
+                        st.rerun()
+                    else:
+                        st.error("Gagal mendeteksi kolom. Pastikan CSV punya kolom 'Distance' dan 'Elevation'.")
+                except Exception as e:
+                    st.error(f"Error membaca file: {e}")
 
-with t_map:
-    # Fitur ambil elevasi satelit jika data 0
-    if 'gis_buffer' in st.session_state:
-        data = st.session_state['gis_buffer']
-        # Cek coordinate validity (LatLon)
-        has_coords = data[0].get('lat', 0) != 0
+    st.divider()
+    up_excel = st.file_uploader("Atau Upload Excel Template", type=['xlsx'], key="xls_main")
+    if up_excel:
+        try:
+            df = pd.read_excel(up_excel)
+            st.session_state['df_pro'] = df # Asumsi format sudah benar
+            st.rerun()
+        except: pass
         
-        if has_coords:
-            st.write("📍 Koordinat terdeteksi. Klik tombol di bawah untuk mengambil data elevasi SRTM (Satelit).")
-            if st.button("📡 Ambil Elevasi dari Satelit (Auto-DEM)"):
-                with st.spinner("Menghubungi Open-Elevation API..."):
-                    # Extract LatLon pair
-                    coords_list = [(d['lat'], d['lon']) for d in data]
-                    elevs = fetch_dem_elevation(coords_list)
-                    
-                    # Update Z
-                    for i, z in enumerate(elevs):
-                        data[i]['z'] = z
-                    
-                    # Re-create DataFrame
-                    rows = []
-                    for i in range(len(data)-1):
-                        rows.append({
-                            "Nama Segmen": f"S{i+1}", 
-                            "STA Awal (m)": data[i]['sta'], "STA Akhir (m)": data[i+1]['sta'],
-                            "Elev Awal (m)": data[i]['z'], "Elev Akhir (m)": data[i+1]['z'],
-                            "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
-                        })
-                    st.session_state['df_pro'] = pd.DataFrame(rows)
-                    st.success("Elevasi berhasil diupdate dari Satelit!")
-                    st.rerun()
-        else:
-            st.warning("Data GIS tidak memiliki koordinat Lat/Lon (Mungkin sistem proyeksi lokal/TM3). Fitur Satelit tidak aktif.")
+    if st.button("Reset Data"): st.session_state['df_pro'] = reset_data(); st.rerun()
 
-# EXECUTION
+# --- 4. MAIN PROCESS ---
 df = st.session_state['df_pro']
-nodes_ex, _ = run_sim(df.to_dict('records'), st.session_state['q_pro'], 0.5, 0.2, False, 0, 0, 0, "existing")
+profile = {'x': [], 'z': [], 'ws': [], 'eg': [], 'crit': [], 'bank': []}
+final_data = []
+all_nodes = [] 
 
-with t_res:
-    if nodes_ex:
-        st.subheader("Profil Memanjang")
-        fig, ax = plt.subplots(figsize=(12, 6))
-        x=[n['x'] for n in nodes_ex]; z=[n['z'] for n in nodes_ex]; w=[n['ws'] for n in nodes_ex]
-        ax.plot(x, z, 'k-', lw=2, label='Dasar Saluran')
-        ax.plot(x, w, 'b-', label='Muka Air')
-        ax.fill_between(x, z, w, color='cyan', alpha=0.3)
-        ax.legend(); ax.grid(True, alpha=0.3); ax.set_xlabel("Jarak (m)"); ax.set_ylabel("Elevasi (m)")
+if not df.empty:
+    try:
+        # Sort by STA
+        if "STA Awal (m)" in df.columns:
+            df = df.sort_values(by="STA Awal (m)")
+        
+        segments = df.to_dict('records')
+        dx_step = 2.0 
+        nodes = []
+        
+        # --- GENERATE NODES ---
+        for idx, seg in enumerate(segments):
+            # Safe get value
+            sta1 = seg.get("STA Awal (m)", 0)
+            sta2 = seg.get("STA Akhir (m)", 0)
+            z1 = seg.get("Elev Awal (m)", 0)
+            z2 = seg.get("Elev Akhir (m)", 0)
+            
+            L = sta2 - sta1
+            if L <= 0: continue
+            n_steps = int(L / dx_step); 
+            if n_steps < 1: n_steps = 1
+            real_dx = L / n_steps
+            slope = (z1 - z2) / L
+            h_ch_val = seg.get("Tinggi Saluran H (m)", 1.5)
+            
+            start_i = 1 if idx > 0 else 0
+            for i in range(start_i, n_steps + 1):
+                nodes.append({
+                    "x": sta1 + i * real_dx,
+                    "z": z1 - (i * real_dx * slope),
+                    "b": seg.get("Lebar b (m)", 2.0), 
+                    "m": seg.get("Talud m", 1.0), 
+                    "n": seg.get("Kekasaran n", 0.025), 
+                    "seg": seg.get("Nama Segmen", f"S{idx}"),
+                    "h_ch": h_ch_val, "slope_local": slope
+                })
+        
+        # --- RUN SOLVER ---
+        if len(nodes) > 0:
+            nodes = calculate_profiles(nodes, st.session_state['q_pro'], st.session_state['ws_down'], st.session_state['ws_up'], force_super)
+            all_nodes = nodes 
+            
+            for n in nodes:
+                profile['x'].append(n['x']); profile['z'].append(n['z']); profile['ws'].append(n['ws'])
+                profile['eg'].append(n['eg']); profile['crit'].append(n['crit_ws'])
+                profile['bank'].append(n['bank_elev'])
+                final_data.append(n)
+
+    except Exception as e: st.error(f"Error Calculation: {e}")
+
+# --- 5. TABS VISUALISASI ---
+t1, t2, t3, t4, t5 = st.tabs(["📝 Input Geometri", "📈 Profil Memanjang", "❌ Cross Section", "📑 Rekap per Segmen", "📋 Laporan Detail"])
+
+with t1:
+    st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch')
+
+with t2:
+    if len(profile['x']) > 0:
+        fig, ax = plt.subplots(figsize=(14, 8))
+        ax.plot(profile['x'], profile['z'], 'k-', lw=2.5, label='Dasar Saluran')
+        ax.plot(profile['x'], profile['ws'], 'b-', lw=2, label='Muka Air (W.S.)')
+        ax.plot(profile['x'], profile['bank'], 'brown', ls='--', lw=2, label='Bibir Tanggul (Bank)')
+        ax.fill_between(profile['x'], profile['z'], profile['ws'], color='#00eaff', alpha=0.4)
+        ax.plot(profile['x'], profile['crit'], 'r--', lw=1.5, alpha=0.7, label='Kedalaman Kritis')
+        ax.plot(profile['x'], profile['eg'], 'g-.', lw=1, alpha=0.8, label='Garis Energi')
+        
+        ax.minorticks_on()
+        ax.grid(which='major', linestyle='-', linewidth='0.5', color='gray', alpha=0.7)
+        ax.grid(which='minor', linestyle=':', linewidth='0.5', color='gray', alpha=0.3)
+        
+        # Labels Segmen
+        ax.set_title(f"Profil Memanjang Hidrolis - Q = {st.session_state['q_pro']} m³/s", fontsize=14, fontweight='bold')
+        ax.set_xlabel("Station (m)"); ax.set_ylabel("Elevasi (m)")
+        ax.legend(loc='upper right', frameon=True)
         st.pyplot(fig)
+    else: st.info("Data kosong.")
 
-with t_tab:
-    st.data_editor(df, num_rows="dynamic", width='stretch')
+with t3:
+    if len(all_nodes) > 0:
+        st.subheader("Visualisasi Penampang")
+        sta_list = [n['x'] for n in all_nodes]
+        sel_sta = st.select_slider("Pilih Station (m):", options=sta_list, value=sta_list[0])
+        node = next((n for n in all_nodes if n['x'] == sel_sta), None)
+        if node:
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                fig_cs, ax_cs = plt.subplots(figsize=(8, 5))
+                b, m, z, y, ws = node['b'], node['m'], node['z'], node['y_final'], node['ws']
+                H_draw = node['h_ch']
+                top_w_draw = b + 2 * m * H_draw
+                x_ground = [-top_w_draw/2, -b/2, b/2, top_w_draw/2]
+                y_ground = [z + H_draw, z, z, z + H_draw]
+                ax_cs.plot(x_ground, y_ground, 'k-', lw=3, label="Tanah")
+                ax_cs.fill_between(x_ground, y_ground, min(y_ground), color='gray', alpha=0.3)
+                if y > 0.001:
+                    T = b + 2*m*y
+                    x_water = [-T/2, T/2]; y_water = [ws, ws]
+                    ax_cs.plot(x_water, y_water, 'b-', lw=2, label="Muka Air")
+                    ax_cs.fill([-T/2, T/2, b/2, -b/2], [ws, ws, z, z], color='#00eaff', alpha=0.6)
+                ax_cs.set_title(f"Cross Section STA {sel_sta:.2f}"); ax_cs.legend(); ax_cs.grid(True, ls=':')
+                st.pyplot(fig_cs)
+            with c2:
+                st.metric("Kedalaman Air (y)", f"{node['y_final']:.3f} m")
+                fb = node['freeboard']
+                fb_color = "red" if fb < 0.3 else "green"
+                st.markdown(f"**Freeboard:** <span style='color:{fb_color}'>{fb:.3f} m</span>", unsafe_allow_html=True)
+
+with t4:
+    if final_data:
+        st.subheader("📋 Rekapitulasi Data Per Segmen")
+        res_df = pd.DataFrame(final_data)
+        summary_list = []
+        for seg_name in res_df['seg'].unique():
+            seg_data = res_df[res_df['seg'] == seg_name]
+            hulu = seg_data.iloc[0]; hilir = seg_data.iloc[-1]
+            summary_list.append({
+                "Segmen": seg_name, "STA Awal": f"{hulu['x']:.2f}", "STA Akhir": f"{hilir['x']:.2f}",
+                "Lebar Bawah": f"{hulu['b']:.2f}", "Tinggi Saluran": f"{hulu['h_ch']:.2f}",
+                "M.A. Hulu": f"{hulu['ws']:.3f}", "M.A. Hilir": f"{hilir['ws']:.3f}",
+                "Jagaan Hulu": f"{hulu['freeboard']:.3f}"
+            })
+        st.dataframe(pd.DataFrame(summary_list), width='stretch')
+
+with t5:
+    if final_data:
+        res = pd.DataFrame(final_data)[["x", "seg", "z", "ws", "y_final", "freeboard", "fr", "v", "eg"]]
+        st.dataframe(res, width='stretch')
+        st.download_button("Download Laporan Detail", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
