@@ -16,38 +16,70 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. ENGINE HIDROLIKA (ULTIMATE MIXED FLOW) ---
-def get_geom_props(y, b, m):
+# --- 1. ENGINE HIDROLIKA (MATH UPGRADE: TRAPEZOIDAL SUPPORT) ---
+
+def get_critical_depth(Q, b, m):
+    """
+    Menghitung Critical Depth (Yc) untuk penampang Trapesium/Persegi.
+    Menggunakan Metode Bisection karena persamaan Yc Trapesium tidak bisa diselesaikan analitik langsung.
+    Target: Froude Number = 1 -> (Q^2 * T) / (g * A^3) = 1
+    """
+    g = 9.81
+    y_min, y_max = 0.01, 20.0
+    
+    for _ in range(30): # 30 Iterasi cukup presisi
+        y = (y_min + y_max) / 2
+        A = (b + m * y) * y
+        T = b + 2 * m * y
+        
+        if A <= 0: A = 0.001
+        
+        # Froude Check: g*A^3 - Q^2*T = 0
+        f_val = 9.81 * (A**3) - (Q**2) * T
+        
+        if abs(f_val) < 0.01: return y
+        
+        if f_val < 0: # Aliran Superkritis (A terlalu kecil)
+            y_min = y
+        else:
+            y_max = y
+            
+    return (y_min + y_max) / 2
+
+def get_geom_props(y, b, m, Q):
+    """
+    Menghitung Properti Geometri + Momentum (Specific Force) yang BENAR untuk Trapesium.
+    """
     if y <= 0.001: y = 0.001
     A = (b + m * y) * y
     P = b + 2 * y * np.sqrt(1 + m**2)
     R = A / P if P > 0 else 0
     T = b + 2 * m * y
     
-    # Specific Force (Momentum) untuk Hydraulic Jump
-    # M = Q^2 / (g*A) + y_bar * A 
-    g = 9.81
-    # Centroid approx for trapezoid
-    y_bar = (y/3) * (b + 2*m*y)/(b + m*y) * y if (b+m*y) !=0 else 0
+    # --- KOREKSI MOMENTUM (Trapezoidal Exact Formula) ---
+    # Momentum (M) = Q^2/(gA) + A * y_centroid
+    # Suku Hidrostatis (A * y_centroid) untuk trapesium:
+    # Integral (y*dA) -> (y^2/2)*b + (y^3/3)*m
     
-    # Force calculation
+    hydrostatic_term = ((y**2)/2) * b + ((y**3)/3) * m
+    
+    g = 9.81
     if A > 0:
-        M = (Q_global**2)/(g*A) + (A * (y - y_bar)) # Correct Moment
-        # Simplified rectangular moment often used: M = Q^2/gA + Ay_bar
-        # Let's use simple approximation for stability
-        M = (Q_global**2)/(g*A) + (A * y/2) 
-    else: M = 0
+        M = (Q**2)/(g*A) + hydrostatic_term 
+    else: 
+        M = 0
+        
     return A, P, R, T, M
 
 def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
     g = 9.81
     # 1 = Known, 2 = Target
-    A1, P1, R1, T1, M1 = get_geom_props(y_known, b, m)
+    A1, P1, R1, T1, M1 = get_geom_props(y_known, b, m, Q)
     V1 = Q/A1
     H1 = Z1 + y_known + (V1**2)/(2*g)
     
     def func(y2):
-        A2, P2, R2, T2, M2 = get_geom_props(y2, b, m)
+        A2, P2, R2, T2, M2 = get_geom_props(y2, b, m, Q)
         V2 = Q/A2
         H2 = Z2 + y2 + (V2**2)/(2*g)
         Sf1 = (n*V1)**2 / (R1**(4/3))
@@ -58,88 +90,71 @@ def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
         if mode == 'sub': return H2 - (H1 + loss) # Mundur (Hulu = Hilir + Loss)
         else: return H1 - (H2 + loss) # Maju (Hilir = Hulu - Loss)
 
-    # Bisection
+    # Bisection Solver
     y_min, y_max = 0.01, 50.0
     for _ in range(50):
         y_mid = (y_min + y_max)/2
         err = func(y_mid)
         if abs(err) < 0.001: return y_mid
         
-        if mode == 'sub': # Mencari Y > Yc
+        if mode == 'sub': # Mencari Y > Yc (Subkritis)
             if err > 0: y_max = y_mid
             else: y_min = y_mid
-        else: # Mencari Y < Yc
+        else: # Mencari Y < Yc (Superkritis)
             if err > 0: y_min = y_mid
             else: y_max = y_mid
             
     return (y_min + y_max)/2
 
-# --- 2. LOGIC ALGORITMA MIXED FLOW (FIX KEYERROR) ---
+# --- 2. LOGIC ALGORITMA MIXED FLOW ---
 def calculate_profiles(nodes, Q, boundary_down, boundary_up):
-    global Q_global
-    Q_global = Q
     
-    # --- PRE-CALCULATION (FIX ERROR YC) ---
-    # Hitung Yc untuk SEMUA node dulu sebelum loop
+    # --- PRE-CALCULATION (YC CORRECT) ---
     for n in nodes:
-        # Critical Depth Approx
-        yc = ((Q**2)/(9.81 * n['b']**2))**(1/3)
-        n['yc'] = yc
-        # Init placeholder biar gak error
+        # Panggil fungsi Yc Iteratif yang baru (Trapezoid Correct)
+        n['yc'] = get_critical_depth(Q, n['b'], n['m'])
+        
+        # Init placeholder
         n['y_sub'] = 0.0
         n['y_sup'] = 0.0
         n['y_final'] = 0.0
     
     # --- PASS 1: SUBCRITICAL (MUNDUR) ---
-    # Mulai dari Hilir
     nodes[-1]['y_sub'] = boundary_down
-    
     for i in range(len(nodes)-2, -1, -1):
         dx = nodes[i+1]['x'] - nodes[i]['x']
         known = nodes[i+1]
         target = nodes[i]
-        
         yc = target['yc']
         
-        # Hitung Mundur
         try:
             y_calc = solve_energy_step(known['y_sub'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sub')
             # Filter: Subkritis tidak boleh nembus Super (Y < Yc)
             if y_calc < yc: y_calc = yc + 0.05
-        except:
-            y_calc = yc + 0.05
-            
+        except: y_calc = yc + 0.05
         target['y_sub'] = y_calc
 
     # --- PASS 2: SUPERCRITICAL (MAJU) ---
-    # Mulai dari Hulu
     nodes[0]['y_sup'] = boundary_up
-    
     for i in range(1, len(nodes)):
         dx = nodes[i]['x'] - nodes[i-1]['x']
         known = nodes[i-1]
         target = nodes[i]
-        
         yc = target['yc']
         
-        # Hitung Maju
         try:
             y_calc = solve_energy_step(known['y_sup'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sup')
             # Filter: Superkritis tidak boleh nembus Sub (Y > Yc)
             if y_calc > yc: y_calc = yc - 0.01
-        except:
-            y_calc = yc - 0.01
-            
+        except: y_calc = yc - 0.01
         target['y_sup'] = y_calc
 
     # --- PASS 3: MOMENTUM CHECK (MIXED) ---
     for n in nodes:
-        # Hitung Momentum
-        _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'])
-        _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'])
+        # Hitung Momentum (Dengan Rumus Baru Trapesium)
+        _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'], Q)
+        _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'], Q)
         
-        # Logic HEC-RAS: Profil dengan Momentum Tinggi Mendominasi
-        # (Air dalam punya gaya tekan hidrostatik besar, air cepat punya gaya momentum besar)
         if M_sub >= M_sup:
             n['y_final'] = n['y_sub']
             n['regime'] = "Subcritical"
@@ -152,12 +167,13 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up):
         n['ws_sup'] = n['z'] + n['y_sup']
         n['crit_ws'] = n['z'] + n['yc']
         
-        # Hitung EGL Final
-        A, _, _, _, _ = get_geom_props(n['y_final'], n['b'], n['m'])
+        A, _, _, _, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
         V = Q/A if A > 0 else 0
         n['eg'] = n['ws'] + (V**2)/(2*9.81)
-        n['v'] = V
-        n['fr'] = V / np.sqrt(9.81 * (A/(n['b']+2*n['m']*n['y_final']))) if A>0 else 0
+        # Froude Trapesium: V / sqrt(g * A/T)
+        T_top = n['b'] + 2*n['m']*n['y_final']
+        D_hydraulic = A/T_top if T_top > 0 else 0
+        n['fr'] = V / np.sqrt(9.81 * D_hydraulic) if D_hydraulic > 0 else 0
 
     return nodes
 
@@ -172,7 +188,7 @@ if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
 if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
 if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 
 
-st.markdown("""<div class="header-box"><h1>🚀 Smart HEC-RAS Ultimate</h1><p>Mixed Flow Analysis (Fixed Key Error)</p></div>""", unsafe_allow_html=True)
+st.markdown("""<div class="header-box"><h1>🚀 Smart HEC-RAS Ultimate</h1><p>Mixed Flow (Trapezoidal Corrected Momentum)</p></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ Parameter")
@@ -185,7 +201,7 @@ with st.sidebar:
     
     st.divider()
     # Excel Upload (Auto)
-    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_fixed")
+    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_math_fix")
     if up_file:
         try:
             df = pd.read_excel(up_file)
@@ -268,12 +284,12 @@ with t2:
     if len(profile['x']) > 0:
         fig, ax = plt.subplots(figsize=(12, 6))
         ax.plot(profile['x'], profile['z'], 'k-', lw=2, label='Ground')
-        ax.plot(profile['x'], profile['crit'], 'r--', lw=1, alpha=0.5, label='Critical Depth')
+        ax.plot(profile['x'], profile['crit'], 'r--', lw=1, alpha=0.5, label='Critical Depth (Trapezoidal)')
         ax.plot(profile['x'], profile['ws_sub'], 'g:', lw=0.5, alpha=0.3, label='Subcritical Trial')
         ax.plot(profile['x'], profile['ws_sup'], 'm:', lw=0.5, alpha=0.3, label='Supercritical Trial')
         ax.plot(profile['x'], profile['ws'], 'b-', lw=2.5, label='Final W.S. (Mixed)')
         ax.fill_between(profile['x'], profile['z'], profile['ws'], color='#00eaff', alpha=0.4)
-        ax.set_title(f"Mixed Flow Analysis (Auto Jump) - Q = {st.session_state['q_pro']}")
+        ax.set_title(f"Mixed Flow Analysis (Trapezoidal Corrected) - Q = {st.session_state['q_pro']}")
         ax.set_xlabel("Station (m)"); ax.set_ylabel("Elevation (m)")
         ax.legend(loc='best'); ax.grid(True, ls=':', alpha=0.5)
         st.pyplot(fig)
@@ -284,4 +300,4 @@ with t3:
         res = pd.DataFrame(final_data)[["x", "seg", "z", "ws", "y_final", "fr", "regime"]]
         res.columns = ["Sta", "Segmen", "Elev Dasar", "W.S.", "Depth", "Froude", "Regime"]
         st.dataframe(res, use_container_width=True)
-        st.download_button("Download CSV", res.to_csv(index=False).encode('utf-8'), "laporan_mixed_flow.csv")
+        st.download_button("Download CSV", res.to_csv(index=False).encode('utf-8'), "laporan_final_trapezoid.csv")
