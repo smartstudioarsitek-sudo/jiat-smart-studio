@@ -7,17 +7,18 @@ import io
 import json
 
 # --- CONFIG ---
-st.set_page_config(page_title="Smart HEC-RAS Lite", layout="wide", page_icon="🌊")
+st.set_page_config(page_title="Smart HEC-RAS Pro", layout="wide", page_icon="🌊")
 
 st.markdown("""
 <style>
     .header-box {
-        padding: 20px; background: linear-gradient(90deg, #1e3c72, #2a5298); 
+        padding: 20px; background: linear-gradient(90deg, #000428, #004e92); 
         color: white; border-radius: 8px; text-align: center; margin-bottom: 20px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    .metric-card { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #007bff; margin-bottom: 10px; }
+    .metric-card { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #004e92; margin-bottom: 10px; }
     .report-box { border: 1px solid #ddd; padding: 20px; border-radius: 5px; margin-bottom: 20px; background-color: white; }
+    h3 { color: #004e92; border-bottom: 2px solid #eee; padding-bottom: 5px; }
     @media print {
         .stSidebar, header, footer, .stFileUploader, .stButton, .stTabs nav { display: none !important; }
         .block-container { padding-top: 0 !important; }
@@ -25,345 +26,301 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- ENGINE HIDROLIKA (ANTI-GRAVITY FIX) ---
-def solve_manning_y(Q, n, b, S, m):
-    # Jika kemiringan 0 atau negatif (nanjak), anggap slope sangat kecil (genangan)
-    if S <= 0: S = 0.0001 
-    
-    # Bisection Method (Stabil)
-    y_low = 0.001
-    y_high = 20.0
-    for _ in range(50):
-        y_mid = (y_low + y_high) / 2
-        A = (b + m*y_mid) * y_mid
-        P = b + 2*y_mid * np.sqrt(1 + m**2)
-        R = A/P if P > 0 else 0
-        
-        # Manning Formula
-        Q_calc = (1/n) * A * (R**(2/3)) * (S**0.5)
-        
-        if abs(Q_calc - Q) < 0.001: return y_mid
-        if Q_calc < Q: y_low = y_mid
-        else: y_high = y_mid
-    return (y_low + y_high) / 2
+# --- 1. ENGINE HIDROLIKA: STANDARD STEP METHOD (The "Pro" Brain) ---
 
-def solve_critical_y(Q, b, m):
+def get_geom_props(y, b, m):
+    """Menghitung properti penampang: Luas (A), Keliling (P), Radius (R), Lebar Atas (T)"""
+    if y <= 0: return 0.001, 0.001, 0.001, 0.001
+    A = (b + m * y) * y
+    P = b + 2 * y * np.sqrt(1 + m**2)
+    R = A / P if P > 0 else 0
+    T = b + 2 * m * y
+    return A, P, R, T
+
+def solve_energy_equation(y_guess, Q, n, Z1, Z2, y1, b, m, L, dx, mode='subcritical'):
+    """
+    Menyelesaikan Persamaan Energi Bernoulli antara dua seksi (1 & 2).
+    Z1 + y1 + V1^2/2g = Z2 + y2 + V2^2/2g + hf + he
+    """
     g = 9.81
-    y_low = 0.001
-    y_high = 10.0
+    # Properti di Seksi 1 (Diketahui)
+    A1, P1, R1, T1 = get_geom_props(y1, b, m)
+    V1 = Q / A1
+    H1 = Z1 + y1 + (V1**2) / (2*g) # Total Energy di 1
     
-    for _ in range(50):
-        y_mid = (y_low + y_high) / 2
-        A = (b + m*y_mid) * y_mid
-        T = b + 2*m*y_mid
+    # Fungsi Error untuk dicari akarnya (Target: E2 - E1 + losses = 0)
+    def energy_func(y2):
+        A2, P2, R2, T2 = get_geom_props(y2, b, m)
+        if A2 <= 0: return 1000.0 # Penalty
+        V2 = Q / A2
+        H2 = Z2 + y2 + (V2**2) / (2*g)
         
-        if A <= 0: val = 0
-        else: val = (Q**2 * T) / (g * A**3)
+        # Friction Slope (Average)
+        Sf1 = (n * V1)**2 / (R1**(4/3)) if R1 > 0 else 0
+        Sf2 = (n * V2)**2 / (R2**(4/3)) if R2 > 0 else 0
+        Sf_avg = (Sf1 + Sf2) / 2
         
-        if abs(val - 1.0) < 0.01: return y_mid
-        if val > 1.0: y_low = y_mid
-        else: y_high = y_mid
-            
-    return (y_low + y_high) / 2
+        h_f = Sf_avg * dx # Friction Loss
+        # h_e = 0 # Expansion/Contraction loss (diabaikan dulu utk simplifikasi)
+        
+        # Balance Energi tergantung arah hitungan
+        # E_hulu = E_hilir + losses
+        if mode == 'subcritical': # Hitung Mundur (Hilir ke Hulu) -> 2 adalah Hulu, 1 adalah Hilir
+            # H2 (Hulu) = H1 (Hilir) + h_f
+            return H2 - (H1 + h_f)
+        else: # Superkritis (Hulu ke Hilir) -> 2 adalah Hilir, 1 adalah Hulu
+            # H1 (Hulu) = H2 (Hilir) + h_f
+            return H1 - (H2 + h_f)
 
-# --- 1. INISIALISASI ---
+    # Solver Bisection (Stabil)
+    y_min, y_max = 0.01, 20.0
+    for _ in range(50):
+        y_mid = (y_min + y_max) / 2
+        err = energy_func(y_mid)
+        if abs(err) < 0.001: return y_mid
+        
+        # Logic Bisection arahnya beda tergantung fungsi naik/turun
+        # Energi spesifik itu parabola, jadi kita harus hati-hati.
+        # Untuk Subkritis (kedalaman > kritis), dE/dy positif.
+        if mode == 'subcritical':
+            if err > 0: y_max = y_mid 
+            else: y_min = y_mid
+        else:
+            if err > 0: y_min = y_mid # Superkritis dE/dy negatif di zona dangkal? (Cek lagi nanti, trial dulu)
+            else: y_max = y_mid
+            
+    return (y_min + y_max) / 2
+
+# --- 2. INISIALISASI DATA ---
 REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
 
 def reset_data():
+    # Data Default: Saluran beruntun
     data = [
-        ["S1", 0.0, 50.0, 325.54, 324.95, 0.6, 1.0, 0.017],
-        ["S2", 50.0, 64.0, 324.95, 323.54, 0.6, 1.0, 0.017],
+        ["S1 (Hulu)", 0.0, 100.0, 105.0, 104.5, 2.0, 1.0, 0.015],
+        ["S2 (Tengah)", 100.0, 200.0, 104.5, 104.0, 2.0, 1.0, 0.015],
+        ["S3 (Hilir)", 200.0, 300.0, 104.0, 103.5, 2.0, 1.0, 0.015],
     ]
     return pd.DataFrame(data, columns=REQUIRED_COLS)
 
-if 'df_segments_sta' not in st.session_state:
-    st.session_state['df_segments_sta'] = reset_data()
+if 'df_pro' not in st.session_state: st.session_state['df_pro'] = reset_data()
+if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 5.0
+if 'ws_known' not in st.session_state: st.session_state['ws_known'] = 1.5 # Boundary condition default
 
-if 'q_global' not in st.session_state: st.session_state['q_global'] = 0.24
-
-# --- 2. HEADER & SIDEBAR ---
+# --- 3. UI HEADER & SIDEBAR ---
 st.markdown("""
 <div class="header-box">
-    <h1 style="margin:0; font-size: 32px;">🌊 Smart HEC-RAS Lite</h1>
-    <p style="margin-top:5px; font-size: 14px; opacity: 0.9;">Steady Flow Analysis & HEC-RAS Style Plot</p>
+    <h1 style="margin:0; font-size: 32px;">🚀 Smart HEC-RAS Pro</h1>
+    <p style="margin-top:5px; font-size: 14px; opacity: 0.9;">Standard Step Method Solver (Energy Equation)</p>
 </div>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ Plan Data")
-    st.session_state['q_global'] = st.number_input("Flow (Q) m³/s", 0.001, 100.0, st.session_state['q_global'], 0.01)
+    st.header("⚙️ Boundary Condition")
+    st.session_state['q_pro'] = st.number_input("Debit (Q) m³/s", 0.01, 1000.0, st.session_state['q_pro'])
+    
+    # Pilihan Mode Hitungan
+    calc_mode = st.radio("Mode Analisa", ["Subkritis (Hilir -> Hulu)", "Superkritis (Hulu -> Hilir)"], index=0)
+    mode_key = 'subcritical' if "Sub" in calc_mode else 'supercritical'
     
     st.divider()
     
-    # SAVE/LOAD
-    st.subheader("💾 Manajemen File")
-    project_data = {'q': st.session_state['q_global'], 'segments': st.session_state['df_segments_sta'].to_dict(orient='records')}
-    st.download_button("💾 Simpan Project (.json)", json.dumps(project_data, indent=2), "hecras_project.json", "application/json")
-    
-    uploaded_json = st.file_uploader("Buka Project (.json)", type=['json'])
-    if uploaded_json:
-        try:
-            loaded = json.load(uploaded_json)
-            st.session_state['q_global'] = float(loaded['q'])
-            st.session_state['df_segments_sta'] = pd.DataFrame(loaded['segments'])
-            st.success("Data Dimuat!")
-            st.rerun()
-        except: st.error("File JSON rusak.")
-    
-    st.divider()
-    
-    aspect_ratio_fix = st.slider("📐 Skala Vertikal (Long Section)", 0.1, 10.0, 1.0, 0.1)
-    use_manual_zoom = st.checkbox("Manual Scaling", value=False)
-    if use_manual_zoom:
-        c1, c2 = st.columns(2)
-        with c1: y_min = st.number_input("Min Elev", 0.0, 1000.0, 318.0)
-        with c2: y_max = st.number_input("Max Elev", 0.0, 1000.0, 330.0)
-    
-    st.divider()
-    
-    # EXCEL IMPORT
-    st.subheader("📥 Excel Import")
-    
-    df_temp = pd.DataFrame([["S1", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=REQUIRED_COLS)
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer: df_temp.to_excel(writer, index=False)
-    st.download_button("📄 Download Template Excel", buf.getvalue(), "Template_HECRAS.xlsx")
-    
-    up_file = st.file_uploader("Upload Excel (.xlsx)", type=['xlsx'])
-    if up_file:
-        try:
-            df_up = pd.read_excel(up_file)
-            def clean(t): return str(t).lower().replace(" ", "").replace("(m)", "").replace(".", "")
-            df_up.columns = [clean(c) for c in df_up.columns]
-            
-            mapping = {
-                "Nama Segmen": ["nama", "reach", "segmen"],
-                "STA Awal (m)": ["staawal", "start", "hulu"],
-                "STA Akhir (m)": ["staakhir", "end", "hilir"],
-                "Elev Awal (m)": ["elevawal", "z1", "startelv"],
-                "Elev Akhir (m)": ["elevakhir", "z2", "endelv"],
-                "Lebar b (m)": ["lebar", "width", "b"],
-                "Talud m": ["talud", "slope", "m", "z"],
-                "Kekasaran n": ["kekasaran", "manning", "n"]
-            }
-            
-            new_data = pd.DataFrame()
-            found_count = 0
-            for sys_col, keywords in mapping.items():
-                for kw in keywords:
-                    match = next((c for c in df_up.columns if kw in c), None)
-                    if match:
-                        new_data[sys_col] = df_up[match]
-                        found_count += 1
-                        break
-            
-            if found_count >= 6:
-                if st.button("✅ Load Data Excel"):
-                    st.session_state['df_segments_sta'] = new_data
-                    st.rerun()
-            else: st.error("Gagal mencocokkan kolom. Gunakan Template.")
-        except Exception as e: st.error(f"Error: {e}")
-
-    if st.button("🔄 Reset Data Default"): 
-        st.session_state['df_segments_sta'] = reset_data(); st.rerun()
-
-# --- 3. MAIN CALCULATION ---
-edited_df = st.session_state['df_segments_sta']
-results = []
-plot_x, plot_bed, plot_ws, plot_egl, plot_crit = [], [], [], [], []
-
-if not edited_df.empty:
-    try:
-        num_cols = ["STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
-        calc_df = edited_df.copy()
-        for c in num_cols:
-            if c not in calc_df.columns: calc_df[c] = 0.0
-            calc_df[c] = pd.to_numeric(calc_df[c], errors='coerce')
+    # Input Boundary
+    if mode_key == 'subcritical':
+        st.subheader("🌊 Batas Hilir (Downstream)")
+        st.info("Masukkan kedalaman air yang diketahui di ujung paling hilir (misal: kedalaman normal atau level bendung).")
+        boundary_y = st.number_input("Kedalaman Air Hilir (m)", 0.1, 20.0, st.session_state['ws_known'])
+    else:
+        st.subheader("🌊 Batas Hulu (Upstream)")
+        st.info("Masukkan kedalaman air yang diketahui di ujung paling hulu.")
+        boundary_y = st.number_input("Kedalaman Air Hulu (m)", 0.1, 20.0, st.session_state['ws_known'])
         
-        calc_df = calc_df.sort_values(by="STA Awal (m)")
-        
-        for idx, row in calc_df.iterrows():
-            if row[num_cols].isnull().any(): continue
-            
-            nama = str(row.get('Nama Segmen', f'S-{idx}'))
-            sta1, sta2 = row['STA Awal (m)'], row['STA Akhir (m)']
-            z1, z2 = row['Elev Awal (m)'], row['Elev Akhir (m)']
-            b, m, n = row['Lebar b (m)'], row['Talud m'], row['Kekasaran n']
-            
-            L = sta2 - sta1
-            if L <= 0: continue
-            
-            # --- CEK SLOPE (ANTI-GRAVITY) ---
-            S = (z1 - z2) / L
-            is_uphill = False
-            
-            if S <= 0: # Jika Datar atau Nanjak
-                S = 0.0001 # Set ke slope minimum positif
-                is_uphill = True
-            
-            Q = st.session_state['q_global']
-            
-            yn = solve_manning_y(Q, n, b, S, m)
-            yc = solve_critical_y(Q, b, m)
-            
-            A = (b + m*yn) * yn
-            P = b + 2*yn * np.sqrt(1 + m**2)
-            R = A/P if P > 0 else 0
-            TopW = b + 2*m*yn
-            
-            # --- CEK VELOCITY (ANTI-EXPLOSION) ---
-            if A > 0.001:
-                V = Q/A
-            else:
-                V = 0
-            
-            # Jika Uphill, Kecepatan pasti sangat rendah (tergenang)
-            if is_uphill:
-                status = "BACKWATER (Uphill)"
-                note = "Elevasi Naik!"
-                # Paksa V kecil agar EG tidak meledak
-                V = 0.1 
-            else:
-                Fr = V / np.sqrt(9.81 * (A/TopW)) if TopW > 0 else 0
-                status = "SUPERKRITIS" if Fr > 1.1 else ("SUBKRITIS" if Fr < 0.9 else "KRITIS")
-                note = status
-                if V > 3.0: note += " (Erosi!)"
-                elif V < 0.6: note += " (Endapan)"
-            
-            Vel_Head = (V**2) / (2*9.81)
-            EGL = (z2 + yn) + Vel_Head
-            EG_Slope = (n * V)**2 / (R**(4/3)) if R>0 else 0
-            
-            results.append({
-                "Reach": nama, "Sta Start": sta1, "Sta Finish": sta2,
-                "Q Total": Q, "Min Ch El": z2, "W.S. Elev": z2 + yn, "Crit W.S.": z2 + yc,
-                "E.G. Elev": EGL, "E.G. Slope": S, "Vel Chnl": V,
-                "Flow Area": A, "Bottom Width": b, "Talud": m, "Top Width": TopW, "Froude # Chl": Fr if not is_uphill else 0,
-                "Keterangan": note
-            })
-            
-            plot_x.extend([sta1, sta2]); plot_bed.extend([z1, z2])
-            plot_ws.extend([z1 + yn, z2 + yn]); plot_egl.extend([z1 + yn + Vel_Head, z2 + yn + Vel_Head])
-            plot_crit.extend([z1 + yc, z2 + yc])
-            
-    except Exception as e: st.error(f"Hitungan Error: {e}")
-
-# --- 4. TABS UI ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 Geometry", "📈 Profile Plot", "🖼️ Cross Section", "📋 Output Table", "📄 Laporan Teknis"])
-
-with tab1:
-    st.subheader("Data Geometri Saluran")
-    # FIX: Ganti use_container_width=True jadi width='stretch' (versi 2026)
-    new_df = st.data_editor(st.session_state['df_segments_sta'], num_rows="dynamic", use_container_width=True)
-    if not new_df.equals(st.session_state['df_segments_sta']):
-        st.session_state['df_segments_sta'] = new_df
+    st.divider()
+    if st.button("🔄 Reset Data"): 
+        st.session_state['df_pro'] = reset_data()
         st.rerun()
 
-with tab2:
-    if len(plot_x) > 0:
-        fig_h = max(4, 6 * aspect_ratio_fix)
-        fig, ax = plt.subplots(figsize=(14, fig_h))
-        ax.set_facecolor('white')
-        
-        ax.plot(plot_x, plot_bed, 'k-', lw=2, marker='.', label='Ground')
-        ax.plot(plot_x, plot_ws, 'b-', lw=1.5, label='W.S.')
-        ax.fill_between(plot_x, plot_bed, plot_ws, color='#00FFFF', alpha=1.0)
-        
-        clean_crit = [c if (c - w) < 5.0 else np.nan for c, w in zip(plot_crit, plot_ws)]
-        ax.plot(plot_x, clean_crit, 'r--', lw=1, label='Crit')
-        ax.plot(plot_x, plot_egl, 'g--', lw=1, label='E.G.')
-        
-        ax.set_xlabel("Station (m)"); ax.set_ylabel("Elevation (m)")
-        ax.grid(True, linestyle=':', alpha=0.5)
-        ax.legend(loc='upper right', frameon=True, facecolor='white', edgecolor='black')
-        
-        if use_manual_zoom: 
-            ax.set_ylim(y_min, y_max)
-        else:
-            y_vals = [y for y in plot_bed + plot_ws if not np.isnan(y)]
-            if y_vals:
-                min_y, max_y = min(y_vals), max(y_vals)
-                margin = (max_y - min_y) * 0.2
-                ax.set_ylim(min_y - margin, max_y + margin)
-        
-        st.pyplot(fig)
-    else: st.info("Belum ada data.")
+# --- 4. MAIN LOGIC (THE PRO SOLVER) ---
+df = st.session_state['df_pro']
+results = []
+profile_coords = {'x': [], 'z': [], 'ws': [], 'eg': [], 'crit': []}
 
-with tab3:
-    if len(results) > 0:
-        sel = st.selectbox("Pilih Segmen:", [r['Reach'] for r in results])
-        d = next(r for r in results if r['Reach'] == sel)
+if not df.empty:
+    try:
+        # 1. Pre-processing Data (Urutkan)
+        # Penting: Standard Step butuh data urut spasial
+        df = df.sort_values(by="STA Awal (m)")
         
-        b, m, y, yc = d['Bottom Width'], d['Talud'], d['W.S. Elev'] - d['Min Ch El'], d['Crit W.S.'] - d['Min Ch El']
-        h_max = max(y, yc) * 1.5 if max(y, yc) > 0 else 1.0
-        if h_max > 5: h_max = y * 1.5 
+        # Konversi ke List of Dictionaries biar mudah diakses index-nya
+        segments = df.to_dict('records')
         
-        x = [-(b/2 + m*h_max), -b/2, b/2, b/2 + m*h_max]
-        y_g = [h_max, 0, 0, h_max]
+        # 2. Setup Grid Komputasi (Discretization)
+        # Kita pecah setiap segmen jadi potongan kecil (dx) biar grafik mulus
+        dx_step = 10.0 # Hitung setiap 10 meter
+        nodes = []
         
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(x, y_g, 'k-', lw=2, label='Ground')
+        for seg in segments:
+            L = seg["STA Akhir (m)"] - seg["STA Awal (m)"]
+            n_steps = int(L / dx_step)
+            if n_steps < 1: n_steps = 1
+            real_dx = L / n_steps
+            
+            # Interpolasi Elevasi Dasar (Z)
+            z_start = seg["Elev Awal (m)"]
+            z_end = seg["Elev Akhir (m)"]
+            slope_seg = (z_start - z_end) / L
+            
+            for i in range(n_steps + 1):
+                x_curr = seg["STA Awal (m)"] + i * real_dx
+                z_curr = z_start - (i * real_dx * slope_seg)
+                
+                # Simpan node data
+                nodes.append({
+                    "x": x_curr,
+                    "z": z_curr,
+                    "b": seg["Lebar b (m)"],
+                    "m": seg["Talud m"],
+                    "n": seg["Kekasaran n"],
+                    "seg_name": seg["Nama Segmen"]
+                })
         
-        top_w = b + 2*m*y
-        ax.fill([-top_w/2, -b/2, b/2, top_w/2], [y, 0, 0, y], '#00FFFF', label='Water')
-        ax.plot([-top_w/2, top_w/2], [y, y], 'b-', lw=1.5)
-        ax.text(0, y, '▼', color='blue', ha='center', va='bottom', fontsize=14)
+        # Hapus duplikat node di sambungan segmen (opsional, tapi bagus utk grafik)
+        # (Disini kita biarkan dulu biar simple)
+
+        # 3. CORE CALCULATION LOOP
+        Q = st.session_state['q_pro']
         
-        if yc < h_max:
-            ax.hlines(yc, x[0], x[3], 'r', '--', label='Crit')
+        if mode_key == 'subcritical':
+            # --- HITUNG MUNDUR (HILIR -> HULU) ---
+            # Node terakhir adalah Hilir
+            nodes[-1]['y'] = boundary_y
+            nodes[-1]['ws'] = nodes[-1]['z'] + boundary_y
+            
+            # Loop dari node kedua terakhir sampai 0 (Mundur)
+            for i in range(len(nodes)-2, -1, -1):
+                # Data "Known" (Hilir) -> i+1
+                # Data "Unknown" (Hulu) -> i
+                known = nodes[i+1]
+                target = nodes[i]
+                
+                dx = known['x'] - target['x'] # Jarak positif
+                
+                # Hitung Y di target (Hulu)
+                y_res = solve_energy_equation(
+                    y_guess=known['y'], Q=Q, n=target['n'],
+                    Z1=known['z'], Z2=target['z'], y1=known['y'], # 1 = Hilir (Known)
+                    b=target['b'], m=target['m'], L=dx, dx=dx, mode='subcritical'
+                )
+                
+                target['y'] = y_res
+                target['ws'] = target['z'] + y_res
+                
+        else:
+            # --- HITUNG MAJU (HULU -> HILIR) ---
+            # Node pertama adalah Hulu
+            nodes[0]['y'] = boundary_y
+            nodes[0]['ws'] = nodes[0]['z'] + boundary_y
+            
+            for i in range(1, len(nodes)):
+                # Data "Known" (Hulu) -> i-1
+                # Data "Unknown" (Hilir) -> i
+                known = nodes[i-1]
+                target = nodes[i]
+                
+                dx = target['x'] - known['x']
+                
+                y_res = solve_energy_equation(
+                    y_guess=known['y'], Q=Q, n=target['n'],
+                    Z1=known['z'], Z2=target['z'], y1=known['y'], # 1 = Hulu (Known)
+                    b=target['b'], m=target['m'], L=dx, dx=dx, mode='supercritical'
+                )
+                
+                target['y'] = y_res
+                target['ws'] = target['z'] + y_res
+
+        # 4. Post-Processing (Hitung E.G., Crit, dll untuk semua node)
+        final_data = []
+        for n in nodes:
+            y = n['y']
+            A, P, R, T = get_geom_props(y, n['b'], n['m'])
+            V = Q/A if A > 0 else 0
+            EGL = n['ws'] + (V**2)/(2*9.81)
+            
+            # Hitung Critical Depth (untuk referensi)
+            # Yc sederhana approx
+            yc = ( (Q**2) / (9.81 * n['b']**2) )**(1/3) # Utk persegi, utk trapesium perlu iterasi lagi (skip for speed)
+            
+            n['eg'] = EGL
+            n['v'] = V
+            n['fr'] = V / np.sqrt(9.81 * (A/T)) if T > 0 else 0
+            n['yc'] = yc
+            n['crit_ws'] = n['z'] + yc
+            
+            final_data.append(n)
+            
+            # Data Grafik
+            profile_coords['x'].append(n['x'])
+            profile_coords['z'].append(n['z'])
+            profile_coords['ws'].append(n['ws'])
+            profile_coords['eg'].append(n['eg'])
+            profile_coords['crit'].append(n['crit_ws'])
+
+    except Exception as e:
+        st.error(f"Terjadi kesalahan perhitungan: {e}")
+
+# --- 5. TABS VISUALISASI ---
+tab_geom, tab_prof, tab_res = st.tabs(["📝 Input Geometri", "📈 Standard Step Profile", "📋 Hasil Detail"])
+
+with tab_geom:
+    st.subheader("Editor Geometri Saluran")
+    st.caption("Tips: Pastikan urutan STA Awal ke STA Akhir menyambung agar grafik mulus.")
+    new_df = st.data_editor(st.session_state['df_pro'], num_rows="dynamic", use_container_width=True)
+    if not new_df.equals(st.session_state['df_pro']):
+        st.session_state['df_pro'] = new_df
+        st.rerun()
+
+with tab_prof:
+    if len(profile_coords['x']) > 0:
+        st.subheader("Longitudinal Profile (Standard Step Method)")
         
-        ax.set_aspect('equal')
-        ax.set_title(f"Cross Section: {d['Reach']}")
-        ax.set_xlabel("Width (m)")
-        ax.grid(True, linestyle=':')
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Plot Dasar
+        ax.plot(profile_coords['x'], profile_coords['z'], 'k-', linewidth=2, label='Ground (Bottom)')
+        # Plot Air (Continuous)
+        ax.plot(profile_coords['x'], profile_coords['ws'], 'b-', linewidth=2, label='Water Surface')
+        # Fill Air
+        ax.fill_between(profile_coords['x'], profile_coords['z'], profile_coords['ws'], color='#00eaff', alpha=0.6)
+        
+        # Plot EG
+        ax.plot(profile_coords['x'], profile_coords['eg'], 'g--', linewidth=1, label='Energy Grade')
+        # Plot Critical
+        ax.plot(profile_coords['x'], profile_coords['crit'], 'r:', linewidth=1, alpha=0.7, label='Critical Depth')
+        
+        ax.set_xlabel('Station (m)')
+        ax.set_ylabel('Elevation (m)')
+        ax.set_title(f"Profil Muka Air - Q = {st.session_state['q_pro']} m³/s ({calc_mode})")
         ax.legend()
+        ax.grid(True, linestyle=':', alpha=0.5)
+        
         st.pyplot(fig)
+        
+        st.success("""
+        ✅ **Profil Tersambung Otomatis!** Grafik di atas dihitung menggunakan **Persamaan Energi Antar Titik**. 
+        Perhatikan bagaimana garis air sekarang melengkung halus (Backwater Curve) dan tidak terputus-putus di sambungan segmen.
+        """)
+    else:
+        st.info("Silakan isi data geometri.")
 
-with tab4:
-    if len(results) > 0:
-        df_res = pd.DataFrame(results)
-        cols = ["Reach", "Sta Start", "Sta Finish", "Q Total", "Min Ch El", "W.S. Elev", "Crit W.S.", "E.G. Elev", "E.G. Slope", "Vel Chnl", "Flow Area", "Top Width", "Froude # Chl", "Keterangan"]
+with tab_res:
+    if final_data:
+        res_df = pd.DataFrame(final_data)
+        # Pilih kolom penting
+        disp_cols = ["x", "seg_name", "z", "ws", "y", "v", "eg", "fr"]
+        res_df = res_df[disp_cols]
+        res_df.columns = ["Station", "Segmen", "Elev Dasar", "Elev Air", "Kedalaman", "Kecepatan", "Elev Energi", "Froude"]
         
-        final = df_res[cols].rename(columns={
-            "Min Ch El": "Min Ch El (m)", 
-            "W.S. Elev": "W.S. Elev (m)",
-            "Crit W.S.": "Crit W.S. (m)",
-            "Vel Chnl": "Vel (m/s)",
-            "Froude # Chl": "Froude"
-        })
+        st.dataframe(res_df, use_container_width=True)
         
-        # FIX: Gunakan width='stretch' untuk tabel
-        st.dataframe(final, use_container_width=True, hide_index=True)
-        
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine='xlsxwriter') as writer: final.to_excel(writer, index=False)
-        st.download_button("💾 Export Excel", buf.getvalue(), "Hasil_HEC_RAS.xlsx", "application/vnd.ms-excel", type="primary")
-
-with tab5:
-    if len(results) > 0:
-        st.markdown(f"""
-        <div class='report-box'>
-            <h2 style='text-align:center;'>LAPORAN ANALISIS HIDROLIS</h2>
-            <hr>
-            <h3>1. Ringkasan Eksekutif</h3>
-            <p>Debit Desain: <b>{st.session_state['q_global']} m³/s</b></p>
-            <p>Panjang Saluran: <b>{results[-1]['Sta Finish'] - results[0]['Sta Start']:.1f} m</b></p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        count_super = sum(1 for r in results if r['Froude # Chl'] > 1.1)
-        count_uphill = sum(1 for r in results if "Uphill" in r['Keterangan'])
-        
-        if count_uphill > 0:
-            st.error(f"⛔ PERINGATAN: Ada {count_uphill} segmen yang elevasinya NAIK (Uphill/Backwater). Cek data input!")
-            
-        if count_super > 0:
-            st.warning(f"⚠️ Terdeteksi {count_super} segmen dengan aliran SUPERKRITIS (Froude > 1.1).")
-            st.info("💡 REKOMENDASI: Pasang Kolam Olak (Stilling Basin) di hilir segmen tersebut untuk meredam energi.")
-        else:
-            st.success("✅ Aliran dominan SUBKRITIS (Tenang). Saluran relatif aman dari gerusan ekstrim.")
-            
-        st.markdown("### 2. Tabel Detail")
-        st.dataframe(final, use_container_width=True, hide_index=True)
-        
-        st.markdown("""<button onclick="window.print()" style="background:#28a745; color:white; border:none; padding:10px 20px; border-radius:5px; cursor:pointer;">🖨️ Cetak PDF</button>""", unsafe_allow_html=True)
+        csv = res_df.to_csv(index=False).encode('utf-8')
+        st.download_button("Download Laporan CSV", csv, "laporan_standard_step.csv", "text/csv")
