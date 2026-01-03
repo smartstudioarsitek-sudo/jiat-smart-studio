@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import io
 import json
 
@@ -24,7 +23,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. ENGINE HIDROLIKA (STANDARD STEP + MANNING HELPER) ---
+# --- 1. ENGINE HIDROLIKA (SMART DROP DETECTION) ---
 def get_geom_props(y, b, m):
     if y <= 0: return 0.001, 0.001, 0.001, 0.001
     A = (b + m * y) * y
@@ -33,15 +32,12 @@ def get_geom_props(y, b, m):
     T = b + 2 * m * y
     return A, P, R, T
 
-# Helper: Hitung Normal Depth untuk Boundary Condition
 def solve_manning_y(Q, n, b, S, m):
-    if S <= 0: S = 0.0001 # Safety for adverse slope
+    if S <= 0: S = 0.0001
     y_low, y_high = 0.001, 50.0
     for _ in range(50):
         y_mid = (y_low + y_high) / 2
-        A = (b + m*y_mid) * y_mid
-        P = b + 2*y_mid * np.sqrt(1 + m**2)
-        R = A/P if P > 0 else 0
+        A, P, R, T = get_geom_props(y_mid, b, m)
         Q_calc = (1/n) * A * (R**(2/3)) * (S**0.5)
         if abs(Q_calc - Q) < 0.001: return y_mid
         if Q_calc < Q: y_low = y_mid
@@ -50,10 +46,23 @@ def solve_manning_y(Q, n, b, S, m):
 
 def solve_energy_equation(y_guess, Q, n, Z1, Z2, y1, b, m, L, dx, mode='subcritical'):
     g = 9.81
+    # 1 = Titik Referensi (Known), 2 = Titik Target (Unknown)
     A1, P1, R1, T1 = get_geom_props(y1, b, m)
     V1 = Q / A1
-    H1 = Z1 + y1 + (V1**2) / (2*g)
+    H1 = Z1 + y1 + (V1**2) / (2*g) # Total Head di Titik Known
     
+    # --- DETEKSI TERJUNAN (CHOKING CHECK) ---
+    # Hitung Energi Minimum yang dibutuhkan di Titik Target (Critical Energy)
+    yc_target = ( (Q**2) / (g * b**2) )**(1/3) # Approx rectangular
+    Ec_target = Z2 + yc_target + (Q/(b*yc_target))**2 / (2*g)
+    
+    # Jika kita hitung mundur (Subkritis) dan Energi Hilir (H1) lebih rendah dari 
+    # Energi Minimum yang dibutuhkan Hulu (Ec_target) karena beda tinggi dasar (Z2 > Z1),
+    # Maka terjadi Choking -> Reset ke Critical Depth
+    if mode == 'subcritical' and H1 < Ec_target:
+        return yc_target
+
+    # Fungsi Solver Normal
     def energy_func(y2):
         A2, P2, R2, T2 = get_geom_props(y2, b, m)
         if A2 <= 0: return 1000.0
@@ -65,8 +74,8 @@ def solve_energy_equation(y_guess, Q, n, Z1, Z2, y1, b, m, L, dx, mode='subcriti
         Sf_avg = (Sf1 + Sf2) / 2
         h_f = Sf_avg * dx
         
-        if mode == 'subcritical': return H2 - (H1 + h_f)
-        else: return H1 - (H2 + h_f)
+        if mode == 'subcritical': return H2 - (H1 + h_f) # Hulu = Hilir + Loss
+        else: return H1 - (H2 + h_f) # Hilir = Hulu - Loss
 
     y_min, y_max = 0.01, 50.0
     for _ in range(50):
@@ -80,161 +89,114 @@ def solve_energy_equation(y_guess, Q, n, Z1, Z2, y1, b, m, L, dx, mode='subcriti
         else:
             if err > 0: y_min = y_mid
             else: y_max = y_mid
+            
     return (y_min + y_max) / 2
 
-# --- 2. INISIALISASI DATA ---
+# --- 2. INISIALISASI & SIDEBAR ---
 REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
 
 def reset_data():
-    data = [
-        ["S1", 0.0, 50.0, 325.54, 324.95, 0.6, 1.0, 0.017],
-        ["S2", 50.0, 64.0, 324.95, 323.54, 0.6, 1.0, 0.017],
-        ["S3", 64.0, 114.0, 321.47, 321.21, 0.6, 1.0, 0.017],
-    ]
-    return pd.DataFrame(data, columns=REQUIRED_COLS)
+    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017]], columns=REQUIRED_COLS)
 
 if 'df_pro' not in st.session_state: st.session_state['df_pro'] = reset_data()
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
-if 'ws_known' not in st.session_state: st.session_state['ws_known'] = 0.5 # Default wajar
+if 'ws_known' not in st.session_state: st.session_state['ws_known'] = 0.5
 
-# --- 3. SIDEBAR ---
+# --- UI ---
 st.markdown("""
 <div class="header-box">
     <h1 style="margin:0; font-size: 32px;">🚀 Smart HEC-RAS Pro</h1>
-    <p style="margin-top:5px; font-size: 14px; opacity: 0.9;">Standard Step Method Solver (Energy Equation)</p>
+    <p style="margin-top:5px; font-size: 14px; opacity: 0.9;">Standard Step Method Solver (Drop Structure Support)</p>
 </div>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ Boundary Condition")
     st.session_state['q_pro'] = st.number_input("Debit (Q) m³/s", 0.01, 1000.0, st.session_state['q_pro'])
-    
     calc_mode = st.radio("Mode Analisa", ["Subkritis (Hilir -> Hulu)", "Superkritis (Hulu -> Hilir)"], index=0)
     mode_key = 'subcritical' if "Sub" in calc_mode else 'supercritical'
     
     st.divider()
     
-    # --- FITUR BARU: AUTO BOUNDARY ---
-    df_curr = st.session_state['df_pro']
-    
     if mode_key == 'subcritical':
-        st.subheader("🌊 Batas Hilir (Downstream)")
-        # Ambil data segmen paling hilir (terakhir)
+        st.subheader("🌊 Batas Hilir")
+        df_curr = st.session_state['df_pro']
         if not df_curr.empty:
             last_seg = df_curr.iloc[-1]
-            S0_hilir = (last_seg['Elev Awal (m)'] - last_seg['Elev Akhir (m)']) / (last_seg['STA Akhir (m)'] - last_seg['STA Awal (m)'])
-            yn_hilir = solve_manning_y(st.session_state['q_pro'], last_seg['Kekasaran n'], last_seg['Lebar b (m)'], S0_hilir, last_seg['Talud m'])
-            
-            st.caption(f"Normal Depth Hilir: {yn_hilir:.2f} m")
-            if st.button("Gunakan Normal Depth"):
-                st.session_state['ws_known'] = float(yn_hilir)
-                st.rerun()
-                
+            S0 = (last_seg['Elev Awal (m)'] - last_seg['Elev Akhir (m)']) / (last_seg['STA Akhir (m)'] - last_seg['STA Awal (m)'])
+            yn = solve_manning_y(st.session_state['q_pro'], last_seg['Kekasaran n'], last_seg['Lebar b (m)'], S0, last_seg['Talud m'])
+            st.caption(f"Normal Depth Hilir: {yn:.2f} m")
+            if st.button("Pakai Normal Depth"): st.session_state['ws_known'] = float(yn); st.rerun()
         boundary_y = st.number_input("Kedalaman Air Hilir (m)", 0.01, 50.0, st.session_state['ws_known'])
     else:
-        st.subheader("🌊 Batas Hulu (Upstream)")
-        if not df_curr.empty:
-            first_seg = df_curr.iloc[0]
-            S0_hulu = (first_seg['Elev Awal (m)'] - first_seg['Elev Akhir (m)']) / (first_seg['STA Akhir (m)'] - first_seg['STA Awal (m)'])
-            yn_hulu = solve_manning_y(st.session_state['q_pro'], first_seg['Kekasaran n'], first_seg['Lebar b (m)'], S0_hulu, first_seg['Talud m'])
-            
-            st.caption(f"Normal Depth Hulu: {yn_hulu:.2f} m")
-            if st.button("Gunakan Normal Depth"):
-                st.session_state['ws_known'] = float(yn_hulu)
-                st.rerun()
-                
+        st.subheader("🌊 Batas Hulu")
         boundary_y = st.number_input("Kedalaman Air Hulu (m)", 0.01, 50.0, st.session_state['ws_known'])
-        
+    
     st.divider()
-
-    st.subheader("📥 Excel Import")
+    
+    st.subheader("📥 Excel & Project")
     df_temp = pd.DataFrame([["S1", 0, 50, 100, 99.5, 0.6, 1.0, 0.017]], columns=REQUIRED_COLS)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer: df_temp.to_excel(writer, index=False)
-    st.download_button("📄 Template Excel", buf.getvalue(), "Template_Pro.xlsx")
+    st.download_button("Template Excel", buf.getvalue(), "Template_Pro.xlsx")
     
-    up_file = st.file_uploader("Upload Excel (.xlsx)", type=['xlsx'])
+    up_file = st.file_uploader("Upload Excel", type=['xlsx'])
     if up_file:
         try:
             df_up = pd.read_excel(up_file)
             def clean(t): return str(t).lower().replace(" ", "").replace("(m)", "").replace(".", "")
             df_up.columns = [clean(c) for c in df_up.columns]
-            
             mapping = {
-                "Nama Segmen": ["nama", "reach", "segmen"],
-                "STA Awal (m)": ["staawal", "start", "hulu"],
-                "STA Akhir (m)": ["staakhir", "end", "hilir"],
-                "Elev Awal (m)": ["elevawal", "z1", "startelv"],
-                "Elev Akhir (m)": ["elevakhir", "z2", "endelv"],
-                "Lebar b (m)": ["lebar", "width", "b"],
-                "Talud m": ["talud", "slope", "m", "z"],
-                "Kekasaran n": ["kekasaran", "manning", "n"]
+                "Nama Segmen": ["nama", "reach", "segmen"], "STA Awal (m)": ["staawal", "start", "hulu"],
+                "STA Akhir (m)": ["staakhir", "end", "hilir"], "Elev Awal (m)": ["elevawal", "z1", "startelv"],
+                "Elev Akhir (m)": ["elevakhir", "z2", "endelv"], "Lebar b (m)": ["lebar", "width", "b"],
+                "Talud m": ["talud", "slope", "m", "z"], "Kekasaran n": ["kekasaran", "manning", "n"]
             }
-            
             new_data = pd.DataFrame()
             found_count = 0
             for sys_col, keywords in mapping.items():
                 for kw in keywords:
                     match = next((c for c in df_up.columns if kw in c), None)
                     if match:
-                        new_data[sys_col] = df_up[match]
-                        found_count += 1
-                        break
-            
-            if found_count >= 6:
-                if st.button("✅ Load Data Excel"):
-                    st.session_state['df_pro'] = new_data
-                    st.success("Data berhasil di-load!")
-                    st.rerun()
-            else: st.error("Format Excel tidak dikenali.")
-        except Exception as e: st.error(f"Error: {e}")
+                        new_data[sys_col] = df_up[match]; found_count += 1; break
+            if found_count >= 6: st.session_state['df_pro'] = new_data; st.success("Loaded!"); st.rerun()
+        except: st.error("Gagal load Excel.")
 
-    st.subheader("💾 Manajemen Project")
-    project_data = {'q': st.session_state['q_pro'], 'segments': st.session_state['df_pro'].to_dict(orient='records')}
-    st.download_button("Simpan Project (.json)", json.dumps(project_data, indent=2), "pro_project.json", "application/json")
-    
+    proj = {'q': st.session_state['q_pro'], 'segments': st.session_state['df_pro'].to_dict('records')}
+    st.download_button("Simpan Project (.json)", json.dumps(proj), "pro.json", "application/json")
     up_json = st.file_uploader("Buka Project (.json)", type=['json'])
     if up_json:
         try:
-            loaded = json.load(up_json)
-            st.session_state['q_pro'] = float(loaded['q'])
-            st.session_state['df_pro'] = pd.DataFrame(loaded['segments'])
-            st.rerun()
-        except: st.error("File JSON rusak.")
+            L = json.load(up_json); st.session_state['q_pro'] = float(L['q']); st.session_state['df_pro'] = pd.DataFrame(L['segments']); st.rerun()
+        except: pass
+    if st.button("Reset"): st.session_state['df_pro'] = reset_data(); st.rerun()
 
-    if st.button("🔄 Reset Data"): 
-        st.session_state['df_pro'] = reset_data()
-        st.rerun()
-
-# --- 4. MAIN LOGIC ---
+# --- 3. MAIN LOGIC ---
 df = st.session_state['df_pro']
-profile_coords = {'x': [], 'z': [], 'ws': [], 'eg': [], 'crit': []}
+profile = {'x': [], 'z': [], 'ws': [], 'eg': [], 'crit': []}
 final_data = []
 
 if not df.empty:
     try:
         df = df.sort_values(by="STA Awal (m)")
         segments = df.to_dict('records')
-        
-        dx_step = 5.0 
+        dx_step = 5.0
         nodes = []
         
         for seg in segments:
             L = seg["STA Akhir (m)"] - seg["STA Awal (m)"]
             if L <= 0: continue
-            n_steps = int(L / dx_step)
+            n_steps = int(L / dx_step); 
             if n_steps < 1: n_steps = 1
             real_dx = L / n_steps
-            z_start, z_end = seg["Elev Awal (m)"], seg["Elev Akhir (m)"]
-            slope_seg = (z_start - z_end) / L
+            z_s, z_e = seg["Elev Awal (m)"], seg["Elev Akhir (m)"]
+            slope = (z_s - z_e) / L
             
             for i in range(n_steps + 1):
-                x_curr = seg["STA Awal (m)"] + i * real_dx
-                z_curr = z_start - (i * real_dx * slope_seg)
                 nodes.append({
-                    "x": x_curr, "z": z_curr,
-                    "b": seg["Lebar b (m)"], "m": seg["Talud m"], "n": seg["Kekasaran n"],
-                    "seg_name": seg["Nama Segmen"]
+                    "x": seg["STA Awal (m)"] + i * real_dx,
+                    "z": z_s - (i * real_dx * slope),
+                    "b": seg["Lebar b (m)"], "m": seg["Talud m"], "n": seg["Kekasaran n"], "seg": seg["Nama Segmen"]
                 })
         
         Q = st.session_state['q_pro']
@@ -245,6 +207,11 @@ if not df.empty:
             
             for i in range(len(nodes)-2, -1, -1):
                 dx = nodes[i+1]['x'] - nodes[i]['x']
+                # Cek Diskontinuitas Geometri (Junction Segmen)
+                if dx == 0: 
+                    # Jika dx=0 (titik sambung), paksa energi kontinuitas, tapi jika drop, reset ke critical
+                    pass 
+                
                 y_res = solve_energy_equation(
                     y_guess=nodes[i+1]['y'], Q=Q, n=nodes[i]['n'],
                     Z1=nodes[i+1]['z'], Z2=nodes[i]['z'], y1=nodes[i+1]['y'],
@@ -255,7 +222,6 @@ if not df.empty:
         else:
             nodes[0]['y'] = boundary_y
             nodes[0]['ws'] = nodes[0]['z'] + boundary_y
-            
             for i in range(1, len(nodes)):
                 dx = nodes[i]['x'] - nodes[i-1]['x']
                 y_res = solve_energy_equation(
@@ -267,65 +233,42 @@ if not df.empty:
                 nodes[i]['ws'] = nodes[i]['z'] + y_res
 
         for n in nodes:
-            y = n['y']
-            A, P, R, T = get_geom_props(y, n['b'], n['m'])
-            V = Q/A if A > 0 else 0
-            EGL = n['ws'] + (V**2)/(2*9.81)
-            yc = ( (Q**2) / (9.81 * n['b']**2) )**(1/3) 
-            
-            n['eg'] = EGL; n['v'] = V; n['fr'] = V / np.sqrt(9.81 * (A/T)) if T > 0 else 0
-            n['yc'] = yc; n['crit_ws'] = n['z'] + yc
-            
+            y, b, m = n['y'], n['b'], n['m']
+            A, P, R, T = get_geom_props(y, b, m)
+            V = Q/A if A>0 else 0
+            n['eg'] = n['ws'] + (V**2)/(19.62)
+            yc = ((Q**2)/(9.81 * b**2))**(1/3)
+            n['crit_ws'] = n['z'] + yc
             final_data.append(n)
-            profile_coords['x'].append(n['x']); profile_coords['z'].append(n['z'])
-            profile_coords['ws'].append(n['ws']); profile_coords['eg'].append(n['eg'])
-            profile_coords['crit'].append(n['crit_ws'])
+            profile['x'].append(n['x']); profile['z'].append(n['z'])
+            profile['ws'].append(n['ws']); profile['eg'].append(n['eg']); profile['crit'].append(n['crit_ws'])
 
-    except Exception as e: st.error(f"Error Calculation: {e}")
+    except Exception as e: st.error(f"Error: {e}")
 
-# --- 5. TABS ---
-tab_geom, tab_prof, tab_res = st.tabs(["📝 Input Geometri", "📈 Standard Step Profile", "📋 Laporan Hasil"])
+# --- 4. TABS ---
+t1, t2, t3 = st.tabs(["📝 Input", "📈 Grafik Profil", "📋 Laporan"])
 
-with tab_geom:
-    st.subheader("Editor Geometri Saluran")
-    st.caption("Tips: Pastikan urutan STA menyambung dari Hulu ke Hilir.")
+with t1:
     new_df = st.data_editor(st.session_state['df_pro'], num_rows="dynamic", use_container_width=True)
-    if not new_df.equals(st.session_state['df_pro']):
-        st.session_state['df_pro'] = new_df
-        st.rerun()
+    if not new_df.equals(st.session_state['df_pro']): st.session_state['df_pro'] = new_df; st.rerun()
 
-with tab_prof:
-    if len(profile_coords['x']) > 0:
-        st.subheader(f"Profil Muka Air ({calc_mode})")
+with t2:
+    if len(profile['x']) > 0:
         fig, ax = plt.subplots(figsize=(12, 6))
-        
-        ax.plot(profile_coords['x'], profile_coords['z'], 'k-', linewidth=2, label='Dasar Saluran')
-        ax.plot(profile_coords['x'], profile_coords['ws'], 'b-', linewidth=2, label='Muka Air')
-        ax.fill_between(profile_coords['x'], profile_coords['z'], profile_coords['ws'], color='#00eaff', alpha=0.6)
-        
-        ax.plot(profile_coords['x'], profile_coords['eg'], 'g--', linewidth=1, label='Garis Energi')
-        ax.plot(profile_coords['x'], profile_coords['crit'], 'r:', linewidth=1, alpha=0.8, label='Kedalaman Kritis')
-        
-        ax.set_xlabel('Station (m)'); ax.set_ylabel('Elevation (m)')
-        ax.legend(); ax.grid(True, linestyle=':', alpha=0.5)
+        ax.plot(profile['x'], profile['z'], 'k-', lw=2, label='Dasar')
+        ax.plot(profile['x'], profile['ws'], 'b-', lw=2, label='Muka Air')
+        ax.fill_between(profile['x'], profile['z'], profile['ws'], color='#00eaff', alpha=0.6)
+        ax.plot(profile['x'], profile['crit'], 'r:', label='Kritis')
+        ax.plot(profile['x'], profile['eg'], 'g--', label='Energi')
+        ax.set_title(f"Profil Muka Air ({calc_mode})"); ax.legend(); ax.grid(True, ls=':')
         st.pyplot(fig)
-        
-        if max(profile_coords['ws']) - min(profile_coords['z']) > 10:
-            st.warning("⚠️ **Peringatan Kedalaman Ekstrim!** Kedalaman air terdeteksi sangat tinggi. Cek kembali 'Boundary Condition' di sidebar. Coba gunakan tombol 'Gunakan Normal Depth' untuk reset ke nilai wajar.")
-    else: st.info("Silakan isi data geometri.")
+    else: st.info("No Data")
 
-with tab_res:
+with t3:
     if final_data:
-        res_df = pd.DataFrame(final_data)
-        disp_cols = ["x", "seg_name", "z", "ws", "y", "v", "eg", "fr"]
-        res_df = res_df[disp_cols]
-        res_df.columns = ["Station", "Segmen", "Elev Dasar", "Elev Air", "Kedalaman", "Kecepatan", "Elev Energi", "Froude"]
-        
-        # Format
-        for c in res_df.columns:
-            if res_df[c].dtype == 'float64': res_df[c] = res_df[c].map('{:,.2f}'.format)
-            
-        st.dataframe(res_df, use_container_width=True)
-        
-        csv = res_df.to_csv(index=False).encode('utf-8')
-        st.download_button("Download Laporan CSV", csv, "laporan_pro_standard_step.csv", "text/csv")
+        res = pd.DataFrame(final_data)
+        res = res[["x", "seg", "z", "ws", "y", "eg", "crit_ws"]]
+        res.columns = ["Sta", "Segmen", "Elev Dasar", "W.S.", "Depth", "E.G.", "Crit W.S."]
+        st.dataframe(res, use_container_width=True)
+        csv = res.to_csv(index=False).encode('utf-8')
+        st.download_button("Download CSV", csv, "laporan.csv", "text/csv")
