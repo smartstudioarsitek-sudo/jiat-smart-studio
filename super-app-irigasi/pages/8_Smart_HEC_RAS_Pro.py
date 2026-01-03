@@ -23,12 +23,19 @@ def get_geom_props(y, b, m):
     P = b + 2 * y * np.sqrt(1 + m**2)
     R = A / P if P > 0 else 0
     T = b + 2 * m * y
+    
     # Specific Force (Momentum) untuk Hydraulic Jump
-    # M = Q^2 / (g*A) + y_bar * A (Simplified for trapezoid: y_centroid approx y/2)
+    # M = Q^2 / (g*A) + y_bar * A 
     g = 9.81
-    y_bar = (y * (b + 2*m*y) / (b + m*y)) * (1/3) * y # Centroid approx
+    # Centroid approx for trapezoid
+    y_bar = (y/3) * (b + 2*m*y)/(b + m*y) * y if (b+m*y) !=0 else 0
+    
+    # Force calculation
     if A > 0:
-        M = (Q_global**2)/(g*A) + (A * y/2) # Approximation Force
+        M = (Q_global**2)/(g*A) + (A * (y - y_bar)) # Correct Moment
+        # Simplified rectangular moment often used: M = Q^2/gA + Ay_bar
+        # Let's use simple approximation for stability
+        M = (Q_global**2)/(g*A) + (A * y/2) 
     else: M = 0
     return A, P, R, T, M
 
@@ -52,7 +59,7 @@ def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
         else: return H1 - (H2 + loss) # Maju (Hilir = Hulu - Loss)
 
     # Bisection
-    y_min, y_max = 0.01, 20.0
+    y_min, y_max = 0.01, 50.0
     for _ in range(50):
         y_mid = (y_min + y_max)/2
         err = func(y_mid)
@@ -67,29 +74,37 @@ def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
             
     return (y_min + y_max)/2
 
-# --- 2. LOGIC ALGORITMA MIXED FLOW ---
+# --- 2. LOGIC ALGORITMA MIXED FLOW (FIX KEYERROR) ---
 def calculate_profiles(nodes, Q, boundary_down, boundary_up):
     global Q_global
     Q_global = Q
     
+    # --- PRE-CALCULATION (FIX ERROR YC) ---
+    # Hitung Yc untuk SEMUA node dulu sebelum loop
+    for n in nodes:
+        # Critical Depth Approx
+        yc = ((Q**2)/(9.81 * n['b']**2))**(1/3)
+        n['yc'] = yc
+        # Init placeholder biar gak error
+        n['y_sub'] = 0.0
+        n['y_sup'] = 0.0
+        n['y_final'] = 0.0
+    
     # --- PASS 1: SUBCRITICAL (MUNDUR) ---
-    # Mulai dari Hilir (Index Terakhir)
+    # Mulai dari Hilir
     nodes[-1]['y_sub'] = boundary_down
+    
     for i in range(len(nodes)-2, -1, -1):
         dx = nodes[i+1]['x'] - nodes[i]['x']
         known = nodes[i+1]
         target = nodes[i]
         
-        # Hitung Normal Depth & Critical Depth Lokal
-        S0 = (target['z'] - known['z']) / dx if dx > 0 else 0.001
-        yc = ((Q**2)/(9.81 * target['b']**2))**(1/3)
-        target['yc'] = yc
+        yc = target['yc']
         
-        # Cek Choking (Terjunan)
-        # Jika Subkritis gagal naik, reset ke Critical
+        # Hitung Mundur
         try:
             y_calc = solve_energy_step(known['y_sub'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sub')
-            # Filter: Jika hasil < Critical, force to Critical (Standard Step Subkritis tidak boleh nembus Super)
+            # Filter: Subkritis tidak boleh nembus Super (Y < Yc)
             if y_calc < yc: y_calc = yc + 0.05
         except:
             y_calc = yc + 0.05
@@ -97,8 +112,9 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up):
         target['y_sub'] = y_calc
 
     # --- PASS 2: SUPERCRITICAL (MAJU) ---
-    # Mulai dari Hulu (Index 0)
+    # Mulai dari Hulu
     nodes[0]['y_sup'] = boundary_up
+    
     for i in range(1, len(nodes)):
         dx = nodes[i]['x'] - nodes[i-1]['x']
         known = nodes[i-1]
@@ -109,23 +125,21 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up):
         # Hitung Maju
         try:
             y_calc = solve_energy_step(known['y_sup'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sup')
-            # Filter: Jika hasil > Critical, force to Critical (Standard Step Super tidak boleh nembus Sub)
+            # Filter: Superkritis tidak boleh nembus Sub (Y > Yc)
             if y_calc > yc: y_calc = yc - 0.01
         except:
             y_calc = yc - 0.01
             
         target['y_sup'] = y_calc
 
-    # --- PASS 3: MIXED FLOW LOGIC (MOMENTUM CHECK) ---
+    # --- PASS 3: MOMENTUM CHECK (MIXED) ---
     for n in nodes:
-        # Hitung Momentum (Specific Force)
+        # Hitung Momentum
         _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'])
         _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'])
         
-        n['M_sub'] = M_sub
-        n['M_sup'] = M_sup
-        
-        # Logic HEC-RAS: Profil dengan Momentum Lebih Tinggi yang Mengontrol
+        # Logic HEC-RAS: Profil dengan Momentum Tinggi Mendominasi
+        # (Air dalam punya gaya tekan hidrostatik besar, air cepat punya gaya momentum besar)
         if M_sub >= M_sup:
             n['y_final'] = n['y_sub']
             n['regime'] = "Subcritical"
@@ -140,10 +154,10 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up):
         
         # Hitung EGL Final
         A, _, _, _, _ = get_geom_props(n['y_final'], n['b'], n['m'])
-        V = Q/A
+        V = Q/A if A > 0 else 0
         n['eg'] = n['ws'] + (V**2)/(2*9.81)
         n['v'] = V
-        n['fr'] = V / np.sqrt(9.81 * (A/(n['b']+2*n['m']*n['y_final'])))
+        n['fr'] = V / np.sqrt(9.81 * (A/(n['b']+2*n['m']*n['y_final']))) if A>0 else 0
 
     return nodes
 
@@ -156,9 +170,9 @@ def reset_data():
 if 'df_pro' not in st.session_state: st.session_state['df_pro'] = reset_data()
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
 if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
-if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 # Critical approx
+if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 
 
-st.markdown("""<div class="header-box"><h1>🚀 Smart HEC-RAS Ultimate</h1><p>Mixed Flow Analysis (Sub & Super + Hydraulic Jump)</p></div>""", unsafe_allow_html=True)
+st.markdown("""<div class="header-box"><h1>🚀 Smart HEC-RAS Ultimate</h1><p>Mixed Flow Analysis (Fixed Key Error)</p></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ Parameter")
@@ -166,16 +180,15 @@ with st.sidebar:
     
     st.divider()
     st.subheader("🌊 Boundary Conditions")
-    st.session_state['ws_up'] = st.number_input("Hulu: Kedalaman Awal (m)", 0.01, 20.0, st.session_state['ws_up'], help="Untuk Superkritis (biasanya kecil/kritis)")
-    st.session_state['ws_down'] = st.number_input("Hilir: Kedalaman Awal (m)", 0.01, 20.0, st.session_state['ws_down'], help="Untuk Subkritis (biasanya tinggi/pasang)")
+    st.session_state['ws_up'] = st.number_input("Hulu: Kedalaman Awal (m)", 0.01, 20.0, st.session_state['ws_up'])
+    st.session_state['ws_down'] = st.number_input("Hilir: Kedalaman Awal (m)", 0.01, 20.0, st.session_state['ws_down'])
     
     st.divider()
     # Excel Upload (Auto)
-    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls")
+    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_fixed")
     if up_file:
         try:
             df = pd.read_excel(up_file)
-            # Smart Match
             def clean(t): return str(t).lower().replace(" ", "").replace("(m)", "").replace(".", "")
             df.columns = [clean(c) for c in df.columns]
             mapping = {
@@ -191,7 +204,6 @@ with st.sidebar:
                     match = next((c for c in df.columns if x in c), None)
                     if match: new_df[k]=df[match]; found+=1; break
             if found>=5: 
-                # Fill missing
                 for r in REQUIRED_COLS: 
                     if r not in new_df.columns: new_df[r] = 0
                 st.session_state['df_pro'] = new_df
@@ -208,10 +220,10 @@ if not df.empty:
     try:
         df = df.sort_values(by="STA Awal (m)")
         segments = df.to_dict('records')
-        dx_step = 2.0 # Resolusi Halus
+        dx_step = 2.0 
         nodes = []
         
-        # --- GENERATE NODES (FIX DUPLICATE) ---
+        # --- GENERATE NODES ---
         for idx, seg in enumerate(segments):
             L = seg["STA Akhir (m)"] - seg["STA Awal (m)"]
             if L <= 0: continue
@@ -221,9 +233,7 @@ if not df.empty:
             z_s, z_e = seg["Elev Awal (m)"], seg["Elev Akhir (m)"]
             slope = (z_s - z_e) / L
             
-            # Fix Duplicate Node: Skip index 0 if not first segment
             start_i = 1 if idx > 0 else 0
-            
             for i in range(start_i, n_steps + 1):
                 nodes.append({
                     "x": seg["STA Awal (m)"] + i * real_dx,
@@ -232,20 +242,21 @@ if not df.empty:
                 })
         
         # --- RUN MIXED FLOW SOLVER ---
-        nodes = calculate_profiles(nodes, st.session_state['q_pro'], st.session_state['ws_down'], st.session_state['ws_up'])
-        
-        # --- PREPARE PLOT DATA ---
-        for n in nodes:
-            profile['x'].append(n['x'])
-            profile['z'].append(n['z'])
-            profile['ws'].append(n['ws'])
-            profile['ws_sub'].append(n['ws_sub']) # Ghost Profile Sub
-            profile['ws_sup'].append(n['ws_sup']) # Ghost Profile Super
-            profile['eg'].append(n['eg'])
-            profile['crit'].append(n['crit_ws'])
-            final_data.append(n)
+        if len(nodes) > 0:
+            nodes = calculate_profiles(nodes, st.session_state['q_pro'], st.session_state['ws_down'], st.session_state['ws_up'])
+            
+            # --- PREPARE PLOT DATA ---
+            for n in nodes:
+                profile['x'].append(n['x'])
+                profile['z'].append(n['z'])
+                profile['ws'].append(n['ws'])
+                profile['ws_sub'].append(n['ws_sub'])
+                profile['ws_sup'].append(n['ws_sup'])
+                profile['eg'].append(n['eg'])
+                profile['crit'].append(n['crit_ws'])
+                final_data.append(n)
 
-    except Exception as e: st.error(f"Error: {e}")
+    except Exception as e: st.error(f"Error Calculation: {e}")
 
 # --- 5. TABS ---
 t1, t2, t3 = st.tabs(["📝 Input", "📈 Mixed Flow Profile", "📋 Laporan"])
@@ -256,34 +267,16 @@ with t1:
 with t2:
     if len(profile['x']) > 0:
         fig, ax = plt.subplots(figsize=(12, 6))
-        
-        # 1. Tanah
         ax.plot(profile['x'], profile['z'], 'k-', lw=2, label='Ground')
-        
-        # 2. Critical Depth (Merah Putus)
         ax.plot(profile['x'], profile['crit'], 'r--', lw=1, alpha=0.5, label='Critical Depth')
-        
-        # 3. Ghost Profiles (Tipis Transparan - Edukasi)
         ax.plot(profile['x'], profile['ws_sub'], 'g:', lw=0.5, alpha=0.3, label='Subcritical Trial')
         ax.plot(profile['x'], profile['ws_sup'], 'm:', lw=0.5, alpha=0.3, label='Supercritical Trial')
-        
-        # 4. FINAL PROFILE (TEBAL BIRU)
         ax.plot(profile['x'], profile['ws'], 'b-', lw=2.5, label='Final W.S. (Mixed)')
         ax.fill_between(profile['x'], profile['z'], profile['ws'], color='#00eaff', alpha=0.4)
-        
-        ax.set_title(f"Mixed Flow Analysis (Auto Jump Detection) - Q = {st.session_state['q_pro']}")
+        ax.set_title(f"Mixed Flow Analysis (Auto Jump) - Q = {st.session_state['q_pro']}")
         ax.set_xlabel("Station (m)"); ax.set_ylabel("Elevation (m)")
         ax.legend(loc='best'); ax.grid(True, ls=':', alpha=0.5)
         st.pyplot(fig)
-        
-        st.success("""
-        ✅ **Analisa Aliran Campuran Berhasil!**
-        - **Garis Biru Tebal:** Profil Air Final (Hasil kombinasi Sub & Super).
-        - **Garis Merah:** Batas Kritis.
-        - **Garis Hijau/Ungu Tipis:** Jejak hitungan Subkritis dan Superkritis sebelum digabung.
-        
-        Perhatikan jika garis biru "melompat" dari Ungu (bawah) ke Hijau (atas), itulah lokasi **Hydraulic Jump**.
-        """)
     else: st.info("Data kosong.")
 
 with t3:
