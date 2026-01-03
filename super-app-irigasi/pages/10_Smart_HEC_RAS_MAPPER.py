@@ -124,6 +124,7 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         H_ch = n.get('h_ch', 1.5) # Default H=1.5
         n['bank_elev'] = n['z'] + H_ch
         n['freeboard'] = n['bank_elev'] - n['ws']
+        n['h_design'] = n['y_final'] + 0.4
         
         A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
         V = Q/A if A > 0 else 0
@@ -205,7 +206,7 @@ with st.sidebar:
 
 # --- MAIN LOGIC ---
 df = st.session_state['df_pro']
-# FIXED: Menambahkan 'eg' ke list inisialisasi agar tidak KeyError
+# FIXED: Init with all keys needed to avoid KeyError
 profile_ex = {'x': [], 'z': [], 'ws': [], 'crit': [], 'bank': [], 'eg': []} 
 profile_new = {'x': [], 'z': [], 'ws': [], 'drops': []} 
 
@@ -249,7 +250,7 @@ if not df.empty:
                 profile_ex['x'].append(n['x']); profile_ex['z'].append(n['z'])
                 profile_ex['ws'].append(n['ws']); profile_ex['crit'].append(n['crit_ws'])
                 profile_ex['bank'].append(n['bank_elev'])
-                profile_ex['eg'].append(n['eg']) # FIXED: Append EG Data
+                profile_ex['eg'].append(n['eg']) # Fixed EG Append
                 final_data_ex.append(n)
 
         # 3. RUN REDESAIN (JIKA AKTIF)
@@ -280,17 +281,26 @@ if not df.empty:
 
     except Exception as e: st.error(f"Error: {e}")
 
-# --- TABS ---
+# --- TABS LOGIC (INPUT FIRST) ---
+# Mengatur Urutan Tabs: Input Dulu, Baru Hasil
 if use_redesign:
-    tabs = ["🛠️ Hasil Redesain", "📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan", "📝 Input"]
+    tab_titles = ["📝 Input Data", "🛠️ Hasil Redesain", "📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan"]
 else:
-    tabs = ["📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan", "📝 Input"]
+    tab_titles = ["📝 Input Data", "📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan"]
 
-active_tabs = st.tabs(tabs)
+active_tabs = st.tabs(tab_titles)
 
-# LOGIC UNTUK TAB REDESAIN (JIKA AKTIF)
+# 1. TAB INPUT (SELALU PERTAMA)
+with active_tabs[0]:
+    st.info("💡 **Tips:** Edit data di tabel ini atau Upload Excel di sidebar.")
+    st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch')
+
+# 2. LOGIC TABS LAINNYA
+idx = 1 # Start index for results
+
+# TAB REDESAIN (JIKA ADA)
 if use_redesign:
-    with active_tabs[0]:
+    with active_tabs[idx]:
         if len(profile_new['x']) > 0:
             fig, ax = plt.subplots(figsize=(14, 8))
             ax.plot(profile_ex['x'], profile_ex['z'], 'k-', lw=1, alpha=0.3, label='Tanah Asli')
@@ -303,12 +313,11 @@ if use_redesign:
             
             ax.set_title("Redesain Saluran Berjenjang"); ax.legend(); ax.grid(True, alpha=0.5)
             st.pyplot(fig)
-            
             st.success(f"Jumlah Terjunan: {len(profile_new['drops'])} | Kecepatan Rata2 Baru: {np.mean([n['v'] for n in final_data_new]):.2f} m/s")
+    idx += 1
 
-# LOGIC UNTUK TAB EKSISTING (Standard)
-target_tab_idx = 1 if use_redesign else 0
-with active_tabs[target_tab_idx]:
+# TAB PROFIL EKSISTING
+with active_tabs[idx]:
     if len(profile_ex['x']) > 0:
         fig, ax = plt.subplots(figsize=(14, 8))
         ax.plot(profile_ex['x'], profile_ex['z'], 'k-', lw=2.5, label='Dasar Saluran')
@@ -316,17 +325,17 @@ with active_tabs[target_tab_idx]:
         ax.plot(profile_ex['x'], profile_ex['bank'], 'brown', ls='--', lw=2, label='Bibir Tanggul')
         ax.fill_between(profile_ex['x'], profile_ex['z'], profile_ex['ws'], color='#00eaff', alpha=0.4)
         
-        # Plot Energy Grade (FIXED: Sekarang datanya sudah ada)
-        if len(profile_ex['eg']) == len(profile_ex['x']):
+        # Safe plot EG
+        if len(profile_ex['eg']) > 0:
             ax.plot(profile_ex['x'], profile_ex['eg'], 'g-.', lw=1, label='Energy Grade')
         
         ax.minorticks_on(); ax.grid(which='major', alpha=0.7); ax.grid(which='minor', alpha=0.3)
         ax.set_title(f"Profil Memanjang Eksisting - Q={st.session_state['q_pro']}"); ax.legend()
         st.pyplot(fig)
+idx += 1
 
-# LOGIC CROSS SECTION
-target_tab_idx += 1
-with active_tabs[target_tab_idx]:
+# TAB CROSS SECTION
+with active_tabs[idx]:
     if len(all_nodes_ex) > 0:
         st.subheader("Visualisasi Penampang")
         sta_list = [n['x'] for n in all_nodes_ex]
@@ -350,10 +359,10 @@ with active_tabs[target_tab_idx]:
                 clr = "red" if fb < 0.3 else "green"
                 st.markdown(f"**Freeboard:** <span style='color:{clr}; font-size:18px'>{fb:.3f} m</span>", unsafe_allow_html=True)
                 st.metric("Kecepatan", f"{node['v']:.2f} m/s")
+idx += 1
 
-# LOGIC REKAP
-target_tab_idx += 1
-with active_tabs[target_tab_idx]:
+# TAB REKAP
+with active_tabs[idx]:
     if final_data_ex:
         res_df = pd.DataFrame(final_data_ex)
         summ = []
@@ -367,15 +376,11 @@ with active_tabs[target_tab_idx]:
                 "Saran Tinggi Desain": f"{hulu['h_design']:.2f}"
             })
         st.dataframe(pd.DataFrame(summ), width='stretch')
+idx += 1
 
-# LOGIC REPORT DETAIL
-target_tab_idx += 1
-with active_tabs[target_tab_idx]:
+# TAB LAPORAN
+with active_tabs[idx]:
     if final_data_ex:
         res = pd.DataFrame(final_data_ex)[["x", "seg", "z", "ws", "y_final", "freeboard", "fr", "v", "eg"]]
         st.dataframe(res, width='stretch')
         st.download_button("Download Laporan Detail", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
-
-# LOGIC INPUT
-with active_tabs[-1]:
-    st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch')
