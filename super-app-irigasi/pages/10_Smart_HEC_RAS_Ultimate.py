@@ -100,20 +100,30 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         except: y_calc = yc - 0.01
         target['y_sup'] = y_calc
 
-    # Selection
+    # Selection Logic (PERBAIKAN DI SINI)
     for n in nodes:
         if force_super:
-            if n['y_sup'] > 0.011 and n['y_sup'] < 49.0: n['y_final'] = n['y_sup']; n['regime'] = "Supercritical"
-            else: n['y_final'] = n['yc']; n['regime'] = "Critical"
+            if n['y_sup'] > 0.011 and n['y_sup'] < 49.0: 
+                n['y_final'] = n['y_sup']
+                n['regime'] = "Supercritical"
+            else: 
+                n['y_final'] = n['yc']
+                n['regime'] = "Critical"
         else:
             if n['y_sub'] <= 0.011 or n['y_sub'] > 49.0: M_sub = -1.0
             else: _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'], Q)
             if n['y_sup'] <= 0.011 or n['y_sup'] > 49.0: M_sup = -1.0
             else: _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'], Q)
             
-            if M_sub == -1 and M_sup == -1: n['y_final'] = n['yc']
-            elif M_sub >= M_sup: n['y_final'] = n['y_sub']
-            else: n['y_final'] = n['y_sup']
+            if M_sub == -1 and M_sup == -1: 
+                n['y_final'] = n['yc']
+                n['regime'] = "Critical"
+            elif M_sub >= M_sup: 
+                n['y_final'] = n['y_sub']
+                n['regime'] = "Subcritical"
+            else: 
+                n['y_final'] = n['y_sup']
+                n['regime'] = "Supercritical"
             
         n['ws'] = n['z'] + n['y_final']
         n['crit_ws'] = n['z'] + n['yc']
@@ -132,26 +142,22 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
     return nodes
 
 def generate_long_section_scr(nodes, dataset_name="Eksisting"):
-    # Script untuk menggambar profil memanjang di AutoCAD
-    # Format: PLINE x,y x,y ...
     s = "; --- SMART HEC-RAS LONG SECTION SCRIPT ---\n"
-    s += "OSMODE 0\n" # Matikan Snap agar akurat
+    s += "OSMODE 0\n" 
     
-    # Layer Dasar Saluran
+    # Layer Dasar
     s += f"-LAYER M {dataset_name}_DASAR C 30 {dataset_name}_DASAR \n"
     s += "_PLINE\n"
-    for n in nodes:
-        s += f"{n['x']:.4f},{n['z']:.4f}\n"
-    s += "\n" # Enter to finish command
-    
-    # Layer Muka Air
-    s += f"-LAYER M {dataset_name}_AIR C 150 {dataset_name}_AIR \n"
-    s += "_PLINE\n"
-    for n in nodes:
-        s += f"{n['x']:.4f},{n['ws']:.4f}\n"
+    for n in nodes: s += f"{n['x']:.4f},{n['z']:.4f}\n"
     s += "\n"
     
-    # Layer Bibir Tanggul (Kiri/Kanan sama elevasi di 2D)
+    # Layer Air
+    s += f"-LAYER M {dataset_name}_AIR C 150 {dataset_name}_AIR \n"
+    s += "_PLINE\n"
+    for n in nodes: s += f"{n['x']:.4f},{n['ws']:.4f}\n"
+    s += "\n"
+    
+    # Layer Bank
     s += f"-LAYER M {dataset_name}_BANK C 10 {dataset_name}_BANK \n"
     s += "_PLINE\n"
     for n in nodes:
@@ -163,32 +169,27 @@ def generate_long_section_scr(nodes, dataset_name="Eksisting"):
     return s
 
 def generate_cross_section_scr(nodes, dataset_name="Desain", spacing_x=20, spacing_y=20):
-    # Script untuk menggambar Cross Section berjejer
     s = "; --- SMART HEC-RAS CROSS SECTION SCRIPT ---\n"
     s += "OSMODE 0\n"
     
     row_count = 0
     col_count = 0
-    max_cols = 5 # Jumlah gambar ke samping sebelum pindah baris
+    max_cols = 5 
     
     for i, n in enumerate(nodes):
-        # Tentukan titik Insert Point (0,0 lokal) untuk setiap potongan
-        # Kita susun grid
         base_x = col_count * spacing_x
-        base_y = row_count * spacing_y * -1 # Turun ke bawah
+        base_y = row_count * spacing_y * -1 
         
         b = n['b']; m = n['m']; z = n['z']; h = n['h_ch']
         ws = n['ws']; y = n['y_final']
         
-        # Koordinat Lokal Saluran (Trapesium)
-        # Kiri Atas, Kiri Bawah, Kanan Bawah, Kanan Atas
         top_w_half = (b + 2*m*h) / 2
         x1, y1 = -top_w_half, h
         x2, y2 = -b/2, 0
         x3, y3 = b/2, 0
         x4, y4 = top_w_half, h
         
-        # 1. Gambar Tanah/Saluran
+        # Saluran
         s += f"-LAYER M {dataset_name}_CS_SALURAN C 7 {dataset_name}_CS_SALURAN \n"
         s += "_PLINE\n"
         s += f"{base_x + x1:.4f},{base_y + y1:.4f}\n"
@@ -197,7 +198,7 @@ def generate_cross_section_scr(nodes, dataset_name="Desain", spacing_x=20, spaci
         s += f"{base_x + x4:.4f},{base_y + y4:.4f}\n"
         s += "\n"
         
-        # 2. Gambar Air (Jika ada)
+        # Air
         if y > 0.01:
             top_w_water = (b + 2*m*y) / 2
             wx1, wy1 = -top_w_water, y
@@ -209,11 +210,10 @@ def generate_cross_section_scr(nodes, dataset_name="Desain", spacing_x=20, spaci
             s += f"{base_x + wx2:.4f},{base_y + wy2:.4f}\n"
             s += "\n"
         
-        # 3. Teks STA
+        # Teks
         s += f"-LAYER M {dataset_name}_TEXT C 2 {dataset_name}_TEXT \n"
         s += f"-TEXT {base_x:.4f},{base_y - 2:.4f} 0.5 0 STA {n['x']:.2f}\n"
         
-        # Update Grid Logic
         col_count += 1
         if col_count >= max_cols:
             col_count = 0
@@ -437,11 +437,14 @@ with active_tabs[idx]:
     df_rep = pd.DataFrame(final_data_new if (use_redesign and final_data_new) else final_data_ex)
     
     if not df_rep.empty:
-        # Pilih kolom penting
-        cols = ['x', 'z', 'ws', 'y_final', 'v', 'fr', 'freeboard', 'regime']
-        if 'z_original' in df_rep.columns: cols.insert(1, 'z_original')
+        # Pengecekan kolom agar tidak KeyError lagi
+        cols_wanted = ['x', 'z', 'ws', 'y_final', 'v', 'fr', 'freeboard', 'regime']
+        if 'z_original' in df_rep.columns: cols_wanted.insert(1, 'z_original')
         
-        df_show = df_rep[cols].copy()
+        # Hanya ambil kolom yang benar-benar ada di dataframe
+        existing_cols = [c for c in cols_wanted if c in df_rep.columns]
+        
+        df_show = df_rep[existing_cols].copy()
         
         # Rename agar cantik
         rename_map = {
@@ -453,25 +456,24 @@ with active_tabs[idx]:
         
         # --- STYLING PANDAS ---
         def highlight_danger(val):
-            # Freeboard < 0.3 jadi merah background
             color = '#ffcccc' if val < 0.3 else '' 
             return f'background-color: {color}'
         
         def highlight_froude(val):
-            # Froude > 1 (Superkritis) jadi teks ungu bold
             return 'color: purple; font-weight: bold' if val > 1 else ''
 
         # Apply Style
-        styled_df = df_show.style.format("{:.2f}", subset=[c for c in df_show.columns if c != 'Status'])\
-            .applymap(highlight_danger, subset=['Freeboard (m)'])\
-            .applymap(highlight_froude, subset=['Froude Num'])\
+        # Cek dulu apakah kolom Freeboard/Froude ada sebelum apply map (untuk safety)
+        styler = df_show.style.format("{:.2f}", subset=[c for c in df_show.columns if c != 'Status'])\
             .set_properties(**{'text-align': 'center'})\
-            .set_table_styles([{
-                'selector': 'th',
-                'props': [('background-color', '#4CAF50'), ('color', 'white')]
-            }])
+            .set_table_styles([{'selector': 'th','props': [('background-color', '#4CAF50'), ('color', 'white')]}])
+        
+        if 'Freeboard (m)' in df_show.columns:
+            styler = styler.applymap(highlight_danger, subset=['Freeboard (m)'])
+        if 'Froude Num' in df_show.columns:
+            styler = styler.applymap(highlight_froude, subset=['Froude Num'])
             
-        st.dataframe(styled_df, height=500, use_container_width=True)
+        st.dataframe(styler, height=500, use_container_width=True)
         
         # Download Button
         buffer = io.BytesIO()
