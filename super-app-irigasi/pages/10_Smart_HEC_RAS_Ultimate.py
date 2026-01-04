@@ -158,10 +158,21 @@ with st.sidebar:
     st.divider()
     st.subheader("🛠️ Auto-Redesign (Opsional)")
     use_redesign = st.checkbox("Aktifkan Fitur Redesain", value=False)
+    
+    # --- FITUR BARU: Variabel Offset ---
+    target_slope = 0.001
+    design_b = 1.5
+    max_drop = 1.5
+    start_offset = 0.0
+    
     if use_redesign:
         target_slope = st.number_input("Target Kemiringan (S)", 0.0001, 0.05, 0.001, format="%.4f")
         design_b = st.number_input("Lebar Desain (m)", 0.1, 50.0, 1.5)
         max_drop = st.number_input("Max Drop (m)", 0.5, 5.0, 1.5)
+        
+        # INPUT BARU: OFFSET ELEVASI
+        st.info("👇 Atur Elevasi Awal Redesain")
+        start_offset = st.number_input("Offset Elevasi STA 0 (+/- m)", -50.0, 50.0, 0.0, step=0.1, help="Nilai positif menaikkan dasar saluran, negatif menurunkan.")
     
     st.divider()
     st.subheader("📂 Input Data")
@@ -206,13 +217,13 @@ with st.sidebar:
 
 # --- MAIN LOGIC ---
 df = st.session_state['df_pro']
-# FIXED: Init with all keys needed to avoid KeyError
 profile_ex = {'x': [], 'z': [], 'ws': [], 'crit': [], 'bank': [], 'eg': []} 
 profile_new = {'x': [], 'z': [], 'ws': [], 'drops': []} 
 
 final_data_ex = []
 final_data_new = []
 all_nodes_ex = []
+all_nodes_new = [] # Container untuk node redesain
 
 if not df.empty:
     try:
@@ -250,13 +261,16 @@ if not df.empty:
                 profile_ex['x'].append(n['x']); profile_ex['z'].append(n['z'])
                 profile_ex['ws'].append(n['ws']); profile_ex['crit'].append(n['crit_ws'])
                 profile_ex['bank'].append(n['bank_elev'])
-                profile_ex['eg'].append(n['eg']) # Fixed EG Append
+                profile_ex['eg'].append(n['eg'])
                 final_data_ex.append(n)
 
         # 3. RUN REDESAIN (JIKA AKTIF)
         if use_redesign and len(nodes_ex) > 0:
             nodes_new = []
-            current_z = nodes_ex[0]['z']
+            
+            # --- LOGIC BARU: APPLY OFFSET DI STA 0 ---
+            start_z_original = nodes_ex[0]['z']
+            current_z = start_z_original + start_offset 
             
             for i, n in enumerate(nodes_ex):
                 if i > 0:
@@ -264,10 +278,29 @@ if not df.empty:
                     current_z -= dx * target_slope
                 
                 # Cek Terjunan
-                if (current_z - n['z']) > max_drop:
-                    current_z = n['z']
-                    profile_new['drops'].append(n['x'])
+                # Kita bandingkan current_z dengan tanah asli (n['z'])
+                # Jika beda tinggi terlalu jauh (galian dalam), kita bikin drop
+                # Catatan: Logika drop bisa disesuaikan, ini default logic sederhana
+                if (current_z - n['z']) > max_drop: # Jika saluran "melayang" di atas tanah terlalu tinggi (kasus tertentu) atau galian terlalu curam
+                    # Logic umum: Drop biasanya dibuat jika kemiringan medan lebih curam dari kemiringan saluran
+                    # Di sini simplified: Jika elevasi rencana jauh di atas target (atau sebaliknya), reset.
+                    # Asumsi umum redesain: Mengikuti tanah tetapi lebih landai, pakai drop structure.
+                    
+                    # Agar simple: Jika elevasi redesain (current_z) jauh lebih tinggi dari tanah (n['z']), 
+                    # berarti kita butuh drop agar air terjun ke elevasi tanah lagi.
+                    # TAPI biasanya drop dipakai jika tanah curam.
+                    # Logic default user sebelumnya:
+                    pass 
                 
+                # REVISI LOGIC DROP STANDAR:
+                # Jika elevasi desain terlalu TINGGI dibanding node sebelumnya (mustahil karena minus slope),
+                # atau logic 'follow terrain'.
+                # Mari gunakan logic simple: Jika slope terrain > slope desain, kita butuh drop.
+                # Tapi kode sebelumnya hanya cek selisih. Kita pakai kode lama tapi sesuaikan start.
+                if (current_z - n['z']) > max_drop:
+                     current_z = n['z'] # Reset ke tanah
+                     profile_new['drops'].append(n['x'])
+
                 nodes_new.append({
                     "x": n['x'], "z": current_z,
                     "b": design_b, "m": 1.0, "n": 0.025,
@@ -275,45 +308,128 @@ if not df.empty:
                 })
             
             res_new = calculate_profiles(nodes_new, st.session_state['q_pro'], 1.0, 1.0, False) # Force Subcritical
+            all_nodes_new = res_new # Simpan untuk Cross Section
+            
             for n in res_new:
                 profile_new['x'].append(n['x']); profile_new['z'].append(n['z']); profile_new['ws'].append(n['ws'])
+                # Kita gabungkan data tanah asli ke dict hasil redesain untuk referensi tabel
+                n['z_original'] = next((ex['z'] for ex in nodes_ex if abs(ex['x'] - n['x']) < 0.01), 0)
                 final_data_new.append(n)
 
     except Exception as e: st.error(f"Error: {e}")
 
-# --- TABS LOGIC (INPUT FIRST) ---
-# Mengatur Urutan Tabs: Input Dulu, Baru Hasil
+# --- TABS LOGIC ---
 if use_redesign:
-    tab_titles = ["📝 Input Data", "🛠️ Hasil Redesain", "📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan"]
+    tab_titles = ["📝 Input Data", "🛠️ Hasil Redesain", "📈 Profil Eksisting", "❌ Cross Section Eksisting", "📑 Rekap AutoCAD", "📋 Laporan"]
 else:
     tab_titles = ["📝 Input Data", "📈 Profil Eksisting", "❌ Cross Section", "📑 Rekap AutoCAD", "📋 Laporan"]
 
 active_tabs = st.tabs(tab_titles)
 
-# 1. TAB INPUT (SELALU PERTAMA)
+# 1. TAB INPUT
 with active_tabs[0]:
     st.info("💡 **Tips:** Edit data di tabel ini atau Upload Excel di sidebar.")
     st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch')
 
-# 2. LOGIC TABS LAINNYA
-idx = 1 # Start index for results
+idx = 1 
 
-# TAB REDESAIN (JIKA ADA)
+# 2. TAB REDESAIN (MODIFIED)
 if use_redesign:
     with active_tabs[idx]:
-        if len(profile_new['x']) > 0:
-            fig, ax = plt.subplots(figsize=(14, 8))
-            ax.plot(profile_ex['x'], profile_ex['z'], 'k-', lw=1, alpha=0.3, label='Tanah Asli')
-            ax.plot(profile_new['x'], profile_new['z'], 'brown', lw=2.5, label='Saluran Baru (Cascading)')
-            ax.plot(profile_new['x'], profile_new['ws'], 'g-', lw=2, label='Muka Air (Subkritis)')
-            ax.fill_between(profile_new['x'], profile_new['z'], profile_new['ws'], color='#ccffcc', alpha=0.6)
-            
-            for d in profile_new['drops']:
-                ax.axvline(x=d, color='red', ls='--'); ax.text(d, max(profile_ex['z']), "DROP", color='red', rotation=90)
-            
-            ax.set_title("Redesain Saluran Berjenjang"); ax.legend(); ax.grid(True, alpha=0.5)
-            st.pyplot(fig)
-            st.success(f"Jumlah Terjunan: {len(profile_new['drops'])} | Kecepatan Rata2 Baru: {np.mean([n['v'] for n in final_data_new]):.2f} m/s")
+        # --- SUB TABS UNTUK HASIL REDESAIN ---
+        rt_graph, rt_table, rt_cs = st.tabs(["📉 Grafik Long Section", "📋 Tabel & Export", "❌ Cross Section Redesain"])
+        
+        with rt_graph:
+            if len(profile_new['x']) > 0:
+                fig, ax = plt.subplots(figsize=(14, 8))
+                ax.plot(profile_ex['x'], profile_ex['z'], 'k-', lw=1, alpha=0.3, label='Tanah Asli')
+                ax.plot(profile_new['x'], profile_new['z'], 'brown', lw=2.5, label='Saluran Baru (Cascading)')
+                ax.plot(profile_new['x'], profile_new['ws'], 'g-', lw=2, label='Muka Air (Subkritis)')
+                ax.fill_between(profile_new['x'], profile_new['z'], profile_new['ws'], color='#ccffcc', alpha=0.6)
+                
+                for d in profile_new['drops']:
+                    ax.axvline(x=d, color='red', ls='--'); ax.text(d, max(profile_ex['z']), "DROP", color='red', rotation=90)
+                
+                ax.set_title(f"Redesain Saluran (Offset Awal: {start_offset} m)"); ax.legend(); ax.grid(True, alpha=0.5)
+                st.pyplot(fig)
+                st.success(f"Jumlah Terjunan: {len(profile_new['drops'])} | Kecepatan Rata2 Baru: {np.mean([n['v'] for n in final_data_new]):.2f} m/s")
+        
+        with rt_table:
+            st.markdown("### 📋 Detail Data Redesain")
+            if final_data_new:
+                # Siapkan Dataframe
+                df_redesign = pd.DataFrame(final_data_new)
+                # Pilih kolom penting
+                cols_show = ['x', 'z_original', 'z', 'ws', 'y_final', 'v', 'fr']
+                df_show = df_redesign[cols_show].copy()
+                df_show.columns = ['Station', 'Elev Tanah Asli', 'Elev Desain', 'Elev Muka Air', 'Kedalaman Air', 'Kecepatan', 'Froude']
+                
+                st.dataframe(df_show, width=1000, height=400)
+                
+                # Tombol Export Excel
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    df_show.to_excel(writer, sheet_name='Redesain', index=False)
+                
+                st.download_button(
+                    label="📥 Download Excel Redesain",
+                    data=buffer.getvalue(),
+                    file_name="Hasil_Redesain_Saluran.xlsx",
+                    mime="application/vnd.ms-excel"
+                )
+            else:
+                st.warning("Data redesain belum tersedia.")
+
+        with rt_cs:
+            st.markdown("### ❌ Cross Section: Desain vs Eksisting")
+            if len(all_nodes_new) > 0:
+                sta_list_new = [n['x'] for n in all_nodes_new]
+                sel_sta_new = st.select_slider("Pilih Station (m)", options=sta_list_new, value=sta_list_new[0], key="slider_cs_new")
+                
+                # Cari node di STA tersebut
+                node_new = next((n for n in all_nodes_new if abs(n['x'] - sel_sta_new) < 0.01), None)
+                node_orig = next((n for n in all_nodes_ex if abs(n['x'] - sel_sta_new) < 0.01), None)
+                
+                if node_new:
+                    c1, c2 = st.columns([3, 1])
+                    with c1:
+                        fig_cs, ax_cs = plt.subplots(figsize=(10,6))
+                        
+                        # Plot Tanah Asli (Gray)
+                        if node_orig:
+                            b_o, m_o, z_o = node_orig['b'], node_orig['m'], node_orig['z']
+                            H_o = node_orig['h_ch']; TopW_o = b_o + 2*m_o*H_o
+                            x_go = [-TopW_o/2, -b_o/2, b_o/2, TopW_o/2]
+                            y_go = [z_o+H_o, z_o, z_o, z_o+H_o]
+                            ax_cs.plot(x_go, y_go, 'k--', lw=1, label="Saluran Eksisting")
+                        
+                        # Plot Desain Baru (Red)
+                        b, m, z, y, ws = node_new['b'], node_new['m'], node_new['z'], node_new['y_final'], node_new['ws']
+                        H = node_new['h_ch']; T = b + 2*m*y; TopW = b + 2*m*H
+                        x_g = [-TopW/2, -b/2, b/2, TopW/2]
+                        y_g = [z+H, z, z, z+H]
+                        
+                        ax_cs.plot(x_g, y_g, 'r-', lw=3, label="Desain Baru")
+                        ax_cs.fill_between(x_g, y_g, min(y_g), color='red', alpha=0.1)
+                        
+                        # Air
+                        if y > 0.001:
+                            ax_cs.plot([-T/2, T/2], [ws, ws], 'b-', lw=2)
+                            ax_cs.fill([-T/2, T/2, b/2, -b/2], [ws, ws, z, z], color='#00eaff', alpha=0.6, label="Air Desain")
+                        
+                        ax_cs.set_title(f"Cross Section STA {sel_sta_new:.2f}")
+                        ax_cs.legend(loc='upper right')
+                        ax_cs.grid(True)
+                        st.pyplot(fig_cs)
+                    
+                    with c2:
+                        st.metric("Elevasi Desain", f"{node_new['z']:.2f} m")
+                        if node_orig:
+                            diff = node_new['z'] - node_orig['z']
+                            st.metric("Selisih vs Asli", f"{diff:.2f} m", delta=diff, delta_color="off")
+                        st.metric("Tinggi Air", f"{node_new['y_final']:.2f} m")
+                        st.metric("Kecepatan", f"{node_new['v']:.2f} m/s")
+
     idx += 1
 
 # TAB PROFIL EKSISTING
@@ -325,7 +441,6 @@ with active_tabs[idx]:
         ax.plot(profile_ex['x'], profile_ex['bank'], 'brown', ls='--', lw=2, label='Bibir Tanggul')
         ax.fill_between(profile_ex['x'], profile_ex['z'], profile_ex['ws'], color='#00eaff', alpha=0.4)
         
-        # Safe plot EG
         if len(profile_ex['eg']) > 0:
             ax.plot(profile_ex['x'], profile_ex['eg'], 'g-.', lw=1, label='Energy Grade')
         
@@ -334,10 +449,10 @@ with active_tabs[idx]:
         st.pyplot(fig)
 idx += 1
 
-# TAB CROSS SECTION
+# TAB CROSS SECTION (Eksisting)
 with active_tabs[idx]:
     if len(all_nodes_ex) > 0:
-        st.subheader("Visualisasi Penampang")
+        st.subheader("Visualisasi Penampang Eksisting")
         sta_list = [n['x'] for n in all_nodes_ex]
         sel_sta = st.select_slider("Station (m)", options=sta_list, value=sta_list[0])
         node = next((n for n in all_nodes_ex if n['x'] == sel_sta), None)
