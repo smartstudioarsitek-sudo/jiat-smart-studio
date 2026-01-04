@@ -249,24 +249,39 @@ with st.sidebar:
     tab_ex, tab_gis, tab_csv = st.tabs(["📄 Excel", "🌍 GeoJSON", "🔢 CSV"])
     
     with tab_ex:
+        # TOMBOL DOWNLOAD TEMPLATE
+        buffer_template = io.BytesIO()
+        with pd.ExcelWriter(buffer_template, engine='xlsxwriter') as writer:
+            reset_data().to_excel(writer, index=False)
+        st.download_button("📥 Download Template Excel", buffer_template.getvalue(), "Template_Saluran.xlsx")
+
         up_excel = st.file_uploader("Upload .xlsx", type=['xlsx'], key="xls_up")
+        
         if up_excel:
             try:
                 df = pd.read_excel(up_excel)
-                # Validasi kolom minimal
+                # Normalisasi Nama Kolom (Agar huruf besar/kecil tidak masalah)
+                df.columns = [c.strip() for c in df.columns] 
+                
+                # Cek kolom kunci
                 if "Elev Awal (m)" in df.columns:
                     st.session_state['df_pro'] = df
-                    st.success("Data Excel berhasil dimuat!")
+                    
+                    # --- FIX PENTING: RESET EDITOR CACHE ---
+                    # Ini yang bikin tabel tadi gak berubah meski data sudah masuk
+                    if 'editor_input' in st.session_state:
+                        del st.session_state['editor_input']
+                        
+                    st.success("Data Excel berhasil dimuat! Tabel akan diperbarui...")
                     st.rerun()
                 else:
-                    st.error("Format Excel tidak sesuai. Gunakan template.")
+                    st.error(f"Format Salah. Kolom ditemukan: {list(df.columns)}")
             except Exception as e: st.error(f"Error: {e}")
 
     with tab_gis:
         st.info("Support GeoJSON/JSON. Untuk SHP, convert dulu ke GeoJSON.")
         up_geo = st.file_uploader("Upload .geojson", type=['geojson', 'json'], key="geo_up")
         
-        # Parameter Default untuk Data GIS (karena GIS biasanya cuma koordinat)
         def_b = st.number_input("Default Lebar (b)", 0.1, 50.0, 2.0, key="def_b")
         def_m = st.number_input("Default Talud (m)", 0.0, 10.0, 1.0, key="def_m")
         def_n = st.number_input("Default Manning (n)", 0.001, 0.1, 0.025, format="%.3f", key="def_n")
@@ -276,8 +291,6 @@ with st.sidebar:
                 data = json.load(up_geo)
                 features = data.get('features', [])
                 new_rows = []
-                
-                # Cari LineString pertama
                 coords = []
                 for f in features:
                     geo = f.get('geometry', {})
@@ -288,13 +301,8 @@ with st.sidebar:
                 if coords:
                     current_dist = 0.0
                     for i in range(len(coords) - 1):
-                        p1 = coords[i]
-                        p2 = coords[i+1]
-                        
-                        # Hitung Jarak Datar (Euclidean 2D)
+                        p1 = coords[i]; p2 = coords[i+1]
                         dist = np.sqrt((p2[0]-p1[0])**2 + (p2[1]-p1[1])**2)
-                        
-                        # Elevasi (Z) - Asumsi koordinat [X, Y, Z]
                         z1 = p1[2] if len(p1) > 2 else 0
                         z2 = p2[2] if len(p2) > 2 else 0
                         
@@ -310,7 +318,8 @@ with st.sidebar:
                     
                     if new_rows:
                         st.session_state['df_pro'] = pd.DataFrame(new_rows)
-                        st.success(f"Berhasil load {len(new_rows)} segmen dari GeoJSON!")
+                        if 'editor_input' in st.session_state: del st.session_state['editor_input']
+                        st.success(f"Berhasil load {len(new_rows)} segmen!")
                         st.rerun()
                 else:
                     st.error("Tidak ditemukan LineString dalam GeoJSON.")
@@ -337,6 +346,7 @@ with st.sidebar:
                             "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
                         })
                     st.session_state['df_pro'] = pd.DataFrame(new_rows)
+                    if 'editor_input' in st.session_state: del st.session_state['editor_input']
                     st.success(f"Import {len(new_rows)} segmen sukses!")
                     st.rerun()
             except Exception as e: st.error(f"Error: {e}")
@@ -356,7 +366,10 @@ with st.sidebar:
         start_offset = st.number_input("Offset Elevasi STA 0 (+/- m)", -50.0, 50.0, -1.0, step=0.1)
     
     st.divider()
-    if st.button("Reset Data"): st.session_state['df_pro'] = reset_data(); st.rerun()
+    if st.button("Reset Data"): 
+        st.session_state['df_pro'] = reset_data()
+        if 'editor_input' in st.session_state: del st.session_state['editor_input']
+        st.rerun()
 
 # --- MAIN LOGIC ---
 df = st.session_state['df_pro']
@@ -437,9 +450,10 @@ else:
 
 active_tabs = st.tabs(tab_titles)
 
-# TAB 1: INPUT (DI SINI MENU EKSISTINGNYA)
+# TAB 1: INPUT
 with active_tabs[0]:
     st.info("💡 Edit data Eksisting di sini. Data ini bisa dari hasil upload Excel/GIS di sebelah kiri (sidebar).")
+    # KEY DITAMBAHKAN AGAR BISA DI-RESET
     st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch', key="editor_input")
 
 idx = 1 
