@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import io
+import json
 
 # --- CONFIG ---
 st.set_page_config(page_title="Smart HEC-RAS Ultimate", layout="wide", page_icon="🏗️")
@@ -234,7 +235,7 @@ if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
 if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 
 
 # --- UI SIDEBAR ---
-st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>GIS Import • Auto-Redesign • AutoCAD Export</p></div>""", unsafe_allow_html=True)
+st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>Excel • GeoJSON/GIS • AutoCAD Export</p></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ Parameter Hidrolis")
@@ -242,9 +243,107 @@ with st.sidebar:
     force_super = st.checkbox("🔥 Force Supercritical", value=False)
     
     st.divider()
+    st.subheader("📂 Upload Data")
+    
+    # TAB UPLOAD
+    tab_ex, tab_gis, tab_csv = st.tabs(["📄 Excel", "🌍 GeoJSON", "🔢 CSV"])
+    
+    with tab_ex:
+        up_excel = st.file_uploader("Upload .xlsx", type=['xlsx'], key="xls_up")
+        if up_excel:
+            try:
+                df = pd.read_excel(up_excel)
+                # Validasi kolom minimal
+                if "Elev Awal (m)" in df.columns:
+                    st.session_state['df_pro'] = df
+                    st.success("Data Excel berhasil dimuat!")
+                    st.rerun()
+                else:
+                    st.error("Format Excel tidak sesuai. Gunakan template.")
+            except Exception as e: st.error(f"Error: {e}")
+
+    with tab_gis:
+        st.info("Support GeoJSON/JSON. Untuk SHP, convert dulu ke GeoJSON.")
+        up_geo = st.file_uploader("Upload .geojson", type=['geojson', 'json'], key="geo_up")
+        
+        # Parameter Default untuk Data GIS (karena GIS biasanya cuma koordinat)
+        def_b = st.number_input("Default Lebar (b)", 0.1, 50.0, 2.0, key="def_b")
+        def_m = st.number_input("Default Talud (m)", 0.0, 10.0, 1.0, key="def_m")
+        def_n = st.number_input("Default Manning (n)", 0.001, 0.1, 0.025, format="%.3f", key="def_n")
+        
+        if up_geo and st.button("🚀 Load GIS"):
+            try:
+                data = json.load(up_geo)
+                features = data.get('features', [])
+                new_rows = []
+                
+                # Cari LineString pertama
+                coords = []
+                for f in features:
+                    geo = f.get('geometry', {})
+                    if geo.get('type') == 'LineString':
+                        coords = geo.get('coordinates', [])
+                        break
+                
+                if coords:
+                    current_dist = 0.0
+                    for i in range(len(coords) - 1):
+                        p1 = coords[i]
+                        p2 = coords[i+1]
+                        
+                        # Hitung Jarak Datar (Euclidean 2D)
+                        dist = np.sqrt((p2[0]-p1[0])**2 + (p2[1]-p1[1])**2)
+                        
+                        # Elevasi (Z) - Asumsi koordinat [X, Y, Z]
+                        z1 = p1[2] if len(p1) > 2 else 0
+                        z2 = p2[2] if len(p2) > 2 else 0
+                        
+                        new_rows.append({
+                            "Nama Segmen": f"S{i+1}", 
+                            "STA Awal (m)": current_dist, 
+                            "STA Akhir (m)": current_dist + dist,
+                            "Elev Awal (m)": z1, "Elev Akhir (m)": z2,
+                            "Lebar b (m)": def_b, "Talud m": def_m, 
+                            "Kekasaran n": def_n, "Tinggi Saluran H (m)": 1.5
+                        })
+                        current_dist += dist
+                    
+                    if new_rows:
+                        st.session_state['df_pro'] = pd.DataFrame(new_rows)
+                        st.success(f"Berhasil load {len(new_rows)} segmen dari GeoJSON!")
+                        st.rerun()
+                else:
+                    st.error("Tidak ditemukan LineString dalam GeoJSON.")
+            except Exception as e: st.error(f"Error parse GeoJSON: {e}")
+
+    with tab_csv:
+        up_gis = st.file_uploader("Upload CSV Global Mapper", type=['csv', 'txt'], key="csv_up")
+        if up_gis and st.button("🚀 Load CSV"):
+            try:
+                df_gis = pd.read_csv(up_gis)
+                df_gis.columns = [c.lower() for c in df_gis.columns]
+                col_dist = next((c for c in df_gis.columns if any(x in c for x in ['dist', 'len', 'x', 'sta'])), None)
+                col_elev = next((c for c in df_gis.columns if any(x in c for x in ['elev', 'z', 'height'])), None)
+                
+                if col_dist and col_elev:
+                    new_rows = []
+                    for i in range(len(df_gis) - 1):
+                        d1 = df_gis.iloc[i][col_dist]; d2 = df_gis.iloc[i+1][col_dist]
+                        z1 = df_gis.iloc[i][col_elev]; z2 = df_gis.iloc[i+1][col_elev]
+                        if abs(d2 - d1) < 0.01: continue
+                        new_rows.append({
+                            "Nama Segmen": f"S{i+1}", "STA Awal (m)": d1, "STA Akhir (m)": d2,
+                            "Elev Awal (m)": z1, "Elev Akhir (m)": z2,
+                            "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
+                        })
+                    st.session_state['df_pro'] = pd.DataFrame(new_rows)
+                    st.success(f"Import {len(new_rows)} segmen sukses!")
+                    st.rerun()
+            except Exception as e: st.error(f"Error: {e}")
+
+    st.divider()
     st.subheader("🛠️ Auto-Redesign")
     
-    # --- UPDATE: Set value=True agar menu langsung muncul ---
     use_redesign = st.checkbox("Aktifkan Redesain", value=True) 
     
     target_slope = 0.001; design_b = 1.5; design_m = 1.0; max_drop = 1.5; start_offset = 0.0
@@ -252,7 +351,6 @@ with st.sidebar:
     if use_redesign:
         target_slope = st.number_input("Target S", 0.0001, 0.05, 0.001, format="%.4f")
         design_b = st.number_input("Lebar Desain B (m)", 0.1, 50.0, 0.60)
-        # --- PASTI ADA DI SINI ---
         design_m = st.number_input("Talud Desain m", 0.0, 10.0, 1.0, step=0.1)
         max_drop = st.number_input("Max Drop (m)", 0.5, 5.0, 1.5)
         start_offset = st.number_input("Offset Elevasi STA 0 (+/- m)", -50.0, 50.0, -1.0, step=0.1)
@@ -339,10 +437,10 @@ else:
 
 active_tabs = st.tabs(tab_titles)
 
-# TAB 1: INPUT
+# TAB 1: INPUT (DI SINI MENU EKSISTINGNYA)
 with active_tabs[0]:
-    st.info("💡 Edit data di sini.")
-    st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch')
+    st.info("💡 Edit data Eksisting di sini. Data ini bisa dari hasil upload Excel/GIS di sebelah kiri (sidebar).")
+    st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch', key="editor_input")
 
 idx = 1 
 
@@ -437,7 +535,6 @@ with active_tabs[idx]:
     df_rep = pd.DataFrame(final_data_new if (use_redesign and final_data_new) else final_data_ex)
     
     if not df_rep.empty:
-        # Hanya ambil kolom yang benar-benar ada
         cols_wanted = ['x', 'z', 'ws', 'y_final', 'v', 'fr', 'freeboard', 'regime']
         if 'z_original' in df_rep.columns: cols_wanted.insert(1, 'z_original')
         
@@ -451,7 +548,6 @@ with active_tabs[idx]:
         }
         df_show.rename(columns=rename_map, inplace=True)
         
-        # --- STYLING ---
         def highlight_danger(val):
             return 'background-color: #ffcccc' if val < 0.3 else ''
         
