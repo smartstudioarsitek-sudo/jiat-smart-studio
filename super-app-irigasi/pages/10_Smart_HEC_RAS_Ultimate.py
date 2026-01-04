@@ -100,7 +100,7 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         except: y_calc = yc - 0.01
         target['y_sup'] = y_calc
 
-    # Selection Logic (PERBAIKAN DI SINI)
+    # Selection Logic
     for n in nodes:
         if force_super:
             if n['y_sup'] > 0.011 and n['y_sup'] < 49.0: 
@@ -243,13 +243,16 @@ with st.sidebar:
     
     st.divider()
     st.subheader("🛠️ Auto-Redesign")
-    use_redesign = st.checkbox("Aktifkan Redesain", value=False)
+    
+    # --- UPDATE: Set value=True agar menu langsung muncul ---
+    use_redesign = st.checkbox("Aktifkan Redesain", value=True) 
     
     target_slope = 0.001; design_b = 1.5; design_m = 1.0; max_drop = 1.5; start_offset = 0.0
     
     if use_redesign:
         target_slope = st.number_input("Target S", 0.0001, 0.05, 0.001, format="%.4f")
         design_b = st.number_input("Lebar Desain B (m)", 0.1, 50.0, 0.60)
+        # --- PASTI ADA DI SINI ---
         design_m = st.number_input("Talud Desain m", 0.0, 10.0, 1.0, step=0.1)
         max_drop = st.number_input("Max Drop (m)", 0.5, 5.0, 1.5)
         start_offset = st.number_input("Offset Elevasi STA 0 (+/- m)", -50.0, 50.0, -1.0, step=0.1)
@@ -398,7 +401,6 @@ with active_tabs[idx]:
     
     with col_scr1:
         st.info("📉 **Script Long Section (Memanjang)**")
-        # Pilih data mana yang mau di export
         data_choice = st.radio("Pilih Data:", ["Eksisting", "Redesain"], horizontal=True)
         nodes_to_export = all_nodes_new if (data_choice == "Redesain" and use_redesign) else all_nodes_ex
         
@@ -415,7 +417,6 @@ with active_tabs[idx]:
 
     with col_scr2:
         st.info("❌ **Script Cross Section (Melintang)**")
-        # Parameter Grid
         grid_x = st.number_input("Jarak Antar Gambar Horizontal (m)", 10, 100, 30)
         grid_y = st.number_input("Jarak Antar Gambar Vertikal (m)", 10, 100, 20)
         
@@ -433,20 +434,16 @@ idx += 1
 with active_tabs[idx]:
     st.subheader("📋 Laporan Analisis Hidrolika")
     
-    # Pilih dataset
     df_rep = pd.DataFrame(final_data_new if (use_redesign and final_data_new) else final_data_ex)
     
     if not df_rep.empty:
-        # Pengecekan kolom agar tidak KeyError lagi
+        # Hanya ambil kolom yang benar-benar ada
         cols_wanted = ['x', 'z', 'ws', 'y_final', 'v', 'fr', 'freeboard', 'regime']
         if 'z_original' in df_rep.columns: cols_wanted.insert(1, 'z_original')
         
-        # Hanya ambil kolom yang benar-benar ada di dataframe
         existing_cols = [c for c in cols_wanted if c in df_rep.columns]
-        
         df_show = df_rep[existing_cols].copy()
         
-        # Rename agar cantik
         rename_map = {
             'x': 'Station (m)', 'z': 'Elev Dasar (m)', 'z_original': 'Tanah Asli (m)',
             'ws': 'Muka Air (m)', 'y_final': 'Kedalaman (m)', 'v': 'Kecepatan (m/s)',
@@ -454,16 +451,13 @@ with active_tabs[idx]:
         }
         df_show.rename(columns=rename_map, inplace=True)
         
-        # --- STYLING PANDAS ---
+        # --- STYLING ---
         def highlight_danger(val):
-            color = '#ffcccc' if val < 0.3 else '' 
-            return f'background-color: {color}'
+            return 'background-color: #ffcccc' if val < 0.3 else ''
         
         def highlight_froude(val):
             return 'color: purple; font-weight: bold' if val > 1 else ''
 
-        # Apply Style
-        # Cek dulu apakah kolom Freeboard/Froude ada sebelum apply map (untuk safety)
         styler = df_show.style.format("{:.2f}", subset=[c for c in df_show.columns if c != 'Status'])\
             .set_properties(**{'text-align': 'center'})\
             .set_table_styles([{'selector': 'th','props': [('background-color', '#4CAF50'), ('color', 'white')]}])
@@ -475,7 +469,6 @@ with active_tabs[idx]:
             
         st.dataframe(styler, height=500, use_container_width=True)
         
-        # Download Button
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             df_show.to_excel(writer, index=False, sheet_name='Laporan')
