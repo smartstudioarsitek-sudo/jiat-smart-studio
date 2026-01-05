@@ -8,33 +8,6 @@ import json
 # --- CONFIG ---
 st.set_page_config(page_title="Smart HEC-RAS Ultimate", layout="wide", page_icon="🏗️")
 
-# --- 2. SETUP & STATE (PASTIKAN INI ADA DI ATAS SIDEBAR) ---
-
-# Definisikan kolom wajib termasuk kolom baru "Slope Desain S"
-REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", 
-                 "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)", "Slope Desain S"]
-
-def reset_data():
-    # Default data dengan kolom Slope
-    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5, 0.001]], columns=REQUIRED_COLS)
-
-# --- BAGIAN PENTING (INI YANG HILANG/KELEWAT) ---
-if 'df_pro' not in st.session_state: 
-    st.session_state['df_pro'] = reset_data()
-
-if 'q_pro' not in st.session_state: 
-    st.session_state['q_pro'] = 0.24  # <--- Ini obat errornya
-
-if 'ws_down' not in st.session_state: 
-    st.session_state['ws_down'] = 0.5
-
-if 'ws_up' not in st.session_state: 
-    st.session_state['ws_up'] = 0.2 
-# ------------------------------------------------
-
-# --- UI SIDEBAR (BARU BOLEH DI BAWAH SINI) ---
-# ...
-
 st.markdown("""
 <style>
     .header-box { padding: 20px; background: linear-gradient(90deg, #134E5E, #71B280); color: white; border-radius: 8px; text-align: center; margin-bottom: 20px; }
@@ -250,9 +223,8 @@ def generate_cross_section_scr(nodes, dataset_name="Desain", spacing_x=20, spaci
     s += "ZOOM E\n"
     return s
 
-# --- 2. SETUP & STATE ---
-
-# Definisi Kolom Wajib (Gabungan Eksisting + Desain)
+# --- 2. SETUP & STATE (ANTI ERROR) ---
+# Daftar kolom wajib lengkap dengan parameter desain per segmen
 REQUIRED_COLS = [
     "Nama Segmen", "STA Awal (m)", "STA Akhir (m)", 
     "Elev Awal (m)", "Elev Akhir (m)", 
@@ -262,45 +234,43 @@ REQUIRED_COLS = [
 ]
 
 def reset_data():
-    # Data Default S1
+    # Data Default dengan desain
     return pd.DataFrame([
         ["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5, 0.001, 0.6, 1.0, 1.5]
     ], columns=REQUIRED_COLS)
 
-# 1. Inisialisasi Data jika belum ada
+# Inisialisasi State DataFrame
 if 'df_pro' not in st.session_state: 
     st.session_state['df_pro'] = reset_data()
 
-# 2. MIGRASI STRUKTUR TABEL (Auto-Fix Columns)
-# Ini fungsi "pembersih" otomatis yang bekerja langsung di memori
-# Tujuannya: Menghapus kolom lama "Slope Desain S" & Menambah kolom Desain baru
+# --- BLOK "PENAMBAL" DATA OTOMATIS (SAFE MODE) ---
+# Bagian ini memastikan tidak ada error saat struktur data berubah
 try:
-    temp_df = st.session_state['df_pro'].copy()
-    has_changes = False
-
-    # A. Hapus kolom lama yang tidak dipakai lagi
-    if "Slope Desain S" in temp_df.columns:
-        temp_df = temp_df.drop(columns=["Slope Desain S"])
-        has_changes = True
-
-    # B. Tambahkan 4 kolom desain baru jika belum ada
-    defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5}
-    for col, val in defaults.items():
-        if col not in temp_df.columns:
-            temp_df[col] = val
-            has_changes = True
+    current_df = st.session_state['df_pro'].copy()
+    is_changed = False
     
-    # C. Simpan perubahan ke memori aplikasi
-    if has_changes:
-        st.session_state['df_pro'] = temp_df
+    # 1. Hapus kolom "Slope Desain S" jika ada (karena sudah diganti Desain S yang baru)
+    if "Slope Desain S" in current_df.columns:
+        current_df = current_df.drop(columns=["Slope Desain S"])
+        is_changed = True
 
+    # 2. Tambah kolom desain baru jika belum ada
+    defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5}
+    for col_name, default_val in defaults.items():
+        if col_name not in current_df.columns:
+            current_df[col_name] = default_val
+            is_changed = True
+            
+    if is_changed:
+        st.session_state['df_pro'] = current_df
 except Exception as e:
-    st.error(f"Gagal migrasi data: {e}")
+    st.error(f"Auto-fix data error: {e}")
+    st.session_state['df_pro'] = reset_data()
 
-# 3. Inisialisasi Variable Lain
+# Inisialisasi Variable Lain
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
 if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
-if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2
+if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 
 
 # --- UI SIDEBAR ---
 st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>Excel • GeoJSON/GIS • AutoCAD Export</p></div>""", unsafe_allow_html=True)
@@ -315,20 +285,8 @@ with st.sidebar:
     
     # TAB UPLOAD
     tab_ex, tab_gis, tab_csv = st.tabs(["📄 Excel", "🌍 GeoJSON", "🔢 CSV"])
-
-  # ... (setelah df terbentuk dari upload excel/gis) ...
-
-# 2. Tambahkan 4 Kolom Desain Baru dengan nilai default aman
-defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5}
-
-for col, val in defaults.items():
-    if col not in df.columns:
-        df[col] = val
-
-# ... (lanjutkan simpan ke session_state) ...
-  
+    
     with tab_ex:
-        # TOMBOL DOWNLOAD TEMPLATE
         buffer_template = io.BytesIO()
         with pd.ExcelWriter(buffer_template, engine='xlsxwriter') as writer:
             reset_data().to_excel(writer, index=False)
@@ -339,27 +297,18 @@ for col, val in defaults.items():
         if up_excel:
             try:
                 df = pd.read_excel(up_excel)
-                # Normalisasi Nama Kolom (Agar huruf besar/kecil tidak masalah)
                 df.columns = [c.strip() for c in df.columns] 
-
-                # ... (setelah df terbentuk dari upload) ...
-
-                # SAFETY: Cek apakah kolom "Slope Desain S" ada, jika tidak, buat dengan default
-                if "Slope Desain S" not in df.columns:
-                    df["Slope Desain S"] = 0.001 # Default value
-
-                # ... (lanjutkan code seperti biasa) ...
                 
-                # Cek kolom kunci
+                # Auto-Add Design Columns saat upload file baru
+                design_defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5}
+                for d_col, d_val in design_defaults.items():
+                    if d_col not in df.columns:
+                        df[d_col] = d_val
+
                 if "Elev Awal (m)" in df.columns:
                     st.session_state['df_pro'] = df
-                    
-                    # --- FIX PENTING: RESET EDITOR CACHE ---
-                    # Ini yang bikin tabel tadi gak berubah meski data sudah masuk
-                    if 'editor_input' in st.session_state:
-                        del st.session_state['editor_input']
-                        
-                    st.success("Data Excel berhasil dimuat! Tabel akan diperbarui...")
+                    if 'editor_input' in st.session_state: del st.session_state['editor_input']
+                    st.success("Data Excel berhasil dimuat!")
                     st.rerun()
                 else:
                     st.error(f"Format Salah. Kolom ditemukan: {list(df.columns)}")
@@ -371,7 +320,6 @@ for col, val in defaults.items():
         
         def_b = st.number_input("Default Lebar (b)", 0.1, 50.0, 2.0, key="def_b")
         def_m = st.number_input("Default Talud (m)", 0.0, 10.0, 1.0, key="def_m")
-        def_n = st.number_input("Default Manning (n)", 0.001, 0.1, 0.025, format="%.3f", key="def_n")
         
         if up_geo and st.button("🚀 Load GIS"):
             try:
@@ -399,7 +347,9 @@ for col, val in defaults.items():
                             "STA Akhir (m)": current_dist + dist,
                             "Elev Awal (m)": z1, "Elev Akhir (m)": z2,
                             "Lebar b (m)": def_b, "Talud m": def_m, 
-                            "Kekasaran n": def_n, "Tinggi Saluran H (m)": 1.5
+                            "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5,
+                            # Default Desain
+                            "Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5
                         })
                         current_dist += dist
                     
@@ -430,7 +380,9 @@ for col, val in defaults.items():
                         new_rows.append({
                             "Nama Segmen": f"S{i+1}", "STA Awal (m)": d1, "STA Akhir (m)": d2,
                             "Elev Awal (m)": z1, "Elev Akhir (m)": z2,
-                            "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5
+                            "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5,
+                            # Default Desain
+                            "Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5
                         })
                     st.session_state['df_pro'] = pd.DataFrame(new_rows)
                     if 'editor_input' in st.session_state: del st.session_state['editor_input']
@@ -442,73 +394,15 @@ for col, val in defaults.items():
     st.subheader("🛠️ Auto-Redesign")
     
     use_redesign = st.checkbox("Aktifkan Redesain", value=True) 
-    
-    target_slope = 0.001; design_b = 1.5; design_m = 1.0; max_drop = 1.5; start_offset = 0.0
-    
     if use_redesign:
-        target_slope = st.number_input("Target S", 0.0001, 0.05, 0.001, format="%.4f")
-        design_b = st.number_input("Lebar Desain B (m)", 0.1, 50.0, 0.60)
-        design_m = st.number_input("Talud Desain m", 0.0, 10.0, 1.0, step=0.1)
-        max_drop = st.number_input("Max Drop (m)", 0.5, 5.0, 1.5)
-        start_offset = st.number_input("Offset Elevasi STA 0 (+/- m)", -50.0, 50.0, -1.0, step=0.1)
+        st.info("ℹ️ Atur parameter desain (Slope, Lebar, Talud) langsung di Tabel Input Data.")
     
     st.divider()
     if st.button("Reset Data"): 
         st.session_state['df_pro'] = reset_data()
         if 'editor_input' in st.session_state: del st.session_state['editor_input']
         st.rerun()
-# --- 2. SETUP & STATE ---
 
-# Definisi Kolom Baru (Eksisting + Desain)
-REQUIRED_COLS = [
-    "Nama Segmen", "STA Awal (m)", "STA Akhir (m)", 
-    "Elev Awal (m)", "Elev Akhir (m)", 
-    "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)",
-    # --- KOLOM DESAIN BARU ---
-    "Desain S", "Desain B (m)", "Desain m", "Max Drop (m)"
-]
-
-def reset_data():
-    # Data Default
-    return pd.DataFrame([
-        ["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5, 0.001, 0.6, 1.0, 1.5]
-    ], columns=REQUIRED_COLS)
-
-# Inisialisasi Session State (Memori)
-if 'df_pro' not in st.session_state: 
-    st.session_state['df_pro'] = reset_data()
-
-# --- MULAI PERBAIKAN (PATCH) DI SINI ---
-# Kita mainkan langsung di session_state agar tidak ada NameError
-
-# 1. Ambil data dari memori sementara
-temp_df = st.session_state['df_pro'].copy()
-
-# 2. Hapus kolom lama "Slope Desain S" jika masih nyangkut
-if "Slope Desain S" in temp_df.columns:
-    temp_df = temp_df.drop(columns=["Slope Desain S"])
-
-# 3. Suntikkan Kolom Desain Baru jika belum ada (Safe Default)
-defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5}
-data_changed = False
-
-for col, val in defaults.items():
-    if col not in temp_df.columns:
-        temp_df[col] = val
-        data_changed = True
-
-# 4. Jika ada perubahan struktur, simpan balik ke memori
-if data_changed or "Slope Desain S" not in st.session_state['df_pro'].columns: 
-    # Logic: simpan kalau ada kolom baru atau kolom lama sudah dihapus di temp
-    st.session_state['df_pro'] = temp_df
-
-# --- SELESAI PERBAIKAN ---
-
-# Variable lain...
-if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
-if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
-if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2
-  
 # --- MAIN LOGIC ---
 df = st.session_state['df_pro']
 profile_ex = {'x': [], 'z': [], 'ws': [], 'crit': [], 'bank': []} 
@@ -552,39 +446,42 @@ if not df.empty:
                 profile_ex['bank'].append(n['bank_elev'])
                 final_data_ex.append(n)
 
-        # 2. REDESAIN
+        # 2. REDESAIN (VERSI BARU PER SEGMEN)
         if use_redesign and len(nodes_ex) > 0:
             nodes_new = []
             start_z_original = nodes_ex[0]['z']
             
-            # --- MODIFIKASI DIMULAI DISINI ---
-            # 1. Buat Dictionary Map biar gampang cari slope berdasarkan nama segmen
-            #    Format: {'S1': 0.002, 'S2': 0.005, ...}
-            seg_map_slope = df.set_index('Nama Segmen')['Slope Desain S'].to_dict()
+            # Buat Dictionary Map Desain agar cepat
+            design_map = {}
+            if "Desain S" in df.columns:
+                 design_map = df.set_index('Nama Segmen')[['Desain S', 'Desain B (m)', 'Desain m', 'Max Drop (m)']].to_dict('index')
             
-            current_z = start_z_original + start_offset 
+            current_z = start_z_original 
             
             for i, n in enumerate(nodes_ex):
-                # Ambil nama segmen dari node saat ini
                 seg_name = n['seg']
                 
-                # Ambil slope spesifik segmen tersebut (fallback ke target_slope global jika error)
-                local_slope = seg_map_slope.get(seg_name, target_slope) 
+                # Default Params jika tidak ada di map
+                params = design_map.get(seg_name, {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5})
+                
+                curr_S = params.get("Desain S", 0.001)
+                curr_B = params.get("Desain B (m)", 0.6)
+                curr_m = params.get("Desain m", 1.0)
+                curr_Drop = params.get("Max Drop (m)", 1.5)
 
                 if i > 0:
                     dx = n['x'] - nodes_ex[i-1]['x']
-                    # Hitung penurunan elevasi berdasarkan slope LOKAL segmen ini
-                    current_z -= dx * local_slope
+                    # Penurunan elevasi berdasarkan S lokal segmen ini
+                    current_z -= dx * curr_S
                 
-                # Logic Drop Structure (Terjun)
-                if (current_z - n['z']) > max_drop:
+                # Drop Structure Check
+                if (current_z - n['z']) > curr_Drop:
                       current_z = n['z']; profile_new['drops'].append(n['x'])
 
                 nodes_new.append({
-                    "x": n['x'], "z": current_z, "b": design_b, "m": design_m, 
-                    "n": 0.025, "seg": n['seg'], "h_ch": n['h_ch']
+                    "x": n['x'], "z": current_z, "b": curr_B, "m": curr_m, 
+                    "n": 0.025, "seg": seg_name, "h_ch": n['h_ch']
                 })
-            # --- MODIFIKASI SELESAI ---
             
             res_new = calculate_profiles(nodes_new, st.session_state['q_pro'], 1.0, 1.0, False)
             all_nodes_new = res_new 
@@ -593,7 +490,7 @@ if not df.empty:
                 n['z_original'] = next((ex['z'] for ex in nodes_ex if abs(ex['x'] - n['x']) < 0.01), 0)
                 final_data_new.append(n)
 
-    except Exception as e: st.error(f"Error: {e}")
+    except Exception as e: st.error(f"Error Main Logic: {e}")
 
 # --- TABS UI ---
 if use_redesign:
@@ -605,8 +502,7 @@ active_tabs = st.tabs(tab_titles)
 
 # TAB 1: INPUT
 with active_tabs[0]:
-    st.info("💡 Edit data Eksisting di sini. Data ini bisa dari hasil upload Excel/GIS di sebelah kiri (sidebar).")
-    # KEY DITAMBAHKAN AGAR BISA DI-RESET
+    st.info("💡 Edit data Eksisting & Parameter Desain di sini.")
     st.data_editor(st.session_state['df_pro'], num_rows="dynamic", width='stretch', key="editor_input")
 
 idx = 1 
