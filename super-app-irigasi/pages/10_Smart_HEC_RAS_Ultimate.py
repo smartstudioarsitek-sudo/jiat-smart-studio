@@ -252,25 +252,52 @@ def generate_cross_section_scr(nodes, dataset_name="Desain", spacing_x=20, spaci
 
 # --- 2. SETUP & STATE ---
 
-# Kolom Data Eksisting + 4 Kolom Baru untuk Parameter Desain
+# Definisi Kolom Wajib (Gabungan Eksisting + Desain)
 REQUIRED_COLS = [
     "Nama Segmen", "STA Awal (m)", "STA Akhir (m)", 
     "Elev Awal (m)", "Elev Akhir (m)", 
     "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)",
-    # --- KOLOM DESAIN BARU (Per Segmen) ---
+    # --- KOLOM DESAIN BARU ---
     "Desain S", "Desain B (m)", "Desain m", "Max Drop (m)"
 ]
 
 def reset_data():
-    # S1 punya default: S=0.001, B=0.6, m=1.0, Drop=1.5
+    # Data Default S1
     return pd.DataFrame([
         ["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5, 0.001, 0.6, 1.0, 1.5]
     ], columns=REQUIRED_COLS)
 
+# 1. Inisialisasi Data jika belum ada
 if 'df_pro' not in st.session_state: 
     st.session_state['df_pro'] = reset_data()
 
-# Variable default global (untuk inisialisasi saja)
+# 2. MIGRASI STRUKTUR TABEL (Auto-Fix Columns)
+# Ini fungsi "pembersih" otomatis yang bekerja langsung di memori
+# Tujuannya: Menghapus kolom lama "Slope Desain S" & Menambah kolom Desain baru
+try:
+    temp_df = st.session_state['df_pro'].copy()
+    has_changes = False
+
+    # A. Hapus kolom lama yang tidak dipakai lagi
+    if "Slope Desain S" in temp_df.columns:
+        temp_df = temp_df.drop(columns=["Slope Desain S"])
+        has_changes = True
+
+    # B. Tambahkan 4 kolom desain baru jika belum ada
+    defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5}
+    for col, val in defaults.items():
+        if col not in temp_df.columns:
+            temp_df[col] = val
+            has_changes = True
+    
+    # C. Simpan perubahan ke memori aplikasi
+    if has_changes:
+        st.session_state['df_pro'] = temp_df
+
+except Exception as e:
+    st.error(f"Gagal migrasi data: {e}")
+
+# 3. Inisialisasi Variable Lain
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
 if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
 if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2
@@ -290,10 +317,6 @@ with st.sidebar:
     tab_ex, tab_gis, tab_csv = st.tabs(["📄 Excel", "🌍 GeoJSON", "🔢 CSV"])
 
   # ... (setelah df terbentuk dari upload excel/gis) ...
-
-# 1. Hapus kolom "Slope Desain S" lama jika ada (sesuai request)
-if "Slope Desain S" in df.columns:
-    df = df.drop(columns=["Slope Desain S"])
 
 # 2. Tambahkan 4 Kolom Desain Baru dengan nilai default aman
 defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5}
