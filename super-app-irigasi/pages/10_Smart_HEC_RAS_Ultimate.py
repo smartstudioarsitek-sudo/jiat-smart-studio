@@ -224,15 +224,13 @@ def generate_cross_section_scr(nodes, dataset_name="Desain", spacing_x=20, spaci
     return s
 
 # --- 2. SETUP & STATE ---
-REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)"]
+# Tambahkan "Slope Desain S" ke daftar kolom wajib
+REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", 
+                 "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)", "Slope Desain S"]
 
 def reset_data():
-    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5]], columns=REQUIRED_COLS)
-
-if 'df_pro' not in st.session_state: st.session_state['df_pro'] = reset_data()
-if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
-if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
-if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 
+    # Tambahkan nilai default slope (misal 0.001) di kolom terakhir
+    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5, 0.001]], columns=REQUIRED_COLS)
 
 # --- UI SIDEBAR ---
 st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>Excel • GeoJSON/GIS • AutoCAD Export</p></div>""", unsafe_allow_html=True)
@@ -262,6 +260,14 @@ with st.sidebar:
                 df = pd.read_excel(up_excel)
                 # Normalisasi Nama Kolom (Agar huruf besar/kecil tidak masalah)
                 df.columns = [c.strip() for c in df.columns] 
+
+                # ... (setelah df terbentuk dari upload) ...
+
+                # SAFETY: Cek apakah kolom "Slope Desain S" ada, jika tidak, buat dengan default
+                if "Slope Desain S" not in df.columns:
+                    df["Slope Desain S"] = 0.001 # Default value
+
+                # ... (lanjutkan code seperti biasa) ...
                 
                 # Cek kolom kunci
                 if "Elev Awal (m)" in df.columns:
@@ -418,20 +424,35 @@ if not df.empty:
         if use_redesign and len(nodes_ex) > 0:
             nodes_new = []
             start_z_original = nodes_ex[0]['z']
+            
+            # --- MODIFIKASI DIMULAI DISINI ---
+            # 1. Buat Dictionary Map biar gampang cari slope berdasarkan nama segmen
+            #    Format: {'S1': 0.002, 'S2': 0.005, ...}
+            seg_map_slope = df.set_index('Nama Segmen')['Slope Desain S'].to_dict()
+            
             current_z = start_z_original + start_offset 
             
             for i, n in enumerate(nodes_ex):
+                # Ambil nama segmen dari node saat ini
+                seg_name = n['seg']
+                
+                # Ambil slope spesifik segmen tersebut (fallback ke target_slope global jika error)
+                local_slope = seg_map_slope.get(seg_name, target_slope) 
+
                 if i > 0:
                     dx = n['x'] - nodes_ex[i-1]['x']
-                    current_z -= dx * target_slope
+                    # Hitung penurunan elevasi berdasarkan slope LOKAL segmen ini
+                    current_z -= dx * local_slope
                 
+                # Logic Drop Structure (Terjun)
                 if (current_z - n['z']) > max_drop:
-                     current_z = n['z']; profile_new['drops'].append(n['x'])
+                      current_z = n['z']; profile_new['drops'].append(n['x'])
 
                 nodes_new.append({
                     "x": n['x'], "z": current_z, "b": design_b, "m": design_m, 
                     "n": 0.025, "seg": n['seg'], "h_ch": n['h_ch']
                 })
+            # --- MODIFIKASI SELESAI ---
             
             res_new = calculate_profiles(nodes_new, st.session_state['q_pro'], 1.0, 1.0, False)
             all_nodes_new = res_new 
