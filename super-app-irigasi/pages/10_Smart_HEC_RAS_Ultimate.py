@@ -6,7 +6,7 @@ import io
 import json
 
 # --- 1. KONFIGURASI HALAMAN & CSS ---
-st.set_page_config(page_title="Smart HEC-RAS Ultimate V3", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="Smart HEC-RAS Ultimate V3.1", layout="wide", page_icon="🏗️")
 
 st.markdown("""
 <style>
@@ -112,7 +112,6 @@ def calculate_profiles(nodes, boundary_down, boundary_up, force_super=False):
             n['y_final'] = n['y_sup'] if (0.011 < n['y_sup'] < 49.0) else n['yc']
             n['regime'] = "Supercritical"
         else:
-            # Bandingkan Momentum (Simplifikasi: Ambil Subkritis jika valid)
             n['y_final'] = n['y_sub']
             n['regime'] = "Subcritical"
         
@@ -140,7 +139,7 @@ def generate_bbws_scr(nodes, dataset_name="DESAIN", distorsi_v=10):
     layers = [
         (f"{dataset_name}_TANAH", 34, 'z'),
         (f"{dataset_name}_AIR", 150, 'ws'),
-        (f"{dataset_name}_STRUKTUR", 7, 'bank_elev') # Menggunakan elevasi tanggul
+        (f"{dataset_name}_STRUKTUR", 7, 'bank_elev') 
     ]
 
     for lay_name, color, key in layers:
@@ -163,6 +162,7 @@ def generate_bbws_scr(nodes, dataset_name="DESAIN", distorsi_v=10):
 # --- 4. STATE MANAGEMENT & DATA DEFAULT ---
 if 'results_ex' not in st.session_state: st.session_state['results_ex'] = None
 
+# Pastikan nama kolom konsisten
 REQUIRED_COLS = [
     "Nama Segmen", "STA Awal (m)", "STA Akhir (m)", 
     "Elev Awal (m)", "Elev Akhir (m)", 
@@ -176,19 +176,18 @@ def reset_data():
     ], columns=REQUIRED_COLS)
 
 if 'df_pro' not in st.session_state: st.session_state['df_pro'] = reset_data()
-if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
 if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
 if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2
 
-# --- 5. UI: SIDEBAR (IMPORT EXCEL ADA DISINI) ---
+# --- 5. UI: SIDEBAR (IMPORT) ---
 with st.sidebar:
     st.header("📂 Import Data")
     
-    # --- BAGIAN IMPORT (EXCEL KEMBALI!) ---
+    # --- BAGIAN IMPORT ---
     tab_ex, tab_gis, tab_csv = st.tabs(["📄 Excel", "🌍 GeoJSON", "🔢 CSV"])
     
     with tab_ex:
-        st.info("Upload file .xlsx (Format Kolom Bebas, nanti otomatis dipetakan).")
+        st.info("Upload file .xlsx")
         
         # TOMBOL DOWNLOAD TEMPLATE
         buffer_template = io.BytesIO()
@@ -196,7 +195,7 @@ with st.sidebar:
             reset_data().to_excel(writer, index=False)
         st.download_button("📥 Download Template Excel", buffer_template.getvalue(), "Template_Saluran.xlsx")
 
-        # TOMBOL UPLOAD EXCEL (INI YANG KAKAK CARI)
+        # TOMBOL UPLOAD EXCEL
         up_excel = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_up")
         
         if up_excel:
@@ -204,9 +203,9 @@ with st.sidebar:
                 df = pd.read_excel(up_excel)
                 df.columns = [c.strip() for c in df.columns]
                 
-                # Auto-Add Design Columns jika user upload excel mentah
-                design_defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5, "Debit Q (m3/s)": st.session_state['q_pro']}
-                for d_col, d_val in design_defaults.items():
+                # Auto-Add Columns jika tidak ada di Excel
+                defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5, "Debit Q (m3/s)": 0.5, "Tinggi Saluran H (m)": 1.5}
+                for d_col, d_val in defaults.items():
                     if d_col not in df.columns: df[d_col] = d_val
                 
                 if "Elev Awal (m)" in df.columns:
@@ -220,7 +219,6 @@ with st.sidebar:
         st.caption("Upload GeoJSON LineString")
         up_geo = st.file_uploader("Upload GeoJSON", type=['geojson', 'json'])
         if up_geo and st.button("Load GIS"):
-            # (Logika Parsing GeoJSON Sederhana)
             try:
                 data = json.load(up_geo)
                 features = data.get('features', [])
@@ -233,7 +231,7 @@ with st.sidebar:
                     new_rows.append({
                         "Nama Segmen": f"S{i}", "STA Awal (m)": dist_acum, "STA Akhir (m)": dist_acum+dist,
                         "Elev Awal (m)": p1[2], "Elev Akhir (m)": p2[2],
-                        "Debit Q (m3/s)": st.session_state['q_pro'], "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5,
+                        "Debit Q (m3/s)": 0.5, "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5,
                         "Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5
                     })
                     dist_acum += dist
@@ -243,21 +241,19 @@ with st.sidebar:
 
     st.divider()
     st.subheader("⚙️ Parameter")
-    st.session_state['q_pro'] = st.number_input("Debit Default (Q)", 0.0, 1000.0, st.session_state['q_pro'])
     force_super = st.checkbox("Force Supercritical", False)
     
     if st.button("Reset Semua Data"):
         st.session_state['df_pro'] = reset_data()
         st.rerun()
 
-# --- 6. UI: MAIN AREA (HEADER & TOOLBAR) ---
-st.markdown('<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate V3</h1><p>Input Excel • Run Analysis • Export BBWS CAD</p></div>', unsafe_allow_html=True)
+# --- 6. UI: MAIN AREA ---
+st.markdown('<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate V3.1</h1><p>Input Excel • Run Analysis • Export BBWS CAD</p></div>', unsafe_allow_html=True)
 
-# TOOLBAR BUTTONS
+# TOOLBAR
 col1, col2, col3, col4 = st.columns([2, 2, 2, 3])
 
 with col1:
-    # SAVE/OPEN PROJECT (JSON)
     up_proj = st.file_uploader("📂 Buka Project (.json)", type=['json'], label_visibility='collapsed')
     if up_proj:
         st.session_state['df_pro'] = pd.DataFrame(json.load(up_proj))
@@ -267,38 +263,46 @@ with col2:
     st.download_button("💾 Simpan Project", proj_json, "Project.json", "application/json", use_container_width=True)
 
 with col3:
-    # TOMBOL RUN (PENTING AGAR TIDAK BERAT)
     run_calc = st.button("🚀 RUN ANALISIS", type="primary", use_container_width=True)
 
 with col4:
-    st.caption("Klik RUN setelah update Excel/Tabel. Data tidak akan dihitung otomatis agar aplikasi ringan.")
+    st.caption("Klik RUN setelah update Excel/Tabel.")
 
-# --- 7. LOGIKA RUNNING ---
+# --- 7. LOGIKA RUNNING (ANTI-CRASH) ---
 if run_calc:
-    with st.spinner("Sedang Menghitung Profil Hidrolika..."):
+    with st.spinner("Sedang Menghitung..."):
         try:
             df = st.session_state['df_pro'].sort_values("STA Awal (m)")
             segments = df.to_dict('records')
             nodes_ex = []
             
-            # GENERATE NODES
             for idx, seg in enumerate(segments):
-                L = seg['STA Akhir (m)'] - seg['STA Awal (m)']
+                L = seg.get('STA Akhir (m)', 0) - seg.get('STA Awal (m)', 0)
                 if L <= 0: continue
-                n_steps = max(1, int(L / 2.0)) # Step per 2 meter
+                n_steps = max(1, int(L / 2.0))
                 dx = L / n_steps
-                slope = (seg['Elev Awal (m)'] - seg['Elev Akhir (m)']) / L
+                z1 = seg.get('Elev Awal (m)', 0)
+                z2 = seg.get('Elev Akhir (m)', 0)
+                slope = (z1 - z2) / L
+                
+                # AMBIL PARAMETER DENGAN NILAI DEFAULT (ANTI ERROR)
+                q_seg = seg.get('Debit Q (m3/s)', 0.5)
+                if pd.isna(q_seg) or q_seg == '': q_seg = 0.5
+                
+                b_seg = seg.get('Lebar b (m)', 1.0)
+                m_seg = seg.get('Talud m', 1.0)
+                n_seg = seg.get('Kekasaran n', 0.025)
+                h_seg = seg.get('Tinggi Saluran H (m)', 1.5) # <-- FIX ERROR DISINI
                 
                 for i in range(n_steps + 1):
                     nodes_ex.append({
                         "x": seg['STA Awal (m)'] + i*dx,
-                        "z": seg['Elev Awal (m)'] - i*dx*slope,
-                        "b": seg['Lebar b (m)'], "m": seg['Talud m'],
-                        "n": seg['Kekasaran n'], "h_ch": seg['Tinggi Saluran H (m)'],
-                        "Q": seg.get('Debit Q (m3/s)', st.session_state['q_pro'])
+                        "z": z1 - i*dx*slope,
+                        "b": b_seg, "m": m_seg,
+                        "n": n_seg, "h_ch": h_seg,
+                        "Q": q_seg
                     })
             
-            # HITUNG
             if nodes_ex:
                 res = calculate_profiles(nodes_ex, st.session_state['ws_down'], st.session_state['ws_up'], force_super)
                 st.session_state['results_ex'] = res
@@ -308,47 +312,8 @@ if run_calc:
         except Exception as e:
             st.error(f"Error Running: {e}")
 
-# --- 8. HASIL (TABS) ---
+# --- 8. HASIL ---
 tab_input, tab_viz, tab_export, tab_report = st.tabs(["📝 Input Data", "📊 Grafik Profil", "📑 Export BBWS", "📋 Laporan"])
 
 with tab_input:
-    # Editor Tabel (Bisa diedit manual juga selain upload excel)
-    st.session_state['df_pro'] = st.data_editor(st.session_state['df_pro'], num_rows="dynamic", use_container_width=True)
-
-with tab_viz:
-    if st.session_state['results_ex']:
-        res = st.session_state['results_ex']
-        x = [n['x'] for n in res]; z = [n['z'] for n in res]; ws = [n['ws'] for n in res]
-        
-        fig, ax = plt.subplots(figsize=(12, 5))
-        ax.plot(x, z, 'k-', label='Dasar Saluran')
-        ax.plot(x, ws, 'b-', label='Muka Air')
-        ax.fill_between(x, z, ws, color='#00eaff', alpha=0.3)
-        ax.set_title("Longitudinal Profile")
-        ax.legend(); ax.grid(True, linestyle='--', alpha=0.5)
-        st.pyplot(fig)
-    else:
-        st.info("Klik tombol 'RUN ANALISIS' di atas untuk melihat grafik.")
-
-with tab_export:
-    st.subheader("📦 Export ke AutoCAD (Standar BBWS)")
-    c1, c2 = st.columns(2)
-    with c1:
-        distorsi = st.slider("Distorsi Vertikal (V)", 1, 20, 10, help="BBWS biasanya pakai 1:10 (H=1000, V=100)")
-    with c2:
-        if st.session_state['results_ex']:
-            scr = generate_bbws_scr(st.session_state['results_ex'], "EKSISTING", distorsi)
-            st.download_button("📥 Download Script (.SCR)", scr, "LongSection_BBWS.scr")
-        else:
-            st.warning("Belum ada hasil analisis.")
-
-with tab_report:
-    if st.session_state['results_ex']:
-        res_df = pd.DataFrame(st.session_state['results_ex'])[['x','z','ws','y_final','v','fr','regime']]
-        st.dataframe(res_df.style.format("{:.2f}"))
-        
-        # Download Excel Report
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer) as writer:
-            res_df.to_excel(writer, index=False)
-        st.download_button("📥 Download Laporan Excel", buffer.getvalue(), "Laporan_Hidrolika.xlsx")
+    st.session_state['df_pro'] = st.data_editor(st.session_state['df_pro'], num_rows="dynamic", use_container_width=
