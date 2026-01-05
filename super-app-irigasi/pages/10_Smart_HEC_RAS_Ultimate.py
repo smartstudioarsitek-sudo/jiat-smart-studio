@@ -44,6 +44,7 @@ def get_geom_props(y, b, m, Q):
 
 def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
     g = 9.81
+    # Note: Properties 1 use the same Q as step
     A1, P1, R1, T1, M1 = get_geom_props(y_known, b, m, Q)
     V1 = Q/A1
     H1 = Z1 + y_known + (V1**2)/(2*g)
@@ -72,37 +73,50 @@ def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
             else: y_max = y_mid
     return (y_min + y_max)/2
 
-def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
+# MODIFIED: Q dihapus dari argumen fungsi global, diambil dari properti node
+def calculate_profiles(nodes, boundary_down, boundary_up, force_super=False):
+    # 1. Hitung Critical Depth & Init Vars (Pakai Q masing-masing node)
     for n in nodes:
-        n['yc'] = get_critical_depth(Q, n['b'], n['m'])
+        Q_local = n.get('Q', 0.5) # Ambil Q dari node
+        n['yc'] = get_critical_depth(Q_local, n['b'], n['m'])
         n['y_sub'] = 0.0; n['y_sup'] = 0.0; n['y_final'] = 0.0 
     
-    # Subcritical
+    # Subcritical Calculation
     nodes[-1]['y_sub'] = boundary_down
     for i in range(len(nodes)-2, -1, -1):
         dx = nodes[i+1]['x'] - nodes[i]['x']
         known, target = nodes[i+1], nodes[i]
+        
+        # GUNAKAN Q DARI SEGMEN TARGET
+        Q_calc = target.get('Q', 0.5) 
         yc = target['yc']
+        
         try:
-            y_calc = solve_energy_step(known['y_sub'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sub')
+            y_calc = solve_energy_step(known['y_sub'], Q_calc, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sub')
             if y_calc < yc: y_calc = yc + 0.01 
         except: y_calc = yc + 0.01
         target['y_sub'] = y_calc
 
-    # Supercritical
+    # Supercritical Calculation
     nodes[0]['y_sup'] = boundary_up
     for i in range(1, len(nodes)):
         dx = nodes[i]['x'] - nodes[i-1]['x']
         known, target = nodes[i-1], nodes[i]
+        
+        # GUNAKAN Q DARI SEGMEN TARGET
+        Q_calc = target.get('Q', 0.5)
         yc = target['yc']
+        
         try:
-            y_calc = solve_energy_step(known['y_sup'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sup')
+            y_calc = solve_energy_step(known['y_sup'], Q_calc, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sup')
             if y_calc > yc: y_calc = yc - 0.01 
         except: y_calc = yc - 0.01
         target['y_sup'] = y_calc
 
     # Selection Logic
     for n in nodes:
+        Q_local = n.get('Q', 0.5) # Ambil Q lokal lagi untuk perhitungan properti akhir
+        
         if force_super:
             if n['y_sup'] > 0.011 and n['y_sup'] < 49.0: 
                 n['y_final'] = n['y_sup']
@@ -112,9 +126,9 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
                 n['regime'] = "Critical"
         else:
             if n['y_sub'] <= 0.011 or n['y_sub'] > 49.0: M_sub = -1.0
-            else: _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'], Q)
+            else: _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'], Q_local)
             if n['y_sup'] <= 0.011 or n['y_sup'] > 49.0: M_sup = -1.0
-            else: _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'], Q)
+            else: _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'], Q_local)
             
             if M_sub == -1 and M_sup == -1: 
                 n['y_final'] = n['yc']
@@ -133,8 +147,8 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         n['freeboard'] = n['bank_elev'] - n['ws']
         n['h_design'] = n['y_final'] + 0.4
         
-        A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
-        V = Q/A if A > 0 else 0
+        A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q_local)
+        V = Q_local/A if A > 0 else 0
         n['v'] = V 
         n['eg'] = n['ws'] + (V**2)/(2*9.81)
         D_hyd = A/T if T > 0 else 0
@@ -225,37 +239,49 @@ def generate_cross_section_scr(nodes, dataset_name="Desain", spacing_x=20, spaci
 
 # --- 2. SETUP & STATE (ANTI ERROR) ---
 # Daftar kolom wajib lengkap dengan parameter desain per segmen
+# MODIFIED: Menambahkan kolom Debit Q
 REQUIRED_COLS = [
     "Nama Segmen", "STA Awal (m)", "STA Akhir (m)", 
     "Elev Awal (m)", "Elev Akhir (m)", 
+    "Debit Q (m3/s)",  # <-- KOLOM BARU
     "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)",
-    # --- KOLOM DESAIN BARU ---
+    # --- KOLOM DESAIN ---
     "Desain S", "Desain B (m)", "Desain m", "Max Drop (m)"
 ]
 
 def reset_data():
     # Data Default dengan desain
     return pd.DataFrame([
-        ["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5, 0.001, 0.6, 1.0, 1.5]
+        ["S1", 0, 50, 100, 99.5, 0.24, 2.0, 1.0, 0.017, 1.5, 0.001, 0.6, 1.0, 1.5]
     ], columns=REQUIRED_COLS)
 
 # Inisialisasi State DataFrame
 if 'df_pro' not in st.session_state: 
     st.session_state['df_pro'] = reset_data()
 
+# Inisialisasi Variable Lain
+if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24 # Default Global
+if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
+if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 
+
 # --- BLOK "PENAMBAL" DATA OTOMATIS (SAFE MODE) ---
-# Bagian ini memastikan tidak ada error saat struktur data berubah
 try:
     current_df = st.session_state['df_pro'].copy()
     is_changed = False
     
-    # 1. Hapus kolom "Slope Desain S" jika ada (karena sudah diganti Desain S yang baru)
+    # 1. Hapus kolom "Slope Desain S" jika ada (legacy cleanup)
     if "Slope Desain S" in current_df.columns:
         current_df = current_df.drop(columns=["Slope Desain S"])
         is_changed = True
 
-    # 2. Tambah kolom desain baru jika belum ada
-    defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5}
+    # 2. Tambah kolom desain dan Q baru jika belum ada
+    defaults = {
+        "Desain S": 0.001, 
+        "Desain B (m)": 0.6, 
+        "Desain m": 1.0, 
+        "Max Drop (m)": 1.5,
+        "Debit Q (m3/s)": st.session_state['q_pro'] # Default ambil dari setting global lama
+    }
     for col_name, default_val in defaults.items():
         if col_name not in current_df.columns:
             current_df[col_name] = default_val
@@ -267,17 +293,13 @@ except Exception as e:
     st.error(f"Auto-fix data error: {e}")
     st.session_state['df_pro'] = reset_data()
 
-# Inisialisasi Variable Lain
-if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
-if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
-if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 
-
 # --- UI SIDEBAR ---
 st.markdown("""<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate</h1><p>Excel • GeoJSON/GIS • AutoCAD Export</p></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ Parameter Hidrolis")
-    st.session_state['q_pro'] = st.number_input("Debit (Q) m³/s", 0.01, 1000.0, st.session_state['q_pro'])
+    st.header("⚙️ Parameter Global")
+    # Diganti jadi Default Debit agar tidak bingung
+    st.session_state['q_pro'] = st.number_input("Default Debit (Q)", 0.01, 1000.0, st.session_state['q_pro'], help="Digunakan jika kolom Debit di tabel kosong atau saat import data baru.")
     force_super = st.checkbox("🔥 Force Supercritical", value=False)
     
     st.divider()
@@ -299,8 +321,11 @@ with st.sidebar:
                 df = pd.read_excel(up_excel)
                 df.columns = [c.strip() for c in df.columns] 
                 
-                # Auto-Add Design Columns saat upload file baru
-                design_defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5}
+                # Auto-Add Design & Q Columns saat upload file baru
+                design_defaults = {
+                    "Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, 
+                    "Max Drop (m)": 1.5, "Debit Q (m3/s)": st.session_state['q_pro']
+                }
                 for d_col, d_val in design_defaults.items():
                     if d_col not in df.columns:
                         df[d_col] = d_val
@@ -348,7 +373,8 @@ with st.sidebar:
                             "Elev Awal (m)": z1, "Elev Akhir (m)": z2,
                             "Lebar b (m)": def_b, "Talud m": def_m, 
                             "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5,
-                            # Default Desain
+                            # Default Desain & Q
+                            "Debit Q (m3/s)": st.session_state['q_pro'],
                             "Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5
                         })
                         current_dist += dist
@@ -381,7 +407,8 @@ with st.sidebar:
                             "Nama Segmen": f"S{i+1}", "STA Awal (m)": d1, "STA Akhir (m)": d2,
                             "Elev Awal (m)": z1, "Elev Akhir (m)": z2,
                             "Lebar b (m)": 2.0, "Talud m": 1.0, "Kekasaran n": 0.025, "Tinggi Saluran H (m)": 1.5,
-                            # Default Desain
+                            # Default Desain & Q
+                            "Debit Q (m3/s)": st.session_state['q_pro'],
                             "Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5
                         })
                     st.session_state['df_pro'] = pd.DataFrame(new_rows)
@@ -428,17 +455,20 @@ if not df.empty:
             real_dx = L / n_steps
             slope = (z1 - z2) / L
             h_ch = seg.get("Tinggi Saluran H (m)", 1.5)
+            # AMBIL DEBIT PER SEGMEN
+            seg_Q = seg.get("Debit Q (m3/s)", st.session_state['q_pro'])
             
             for i in range(n_steps + 1):
                 nodes_ex.append({
                     "x": sta1 + i * real_dx, "z": z1 - (i * real_dx * slope),
                     "b": seg.get("Lebar b (m)", 1.0), "m": seg.get("Talud m", 1.0), 
                     "n": seg.get("Kekasaran n", 0.025), "seg": seg.get("Nama Segmen", f"S{idx}"),
-                    "h_ch": h_ch
+                    "h_ch": h_ch, "Q": seg_Q # <-- SIMPAN Q DI NODE
                 })
         
         if len(nodes_ex) > 0:
-            nodes_ex = calculate_profiles(nodes_ex, st.session_state['q_pro'], st.session_state['ws_down'], st.session_state['ws_up'], force_super)
+            # Panggil fungsi profile tanpa Q global
+            nodes_ex = calculate_profiles(nodes_ex, st.session_state['ws_down'], st.session_state['ws_up'], force_super)
             all_nodes_ex = nodes_ex
             for n in nodes_ex:
                 profile_ex['x'].append(n['x']); profile_ex['z'].append(n['z'])
@@ -454,7 +484,7 @@ if not df.empty:
             # Buat Dictionary Map Desain agar cepat
             design_map = {}
             if "Desain S" in df.columns:
-                 design_map = df.set_index('Nama Segmen')[['Desain S', 'Desain B (m)', 'Desain m', 'Max Drop (m)']].to_dict('index')
+                 design_map = df.set_index('Nama Segmen')[['Desain S', 'Desain B (m)', 'Desain m', 'Max Drop (m)', 'Debit Q (m3/s)']].to_dict('index')
             
             current_z = start_z_original 
             
@@ -462,12 +492,13 @@ if not df.empty:
                 seg_name = n['seg']
                 
                 # Default Params jika tidak ada di map
-                params = design_map.get(seg_name, {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5})
+                params = design_map.get(seg_name, {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5, "Debit Q (m3/s)": st.session_state['q_pro']})
                 
                 curr_S = params.get("Desain S", 0.001)
                 curr_B = params.get("Desain B (m)", 0.6)
                 curr_m = params.get("Desain m", 1.0)
                 curr_Drop = params.get("Max Drop (m)", 1.5)
+                curr_Q = params.get("Debit Q (m3/s)", st.session_state['q_pro']) # Ambil Q
 
                 if i > 0:
                     dx = n['x'] - nodes_ex[i-1]['x']
@@ -480,10 +511,11 @@ if not df.empty:
 
                 nodes_new.append({
                     "x": n['x'], "z": current_z, "b": curr_B, "m": curr_m, 
-                    "n": 0.025, "seg": seg_name, "h_ch": n['h_ch']
+                    "n": 0.025, "seg": seg_name, "h_ch": n['h_ch'], "Q": curr_Q
                 })
             
-            res_new = calculate_profiles(nodes_new, st.session_state['q_pro'], 1.0, 1.0, False)
+            # Hitung profil desain
+            res_new = calculate_profiles(nodes_new, 1.0, 1.0, False)
             all_nodes_new = res_new 
             for n in res_new:
                 profile_new['x'].append(n['x']); profile_new['z'].append(n['z']); profile_new['ws'].append(n['ws'])
@@ -522,7 +554,7 @@ if use_redesign:
                 ax.legend(); st.pyplot(fig)
         with rt_table:
             if final_data_new:
-                 st.dataframe(pd.DataFrame(final_data_new)[['x','z','ws','y_final','v']])
+                 st.dataframe(pd.DataFrame(final_data_new)[['x','z','ws','y_final','v', 'Q']])
         with rt_cs:
             if len(all_nodes_new) > 0:
                 sta_list_new = [n['x'] for n in all_nodes_new]
@@ -535,6 +567,7 @@ if use_redesign:
                     x_g = [-TopW/2, -b/2, b/2, TopW/2]; y_g = [z+H, z, z, z+H]
                     ax_cs.plot(x_g, y_g, 'r-', lw=3)
                     if y > 0.001: ax_cs.fill([-T/2, T/2, b/2, -b/2], [ws, ws, z, z], color='#00eaff', alpha=0.6)
+                    ax_cs.set_title(f"Q Desain = {node.get('Q', '-')}")
                     ax_cs.grid(True); st.pyplot(fig_cs)
     idx += 1
 
@@ -598,7 +631,7 @@ with active_tabs[idx]:
     df_rep = pd.DataFrame(final_data_new if (use_redesign and final_data_new) else final_data_ex)
     
     if not df_rep.empty:
-        cols_wanted = ['x', 'z', 'ws', 'y_final', 'v', 'fr', 'freeboard', 'regime']
+        cols_wanted = ['x', 'z', 'ws', 'y_final', 'v', 'Q', 'fr', 'freeboard', 'regime']
         if 'z_original' in df_rep.columns: cols_wanted.insert(1, 'z_original')
         
         existing_cols = [c for c in cols_wanted if c in df_rep.columns]
@@ -607,7 +640,7 @@ with active_tabs[idx]:
         rename_map = {
             'x': 'Station (m)', 'z': 'Elev Dasar (m)', 'z_original': 'Tanah Asli (m)',
             'ws': 'Muka Air (m)', 'y_final': 'Kedalaman (m)', 'v': 'Kecepatan (m/s)',
-            'fr': 'Froude Num', 'freeboard': 'Freeboard (m)', 'regime': 'Status'
+            'fr': 'Froude Num', 'freeboard': 'Freeboard (m)', 'regime': 'Status', 'Q': 'Debit (m3/s)'
         }
         df_show.rename(columns=rename_map, inplace=True)
         
