@@ -316,4 +316,37 @@ if run_calc:
 tab_input, tab_viz, tab_export, tab_report = st.tabs(["📝 Input Data", "📊 Grafik Profil", "📑 Export BBWS", "📋 Laporan"])
 
 with tab_input:
-    st.session_state['df_pro'] = st.data_editor(st.session_state['df_pro'], num_rows="dynamic", use_container_width=
+    st.session_state['df_pro'] = st.data_editor(st.session_state['df_pro'], num_rows="dynamic", use_container_width=True)
+
+with tab_viz:
+    if st.session_state['results_ex']:
+        res = st.session_state['results_ex']
+        x = [n['x'] for n in res]; z = [n['z'] for n in res]; ws = [n['ws'] for n in res]
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.plot(x, z, 'k-', label='Dasar Saluran')
+        ax.plot(x, ws, 'b-', label='Muka Air')
+        ax.fill_between(x, z, ws, color='#00eaff', alpha=0.3)
+        ax.set_title("Longitudinal Profile")
+        ax.legend(); ax.grid(True, linestyle='--', alpha=0.5)
+        st.pyplot(fig)
+    else:
+        st.info("Klik tombol 'RUN ANALISIS' di atas untuk melihat grafik.")
+
+with tab_export:
+    st.subheader("📦 Export ke AutoCAD (Standar BBWS)")
+    c1, c2 = st.columns(2)
+    with c1:
+        distorsi = st.slider("Distorsi Vertikal (V)", 1, 20, 10)
+    with c2:
+        if st.session_state['results_ex']:
+            scr = generate_bbws_scr(st.session_state['results_ex'], "EKSISTING", distorsi)
+            st.download_button("📥 Download Script (.SCR)", scr, "LongSection_BBWS.scr")
+
+with tab_report:
+    if st.session_state['results_ex']:
+        res_df = pd.DataFrame(st.session_state['results_ex'])[['x','z','ws','y_final','v','fr','regime']]
+        st.dataframe(res_df.style.format("{:.2f}"))
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer) as writer:
+            res_df.to_excel(writer, index=False)
+        st.download_button("📥 Download Laporan Excel", buffer.getvalue(), "Laporan_Hidrolika.xlsx")
