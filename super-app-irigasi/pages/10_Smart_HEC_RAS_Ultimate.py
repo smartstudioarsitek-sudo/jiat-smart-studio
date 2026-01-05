@@ -434,7 +434,58 @@ for col, val in defaults.items():
         st.session_state['df_pro'] = reset_data()
         if 'editor_input' in st.session_state: del st.session_state['editor_input']
         st.rerun()
+# --- 2. SETUP & STATE ---
 
+# Definisi Kolom Baru (Eksisting + Desain)
+REQUIRED_COLS = [
+    "Nama Segmen", "STA Awal (m)", "STA Akhir (m)", 
+    "Elev Awal (m)", "Elev Akhir (m)", 
+    "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)",
+    # --- KOLOM DESAIN BARU ---
+    "Desain S", "Desain B (m)", "Desain m", "Max Drop (m)"
+]
+
+def reset_data():
+    # Data Default
+    return pd.DataFrame([
+        ["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5, 0.001, 0.6, 1.0, 1.5]
+    ], columns=REQUIRED_COLS)
+
+# Inisialisasi Session State (Memori)
+if 'df_pro' not in st.session_state: 
+    st.session_state['df_pro'] = reset_data()
+
+# --- MULAI PERBAIKAN (PATCH) DI SINI ---
+# Kita mainkan langsung di session_state agar tidak ada NameError
+
+# 1. Ambil data dari memori sementara
+temp_df = st.session_state['df_pro'].copy()
+
+# 2. Hapus kolom lama "Slope Desain S" jika masih nyangkut
+if "Slope Desain S" in temp_df.columns:
+    temp_df = temp_df.drop(columns=["Slope Desain S"])
+
+# 3. Suntikkan Kolom Desain Baru jika belum ada (Safe Default)
+defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5}
+data_changed = False
+
+for col, val in defaults.items():
+    if col not in temp_df.columns:
+        temp_df[col] = val
+        data_changed = True
+
+# 4. Jika ada perubahan struktur, simpan balik ke memori
+if data_changed or "Slope Desain S" not in st.session_state['df_pro'].columns: 
+    # Logic: simpan kalau ada kolom baru atau kolom lama sudah dihapus di temp
+    st.session_state['df_pro'] = temp_df
+
+# --- SELESAI PERBAIKAN ---
+
+# Variable lain...
+if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
+if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
+if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2
+  
 # --- MAIN LOGIC ---
 df = st.session_state['df_pro']
 profile_ex = {'x': [], 'z': [], 'ws': [], 'crit': [], 'bank': []} 
