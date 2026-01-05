@@ -6,7 +6,7 @@ import io
 import json
 
 # --- 1. KONFIGURASI HALAMAN & CSS ---
-st.set_page_config(page_title="Smart HEC-RAS Ultimate V3.1", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="Smart HEC-RAS Ultimate V3.2", layout="wide", page_icon="🏗️")
 
 st.markdown("""
 <style>
@@ -162,7 +162,6 @@ def generate_bbws_scr(nodes, dataset_name="DESAIN", distorsi_v=10):
 # --- 4. STATE MANAGEMENT & DATA DEFAULT ---
 if 'results_ex' not in st.session_state: st.session_state['results_ex'] = None
 
-# Pastikan nama kolom konsisten
 REQUIRED_COLS = [
     "Nama Segmen", "STA Awal (m)", "STA Akhir (m)", 
     "Elev Awal (m)", "Elev Akhir (m)", 
@@ -189,13 +188,11 @@ with st.sidebar:
     with tab_ex:
         st.info("Upload file .xlsx")
         
-        # TOMBOL DOWNLOAD TEMPLATE
         buffer_template = io.BytesIO()
         with pd.ExcelWriter(buffer_template, engine='xlsxwriter') as writer:
             reset_data().to_excel(writer, index=False)
         st.download_button("📥 Download Template Excel", buffer_template.getvalue(), "Template_Saluran.xlsx")
 
-        # TOMBOL UPLOAD EXCEL
         up_excel = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_up")
         
         if up_excel:
@@ -203,7 +200,7 @@ with st.sidebar:
                 df = pd.read_excel(up_excel)
                 df.columns = [c.strip() for c in df.columns]
                 
-                # Auto-Add Columns jika tidak ada di Excel
+                # Auto-Add Columns (Anti Error)
                 defaults = {"Desain S": 0.001, "Desain B (m)": 0.6, "Desain m": 1.0, "Max Drop (m)": 1.5, "Debit Q (m3/s)": 0.5, "Tinggi Saluran H (m)": 1.5}
                 for d_col, d_val in defaults.items():
                     if d_col not in df.columns: df[d_col] = d_val
@@ -248,7 +245,7 @@ with st.sidebar:
         st.rerun()
 
 # --- 6. UI: MAIN AREA ---
-st.markdown('<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate V3.1</h1><p>Input Excel • Run Analysis • Export BBWS CAD</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate V3.2</h1><p>Input Excel • Run Analysis • Export BBWS CAD</p></div>', unsafe_allow_html=True)
 
 # TOOLBAR
 col1, col2, col3, col4 = st.columns([2, 2, 2, 3])
@@ -268,7 +265,7 @@ with col3:
 with col4:
     st.caption("Klik RUN setelah update Excel/Tabel.")
 
-# --- 7. LOGIKA RUNNING (ANTI-CRASH) ---
+# --- 7. LOGIKA RUNNING ---
 if run_calc:
     with st.spinner("Sedang Menghitung..."):
         try:
@@ -285,14 +282,13 @@ if run_calc:
                 z2 = seg.get('Elev Akhir (m)', 0)
                 slope = (z1 - z2) / L
                 
-                # AMBIL PARAMETER DENGAN NILAI DEFAULT (ANTI ERROR)
+                # Parameter dengan Default (Anti Error)
                 q_seg = seg.get('Debit Q (m3/s)', 0.5)
                 if pd.isna(q_seg) or q_seg == '': q_seg = 0.5
-                
                 b_seg = seg.get('Lebar b (m)', 1.0)
                 m_seg = seg.get('Talud m', 1.0)
                 n_seg = seg.get('Kekasaran n', 0.025)
-                h_seg = seg.get('Tinggi Saluran H (m)', 1.5) # <-- FIX ERROR DISINI
+                h_seg = seg.get('Tinggi Saluran H (m)', 1.5)
                 
                 for i in range(n_steps + 1):
                     nodes_ex.append({
@@ -345,7 +341,11 @@ with tab_export:
 with tab_report:
     if st.session_state['results_ex']:
         res_df = pd.DataFrame(st.session_state['results_ex'])[['x','z','ws','y_final','v','fr','regime']]
-        st.dataframe(res_df.style.format("{:.2f}"))
+        
+        # FIX ERROR: Hanya format kolom angka, jangan kolom text (regime)
+        numeric_cols = ['x','z','ws','y_final','v','fr']
+        st.dataframe(res_df.style.format("{:.2f}", subset=numeric_cols))
+        
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer) as writer:
             res_df.to_excel(writer, index=False)
