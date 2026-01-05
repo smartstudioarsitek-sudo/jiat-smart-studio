@@ -72,50 +72,37 @@ def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
             else: y_max = y_mid
     return (y_min + y_max)/2
 
-def calculate_profiles(nodes, global_Q, boundary_down, boundary_up, force_super=False):
-    # 1. Hitung Critical Depth & Init Vars menggunakan Q LOKAL tiap node
+def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
     for n in nodes:
-        # Ambil Q dari node, jika tidak ada pakai global_Q
-        q_local = n.get('Q', global_Q) 
-        n['yc'] = get_critical_depth(q_local, n['b'], n['m'])
+        n['yc'] = get_critical_depth(Q, n['b'], n['m'])
         n['y_sub'] = 0.0; n['y_sup'] = 0.0; n['y_final'] = 0.0 
     
-    # 2. Subcritical Calculation (Mundur)
+    # Subcritical
     nodes[-1]['y_sub'] = boundary_down
     for i in range(len(nodes)-2, -1, -1):
         dx = nodes[i+1]['x'] - nodes[i]['x']
         known, target = nodes[i+1], nodes[i]
-        
-        # GUNAKAN Q dari Target Node untuk perhitungan step ini
-        q_calc = target.get('Q', global_Q) 
         yc = target['yc']
-        
         try:
-            y_calc = solve_energy_step(known['y_sub'], q_calc, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sub')
+            y_calc = solve_energy_step(known['y_sub'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sub')
             if y_calc < yc: y_calc = yc + 0.01 
         except: y_calc = yc + 0.01
         target['y_sub'] = y_calc
 
-    # 3. Supercritical Calculation (Maju)
+    # Supercritical
     nodes[0]['y_sup'] = boundary_up
     for i in range(1, len(nodes)):
         dx = nodes[i]['x'] - nodes[i-1]['x']
         known, target = nodes[i-1], nodes[i]
-        
-        # GUNAKAN Q dari Target Node
-        q_calc = target.get('Q', global_Q)
         yc = target['yc']
-        
         try:
-            y_calc = solve_energy_step(known['y_sup'], q_calc, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sup')
+            y_calc = solve_energy_step(known['y_sup'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sup')
             if y_calc > yc: y_calc = yc - 0.01 
         except: y_calc = yc - 0.01
         target['y_sup'] = y_calc
 
-    # 4. Selection Logic & Final Calculations
+    # Selection Logic
     for n in nodes:
-        q_final = n.get('Q', global_Q) # Pastikan pakai Q lokal untuk hitung Velocity & Froude
-        
         if force_super:
             if n['y_sup'] > 0.011 and n['y_sup'] < 49.0: 
                 n['y_final'] = n['y_sup']
@@ -125,10 +112,9 @@ def calculate_profiles(nodes, global_Q, boundary_down, boundary_up, force_super=
                 n['regime'] = "Critical"
         else:
             if n['y_sub'] <= 0.011 or n['y_sub'] > 49.0: M_sub = -1.0
-            else: _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'], q_final) # Pass q_final
-            
+            else: _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'], Q)
             if n['y_sup'] <= 0.011 or n['y_sup'] > 49.0: M_sup = -1.0
-            else: _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'], q_final) # Pass q_final
+            else: _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'], Q)
             
             if M_sub == -1 and M_sup == -1: 
                 n['y_final'] = n['yc']
@@ -147,8 +133,8 @@ def calculate_profiles(nodes, global_Q, boundary_down, boundary_up, force_super=
         n['freeboard'] = n['bank_elev'] - n['ws']
         n['h_design'] = n['y_final'] + 0.4
         
-        A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], q_final)
-        V = q_final/A if A > 0 else 0
+        A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
+        V = Q/A if A > 0 else 0
         n['v'] = V 
         n['eg'] = n['ws'] + (V**2)/(2*9.81)
         D_hyd = A/T if T > 0 else 0
@@ -238,12 +224,10 @@ def generate_cross_section_scr(nodes, dataset_name="Desain", spacing_x=20, spaci
     return s
 
 # --- 2. SETUP & STATE ---
-# TAMBAHKAN "Debit Q (m³/s)" KE SINI
-REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)", "Debit Q (m³/s)"]
+REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)"]
 
 def reset_data():
-    # Default Q dimasukkan di sini (0.24)
-    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5, 0.24]], columns=REQUIRED_COLS)
+    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5]], columns=REQUIRED_COLS)
 
 if 'df_pro' not in st.session_state: st.session_state['df_pro'] = reset_data()
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
@@ -401,28 +385,6 @@ if not df.empty:
         dx_step = 2.0 
         
         # 1. EKSISTING
-
-# 1. EKSISTING
-        nodes_ex = []
-        for idx, seg in enumerate(segments):
-            # ... (kode sta1, z1, L, dll TETAP SAMA) ...
-            
-            # --- Perubahan di sini ---
-            seg_Q = seg.get("Debit Q (m³/s)", st.session_state['q_pro']) # Ambil Q Segmen
-            
-            for i in range(n_steps + 1):
-                nodes_ex.append({
-                    "x": sta1 + i * real_dx, 
-                    "z": z1 - (i * real_dx * slope),
-                    "b": seg.get("Lebar b (m)", 1.0), 
-                    "m": seg.get("Talud m", 1.0), 
-                    "n": seg.get("Kekasaran n", 0.025), 
-                    "seg": seg.get("Nama Segmen", f"S{idx}"),
-                    "h_ch": h_ch,
-                    "Q": seg_Q  # <--- SIMPAN Q KE DALAM NODE
-                })
-        
-        
         nodes_ex = []
         for idx, seg in enumerate(segments):
             sta1 = seg.get("STA Awal (m)", 0); sta2 = seg.get("STA Akhir (m)", 0)
@@ -453,15 +415,6 @@ if not df.empty:
                 final_data_ex.append(n)
 
         # 2. REDESAIN
-
-        # Di dalam loop Redesain
-            nodes_new.append({
-                "x": n['x'], "z": current_z, "b": design_b, "m": design_m, 
-                "n": 0.025, "seg": n['seg'], "h_ch": n['h_ch'],
-                "Q": n['Q'] # <--- Wariskan Q dari eksisting ke desain
-            })
-
-        
         if use_redesign and len(nodes_ex) > 0:
             nodes_new = []
             start_z_original = nodes_ex[0]['z']
