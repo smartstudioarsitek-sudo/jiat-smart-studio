@@ -224,10 +224,12 @@ def generate_cross_section_scr(nodes, dataset_name="Desain", spacing_x=20, spaci
     return s
 
 # --- 2. SETUP & STATE ---
-REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)"]
+# TAMBAHKAN "Debit Q (m³/s)" KE SINI
+REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)", "Debit Q (m³/s)"]
 
 def reset_data():
-    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5]], columns=REQUIRED_COLS)
+    # Default Q dimasukkan di sini (0.24)
+    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5, 0.24]], columns=REQUIRED_COLS)
 
 if 'df_pro' not in st.session_state: st.session_state['df_pro'] = reset_data()
 if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
