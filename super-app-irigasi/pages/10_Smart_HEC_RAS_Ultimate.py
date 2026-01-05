@@ -401,6 +401,28 @@ if not df.empty:
         dx_step = 2.0 
         
         # 1. EKSISTING
+
+# 1. EKSISTING
+        nodes_ex = []
+        for idx, seg in enumerate(segments):
+            # ... (kode sta1, z1, L, dll TETAP SAMA) ...
+            
+            # --- Perubahan di sini ---
+            seg_Q = seg.get("Debit Q (m³/s)", st.session_state['q_pro']) # Ambil Q Segmen
+            
+            for i in range(n_steps + 1):
+                nodes_ex.append({
+                    "x": sta1 + i * real_dx, 
+                    "z": z1 - (i * real_dx * slope),
+                    "b": seg.get("Lebar b (m)", 1.0), 
+                    "m": seg.get("Talud m", 1.0), 
+                    "n": seg.get("Kekasaran n", 0.025), 
+                    "seg": seg.get("Nama Segmen", f"S{idx}"),
+                    "h_ch": h_ch,
+                    "Q": seg_Q  # <--- SIMPAN Q KE DALAM NODE
+                })
+        
+        
         nodes_ex = []
         for idx, seg in enumerate(segments):
             sta1 = seg.get("STA Awal (m)", 0); sta2 = seg.get("STA Akhir (m)", 0)
@@ -431,6 +453,15 @@ if not df.empty:
                 final_data_ex.append(n)
 
         # 2. REDESAIN
+
+        # Di dalam loop Redesain
+            nodes_new.append({
+                "x": n['x'], "z": current_z, "b": design_b, "m": design_m, 
+                "n": 0.025, "seg": n['seg'], "h_ch": n['h_ch'],
+                "Q": n['Q'] # <--- Wariskan Q dari eksisting ke desain
+            })
+
+        
         if use_redesign and len(nodes_ex) > 0:
             nodes_new = []
             start_z_original = nodes_ex[0]['z']
