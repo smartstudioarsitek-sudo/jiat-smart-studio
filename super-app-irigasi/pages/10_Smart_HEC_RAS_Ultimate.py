@@ -72,37 +72,50 @@ def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
             else: y_max = y_mid
     return (y_min + y_max)/2
 
-def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
+def calculate_profiles(nodes, global_Q, boundary_down, boundary_up, force_super=False):
+    # 1. Hitung Critical Depth & Init Vars menggunakan Q LOKAL tiap node
     for n in nodes:
-        n['yc'] = get_critical_depth(Q, n['b'], n['m'])
+        # Ambil Q dari node, jika tidak ada pakai global_Q
+        q_local = n.get('Q', global_Q) 
+        n['yc'] = get_critical_depth(q_local, n['b'], n['m'])
         n['y_sub'] = 0.0; n['y_sup'] = 0.0; n['y_final'] = 0.0 
     
-    # Subcritical
+    # 2. Subcritical Calculation (Mundur)
     nodes[-1]['y_sub'] = boundary_down
     for i in range(len(nodes)-2, -1, -1):
         dx = nodes[i+1]['x'] - nodes[i]['x']
         known, target = nodes[i+1], nodes[i]
+        
+        # GUNAKAN Q dari Target Node untuk perhitungan step ini
+        q_calc = target.get('Q', global_Q) 
         yc = target['yc']
+        
         try:
-            y_calc = solve_energy_step(known['y_sub'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sub')
+            y_calc = solve_energy_step(known['y_sub'], q_calc, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sub')
             if y_calc < yc: y_calc = yc + 0.01 
         except: y_calc = yc + 0.01
         target['y_sub'] = y_calc
 
-    # Supercritical
+    # 3. Supercritical Calculation (Maju)
     nodes[0]['y_sup'] = boundary_up
     for i in range(1, len(nodes)):
         dx = nodes[i]['x'] - nodes[i-1]['x']
         known, target = nodes[i-1], nodes[i]
+        
+        # GUNAKAN Q dari Target Node
+        q_calc = target.get('Q', global_Q)
         yc = target['yc']
+        
         try:
-            y_calc = solve_energy_step(known['y_sup'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sup')
+            y_calc = solve_energy_step(known['y_sup'], q_calc, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sup')
             if y_calc > yc: y_calc = yc - 0.01 
         except: y_calc = yc - 0.01
         target['y_sup'] = y_calc
 
-    # Selection Logic
+    # 4. Selection Logic & Final Calculations
     for n in nodes:
+        q_final = n.get('Q', global_Q) # Pastikan pakai Q lokal untuk hitung Velocity & Froude
+        
         if force_super:
             if n['y_sup'] > 0.011 and n['y_sup'] < 49.0: 
                 n['y_final'] = n['y_sup']
@@ -112,9 +125,10 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
                 n['regime'] = "Critical"
         else:
             if n['y_sub'] <= 0.011 or n['y_sub'] > 49.0: M_sub = -1.0
-            else: _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'], Q)
+            else: _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'], q_final) # Pass q_final
+            
             if n['y_sup'] <= 0.011 or n['y_sup'] > 49.0: M_sup = -1.0
-            else: _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'], Q)
+            else: _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'], q_final) # Pass q_final
             
             if M_sub == -1 and M_sup == -1: 
                 n['y_final'] = n['yc']
@@ -133,8 +147,8 @@ def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
         n['freeboard'] = n['bank_elev'] - n['ws']
         n['h_design'] = n['y_final'] + 0.4
         
-        A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
-        V = Q/A if A > 0 else 0
+        A, P, R, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], q_final)
+        V = q_final/A if A > 0 else 0
         n['v'] = V 
         n['eg'] = n['ws'] + (V**2)/(2*9.81)
         D_hyd = A/T if T > 0 else 0
