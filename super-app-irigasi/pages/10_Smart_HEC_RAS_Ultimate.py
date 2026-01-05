@@ -8,6 +8,33 @@ import json
 # --- CONFIG ---
 st.set_page_config(page_title="Smart HEC-RAS Ultimate", layout="wide", page_icon="🏗️")
 
+# --- 2. SETUP & STATE (PASTIKAN INI ADA DI ATAS SIDEBAR) ---
+
+# Definisikan kolom wajib termasuk kolom baru "Slope Desain S"
+REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", 
+                 "Lebar b (m)", "Talud m", "Kekasaran n", "Tinggi Saluran H (m)", "Slope Desain S"]
+
+def reset_data():
+    # Default data dengan kolom Slope
+    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017, 1.5, 0.001]], columns=REQUIRED_COLS)
+
+# --- BAGIAN PENTING (INI YANG HILANG/KELEWAT) ---
+if 'df_pro' not in st.session_state: 
+    st.session_state['df_pro'] = reset_data()
+
+if 'q_pro' not in st.session_state: 
+    st.session_state['q_pro'] = 0.24  # <--- Ini obat errornya
+
+if 'ws_down' not in st.session_state: 
+    st.session_state['ws_down'] = 0.5
+
+if 'ws_up' not in st.session_state: 
+    st.session_state['ws_up'] = 0.2 
+# ------------------------------------------------
+
+# --- UI SIDEBAR (BARU BOLEH DI BAWAH SINI) ---
+# ...
+
 st.markdown("""
 <style>
     .header-box { padding: 20px; background: linear-gradient(90deg, #134E5E, #71B280); color: white; border-radius: 8px; text-align: center; margin-bottom: 20px; }
