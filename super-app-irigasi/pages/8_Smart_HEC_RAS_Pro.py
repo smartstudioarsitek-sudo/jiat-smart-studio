@@ -5,283 +5,364 @@ import matplotlib.pyplot as plt
 import io
 import json
 
-# --- CONFIG ---
-st.set_page_config(page_title="Smart HEC-RAS Pro", layout="wide", page_icon="🌊")
+# --- CONFIG & STYLING ---
+st.set_page_config(page_title="Smart HEC-RAS Ultimate v2", layout="wide", page_icon="🏗️")
 
 st.markdown("""
 <style>
-    .header-box { padding: 20px; background: linear-gradient(90deg, #000428, #004e92); color: white; border-radius: 8px; text-align: center; margin-bottom: 20px; }
-    .success-box { padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 5px; }
-    @media print { .stSidebar, header, footer { display: none !important; } }
+    .header-box { padding: 25px; background: linear-gradient(135deg, #1e3c72, #2a5298); color: white; border-radius: 12px; text-align: center; margin-bottom: 25px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] { background-color: #f0f2f6; border-radius: 4px 4px 0 0; padding: 10px 20px; }
+    .stTabs [data-baseweb="tab--active"] { background-color: #1e3c72 !important; color: white !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. ENGINE HIDROLIKA (MATH CORRECT & ROBUST) ---
+# --- DATABASE KRITERIA KP-03 ---
+MATERIAL_PROPS = {
+    "Tanah (Earth)": {"n": 0.025, "v_max": 0.70},
+    "Pasangan Batu (Masonry)": {"n": 0.0225, "v_max": 2.00},
+    "Beton (Concrete)": {"n": 0.015, "v_max": 3.00}
+}
 
-def get_critical_depth(Q, b, m):
-    """Menghitung Critical Depth (Yc) Trapesium secara Iteratif."""
-    g = 9.81
-    y_min, y_max = 0.01, 20.0
-    for _ in range(30):
-        y = (y_min + y_max) / 2
-        A = (b + m * y) * y
-        T = b + 2 * m * y
-        if A <= 0: A = 0.001
-        f_val = 9.81 * (A**3) - (Q**2) * T # Froude check
-        if abs(f_val) < 0.01: return y
-        if f_val < 0: y_min = y
-        else: y_max = y
-    return (y_min + y_max) / 2
+def get_kp03_freeboard(Q):
+    """Menentukan tinggi jagaan (W) berdasarkan Debit sesuai KP-03."""
+    if Q < 0.5: return 0.40
+    elif Q < 1.5: return 0.50
+    elif Q < 5.0: return 0.60
+    elif Q < 10.0: return 0.75
+    else: return 1.00
+
+# --- ENGINE HIDROLIKA CORE (HIGH ACCURACY) ---
 
 def get_geom_props(y, b, m, Q):
-    """Menghitung Properti Geometri + Momentum Trapesium yang BENAR."""
-    if y <= 0.001: y = 0.001
+    """Menghitung properti geometris basah (Trapesium)."""
+    # Safety untuk kedalaman sangat kecil agar tidak error pembagian
+    if y <= 0.0001: y = 0.0001
+    
     A = (b + m * y) * y
     P = b + 2 * y * np.sqrt(1 + m**2)
     R = A / P if P > 0 else 0
     T = b + 2 * m * y
     
-    # --- MOMENTUM TRAPESIUM ---
-    hydrostatic_term = ((y**2)/2) * b + ((y**3)/3) * m
+    # Momentum function for hydraulic jump
     g = 9.81
-    if A > 0.0001:
-        M = (Q**2)/(g*A) + hydrostatic_term 
-    else: 
-        M = 0
+    hydrostatic = ((y**2)/2)*b + ((y**3)/3)*m
+    # Safety check untuk A agar tidak bagi nol
+    M = (Q**2)/(g*A) + hydrostatic if A > 1e-6 else 0
+    
     return A, P, R, T, M
 
-def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode):
+def get_critical_depth(Q, b, m):
+    """Menghitung kedalaman kritis (yc) dengan Iterasi Presisi Tinggi."""
+    y_min, y_max = 0.001, 20.0
     g = 9.81
-    A1, P1, R1, T1, M1 = get_geom_props(y_known, b, m, Q)
-    V1 = Q/A1
+    
+    # Meningkatkan jumlah iterasi dari 40 ke 100 untuk akurasi
+    for _ in range(100):
+        y = (y_min + y_max) / 2
+        A = (b + m * y) * y
+        T = b + 2 * m * y
+        
+        # Froude Number function: gA^3 - Q^2T = 0
+        f_val = g * (A**3) - (Q**2) * T
+        
+        # Toleransi error diperkecil (1e-5)
+        if abs(f_val) < 1e-5: return y
+        
+        if f_val < 0: y_min = y
+        else: y_max = y
+        
+        # Cek konvergensi delta Y
+        if abs(y_max - y_min) < 1e-6: return y
+
+    return y
+
+def solve_energy_step(y_known, Q, n, Z1, Z2, b, m, dx, mode='sub'):
+    """Standard Step Method dengan akurasi tinggi (Newton/Bisection Hybrid logic)."""
+    g = 9.81
+    A1, _, R1, _, _ = get_geom_props(y_known, b, m, Q)
+    V1 = Q/A1 if A1 > 1e-6 else 0
     H1 = Z1 + y_known + (V1**2)/(2*g)
     
     def func(y2):
-        A2, P2, R2, T2, M2 = get_geom_props(y2, b, m, Q)
-        V2 = Q/A2
+        A2, _, R2, _, _ = get_geom_props(y2, b, m, Q)
+        V2 = Q/A2 if A2 > 1e-6 else 0
         H2 = Z2 + y2 + (V2**2)/(2*g)
-        Sf1 = (n*V1)**2 / (R1**(4/3))
-        Sf2 = (n*V2)**2 / (R2**(4/3))
+        
+        # Manning Formula
+        Sf1 = (n*V1)**2 / (R1**(4/3)) if R1 > 0 else 0
+        Sf2 = (n*V2)**2 / (R2**(4/3)) if R2 > 0 else 0
         Sf_avg = (Sf1 + Sf2)/2
-        loss = Sf_avg * dx
-        if mode == 'sub': return H2 - (H1 + loss)
-        else: return H1 - (H2 + loss)
-
-    y_min, y_max = 0.01, 50.0
-    for _ in range(50):
-        y_mid = (y_min + y_max)/2
-        err = func(y_mid)
-        if abs(err) < 0.001: return y_mid
-        if mode == 'sub': # Mencari Y > Yc
-            if err > 0: y_max = y_mid 
-            else: y_min = y_mid
-        else: # Mencari Y < Yc
-            if err > 0: y_min = y_mid
-            else: y_max = y_mid
-    return (y_min + y_max)/2
-
-# --- 2. LOGIC ALGORITMA MIXED FLOW (WITH FORCE SUPERCRITICAL) ---
-def calculate_profiles(nodes, Q, boundary_down, boundary_up, force_super=False):
-    
-    # Pre-calc Yc
-    for n in nodes:
-        n['yc'] = get_critical_depth(Q, n['b'], n['m'])
-        n['y_sub'] = 0.0; n['y_sup'] = 0.0; n['y_final'] = 0.0 # Init
-    
-    # PASS 1: SUBCRITICAL
-    nodes[-1]['y_sub'] = boundary_down
-    for i in range(len(nodes)-2, -1, -1):
-        dx = nodes[i+1]['x'] - nodes[i]['x']
-        known, target = nodes[i+1], nodes[i]
-        yc = target['yc']
-        try:
-            y_calc = solve_energy_step(known['y_sub'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sub')
-            if y_calc < yc: y_calc = yc + 0.01 
-        except: y_calc = yc + 0.01
-        target['y_sub'] = y_calc
-
-    # PASS 2: SUPERCRITICAL
-    nodes[0]['y_sup'] = boundary_up
-    for i in range(1, len(nodes)):
-        dx = nodes[i]['x'] - nodes[i-1]['x']
-        known, target = nodes[i-1], nodes[i]
-        yc = target['yc']
-        try:
-            y_calc = solve_energy_step(known['y_sup'], Q, target['n'], known['z'], target['z'], target['b'], target['m'], dx, 'sup')
-            if y_calc > yc: y_calc = yc - 0.01 
-        except: y_calc = yc - 0.01
-        target['y_sup'] = y_calc
-
-    # PASS 3: REGIME SELECTION (Auto vs Forced)
-    for n in nodes:
-        # 1. Jika User Memaksa Superkritis (Untuk Cek Gerusan/Erosi)
-        if force_super:
-            if n['y_sup'] > 0.011 and n['y_sup'] < 49.0:
-                n['y_final'] = n['y_sup']
-                n['regime'] = "Supercritical (Forced)"
-            else:
-                n['y_final'] = n['yc'] # Fallback
-                n['regime'] = "Critical (Fallback)"
         
-        # 2. Mode Otomatis (Smart Momentum Check)
+        # Energy Balance Error
+        if mode == 'sub':
+            # Subcritical: Diketahui Hilir (1), Cari Hulu (2)
+            # H2 (Hulu) = H1 (Hilir) + hf
+            return H2 - (H1 + (Sf_avg * dx))
         else:
-            if n['y_sub'] <= 0.011 or n['y_sub'] > 49.0: M_sub = -1.0
-            else: _, _, _, _, M_sub = get_geom_props(n['y_sub'], n['b'], n['m'], Q)
+            return H1 - (H2 + (Sf_avg * dx))
 
-            if n['y_sup'] <= 0.011 or n['y_sup'] > 49.0: M_sup = -1.0
-            else: _, _, _, _, M_sup = get_geom_props(n['y_sup'], n['b'], n['m'], Q)
-            
-            if M_sub == -1 and M_sup == -1:
-                n['y_final'] = n['yc']
-                n['regime'] = "Critical (Fallback)"
-            elif M_sub >= M_sup: 
-                n['y_final'] = n['y_sub']
-                n['regime'] = "Subcritical"
-            else: 
-                n['y_final'] = n['y_sup']
-                n['regime'] = "Supercritical"
-            
-        # Final calculations
-        n['ws'] = n['z'] + n['y_final']
-        n['ws_sub'] = n['z'] + n['y_sub']
-        n['ws_sup'] = n['z'] + n['y_sup']
-        n['crit_ws'] = n['z'] + n['yc']
+    # Range pencarian solusi diperluas dan safety check
+    y_l, y_h = 0.001, 50.0 
+    
+    # Iterasi diperbanyak sampai 100x untuk konvergensi sulit
+    for _ in range(100):
+        ym = (y_l + y_h)/2
+        err = func(ym)
         
-        A, _, _, _, _ = get_geom_props(n['y_final'], n['b'], n['m'], Q)
-        V = Q/A if A > 0 else 0
-        n['eg'] = n['ws'] + (V**2)/(2*9.81)
-        T_top = n['b'] + 2*n['m']*n['y_final']
-        D_hyd = A/T_top if T_top > 0 else 0
-        n['fr'] = V / np.sqrt(9.81 * D_hyd) if D_hyd > 0 else 0
+        # Toleransi error energi sangat ketat (1e-5 meter)
+        if abs(err) < 1e-5: return ym
+        
+        if mode == 'sub':
+            if err > 0: y_h = ym # Energi tebakan terlalu tinggi, kurangi Y
+            else: y_l = ym
+        else:
+            if err > 0: y_l = ym
+            else: y_h = ym
+            
+        # Break jika interval sudah sangat sempit
+        if abs(y_h - y_l) < 1e-6: return (y_l + y_h)/2
+            
+    return (y_l + y_h)/2
 
+def check_compliance_kp03(node, v_max_limit):
+    """Validasi terhadap standar teknis."""
+    msgs = []
+    status = "AMAN"
+    
+    # 1. Cek Kecepatan Minimum (Sedimentasi)
+    if node['v'] < 0.6:
+        msgs.append("WARNING: Kecepatan < 0.6 m/s (Potensi Endapan)")
+        status = "WARNING"
+    # 2. Cek Kecepatan Maksimum (Gerusan)
+    if node['v'] > v_max_limit:
+        msgs.append(f"BAHAYA: V > {v_max_limit} m/s (Resiko Gerusan)")
+        status = "BAHAYA"
+    # 3. Cek Freeboard
+    required_f = get_kp03_freeboard(node['Q'])
+    if node['freeboard'] < required_f:
+        msgs.append(f"KRITIS: Freeboard < {required_f}m")
+        status = "BAHAYA"
+        
+    node['compliance_status'] = status
+    node['compliance_msg'] = "; ".join(msgs) if msgs else "OK: Sesuai KP-03"
+    return node
+
+def calculate_profiles(nodes, boundary_down, boundary_up, v_limit):
+    """Hitung profil air lengkap."""
+    # 1. Subcritical (Hilir ke Hulu)
+    # Set boundary hilir
+    nodes[-1]['y_sub'] = boundary_down
+    
+    # Loop mundur dari node terakhir ke node pertama
+    for i in range(len(nodes)-2, -1, -1):
+        dx = abs(nodes[i+1]['x'] - nodes[i]['x'])
+        
+        # Hitung Y hulu berdasarkan Y hilir yang sudah diketahui
+        nodes[i]['y_sub'] = solve_energy_step(
+            y_known=nodes[i+1]['y_sub'], 
+            Q=nodes[i]['Q'], 
+            n=nodes[i]['n'], 
+            Z1=nodes[i+1]['z'], # Z Hilir (Known)
+            Z2=nodes[i]['z'],   # Z Hulu (Target)
+            b=nodes[i]['b'], 
+            m=nodes[i]['m'], 
+            dx=dx, 
+            mode='sub'
+        )
+
+    # 2. Final & Compliance Calculation
+    for n in nodes:
+        n['yc'] = get_critical_depth(n['Q'], n['b'], n['m'])
+        
+        # Logic: Ambil nilai max antara Y Subkritis dan Y Kritis
+        # Ini mencegah hasil perhitungan jatuh di bawah kedalaman kritis pada aliran subkritis
+        n['y_final'] = max(n['y_sub'], n['yc']) 
+        
+        n['ws'] = n['z'] + n['y_final']
+        n['bank_elev'] = n['z'] + n['h_ch']
+        n['freeboard'] = n['bank_elev'] - n['ws']
+        
+        A, _, _, T, _ = get_geom_props(n['y_final'], n['b'], n['m'], n['Q'])
+        n['v'] = n['Q']/A if A > 0 else 0
+        n['fr'] = n['v'] / np.sqrt(9.81 * (A/T)) if A/T > 1e-6 else 0
+        
+        check_compliance_kp03(n, v_limit)
+        
     return nodes
 
-# --- 3. UI SETUP ---
-REQUIRED_COLS = ["Nama Segmen", "STA Awal (m)", "STA Akhir (m)", "Elev Awal (m)", "Elev Akhir (m)", "Lebar b (m)", "Talud m", "Kekasaran n"]
+# --- AUTOCAD EXPORT SCRIPT (IMPROVED) ---
 
-def reset_data():
-    return pd.DataFrame([["S1", 0, 50, 100, 99.5, 2.0, 1.0, 0.017]], columns=REQUIRED_COLS)
+def generate_cad_script(nodes, mode="LONG", scale_v=10.0, ds_name="DESAIN"):
+    """Script AutoCAD dengan skala vertikal dan layer terpisah."""
+    s = f"; SCR AutoCAD Generated for {ds_name}\nOSMODE 0\n"
+    
+    if mode == "LONG":
+        # Layer Dasar Saluran
+        s += f"-LAYER M {ds_name}_BED C 30  \n_PLINE\n"
+        for n in nodes: s += f"{n['x']:.3f},{n['z']*scale_v:.3f}\n"
+        s += "\n"
+        # Layer Muka Air
+        s += f"-LAYER M {ds_name}_WS C 150  \n_PLINE\n"
+        for n in nodes: s += f"{n['x']:.3f},{n['ws']*scale_v:.3f}\n"
+        s += "\n"
+        # Layer Top Bank
+        s += f"-LAYER M {ds_name}_TOP C 10  \n_PLINE\n"
+        for n in nodes: s += f"{n['x']:.3f},{n['bank_elev']*scale_v:.3f}\n"
+        s += "\n"
+    else:
+        # Cross Section logic
+        col = 0; spacing = 25.0
+        for n in nodes[::10]: # Print per 10m atau station tertentu
+            bx = col * spacing; by = 0
+            b, m, h, y = n['b'], n['m'], n['h_ch'], n['y_final']
+            tw = (b + 2*m*h)/2
+            s += f"-LAYER M {ds_name}_CS C 7  \n_PLINE\n"
+            s += f"{bx-tw:.3f},{h:.3f}\n{bx-b/2:.3f},0\n{bx+b/2:.3f},0\n{bx+tw:.3f},{h:.3f}\n\n"
+            col += 1
+            
+    s += "ZOOM E\n"
+    return s
 
-if 'df_pro' not in st.session_state: st.session_state['df_pro'] = reset_data()
-if 'q_pro' not in st.session_state: st.session_state['q_pro'] = 0.24
-if 'ws_down' not in st.session_state: st.session_state['ws_down'] = 0.5
-if 'ws_up' not in st.session_state: st.session_state['ws_up'] = 0.2 
+# --- UI APP ---
 
-st.markdown("""<div class="header-box"><h1>🚀 Smart HEC-RAS Ultimate</h1><p>Mixed Flow • Trapezoidal Correct • Infinite Fix</p></div>""", unsafe_allow_html=True)
+st.markdown('<div class="header-box"><h1>🏗️ Smart HEC-RAS Ultimate v2</h1><p>Desain Saluran Irigasi Standar KP-03 & Ekspor AutoCAD</p></div>', unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ Parameter Hidrolis")
-    st.session_state['q_pro'] = st.number_input("Debit (Q) m³/s", 0.01, 1000.0, st.session_state['q_pro'])
+    st.header("📋 Parameter User")
+    material = st.selectbox("Material Saluran", list(MATERIAL_PROPS.keys()))
+    m_data = MATERIAL_PROPS[material]
     
-    # --- FITUR BARU: FORCE SUPERCRITICAL ---
-    st.info("💡 **Tips:** Gunakan 'Auto' untuk umum. Gunakan 'Force Supercritical' jika ingin mendesain peredam energi di saluran curam.")
-    force_super = st.checkbox("🔥 Force Supercritical (Paksa Aliran Deras)", value=False)
-    
-    st.divider()
-    st.subheader("🌊 Boundary Conditions")
-    st.session_state['ws_up'] = st.number_input("Hulu (Super): Kedalaman (m)", 0.01, 20.0, st.session_state['ws_up'])
-    st.session_state['ws_down'] = st.number_input("Hilir (Sub): Kedalaman (m)", 0.01, 20.0, st.session_state['ws_down'])
+    st.info(f"Karakteristik {material}:\n- Manning n: {m_data['n']}\n- V Max: {m_data['v_max']} m/s")
     
     st.divider()
-    up_file = st.file_uploader("Upload Excel", type=['xlsx'], key="xls_gold")
-    if up_file:
-        try:
-            df = pd.read_excel(up_file)
-            def clean(t): return str(t).lower().replace(" ", "").replace("(m)", "").replace(".", "")
-            df.columns = [clean(c) for c in df.columns]
-            mapping = {
-                "Nama Segmen": ["nama", "reach", "segmen"], "STA Awal (m)": ["staawal", "start", "hulu"],
-                "STA Akhir (m)": ["staakhir", "end", "hilir"], "Elev Awal (m)": ["elevawal", "z1", "startelv"],
-                "Elev Akhir (m)": ["elevakhir", "z2", "endelv"], "Lebar b (m)": ["lebar", "width", "b"],
-                "Talud m": ["talud", "slope", "m", "z"], "Kekasaran n": ["kekasaran", "manning", "n"]
-            }
-            new_df = pd.DataFrame()
-            found=0
-            for k,v in mapping.items():
-                for x in v:
-                    match = next((c for c in df.columns if x in c), None)
-                    if match: new_df[k]=df[match]; found+=1; break
-            if found>=5: 
-                for r in REQUIRED_COLS: 
-                    if r not in new_df.columns: new_df[r] = 0
-                st.session_state['df_pro'] = new_df
-        except: pass
-    if st.button("Reset Data"): st.session_state['df_pro'] = reset_data(); st.rerun()
+    st.header("📐 Setting Gambar (AutoCAD)")
+    v_scale = st.number_input("Skala Vertikal (Exaggeration)", 1.0, 100.0, 10.0)
+    
+    st.divider()
+    # Boundary Conditions
+    q_global = st.number_input("Debit Rencana (Q) m³/s", 0.01, 50.0, 0.50)
+    h_hilir = st.number_input("Kedalaman Air Hilir (m)", 0.0, 5.0, 0.45)
+    
+    st.divider()
+    # --- FITUR BARU: TOMBOL RUN ---
+    st.markdown("### 🚀 Kontrol Simulasi")
+    run_btn = st.button("JALANKAN SIMULASI", type="primary", use_container_width=True)
 
-# --- 4. MAIN PROCESS ---
-df = st.session_state['df_pro']
-profile = {'x': [], 'z': [], 'ws': [], 'ws_sub': [], 'ws_sup': [], 'eg': [], 'crit': []}
-final_data = []
+# --- DATA PROCESSING ---
+if 'df' not in st.session_state:
+    st.session_state.df = pd.DataFrame([
+        ["Segmen 1", 0, 100, 105.0, 104.5, 0.8, 1.0, 1.2],
+        ["Segmen 2", 100, 250, 104.5, 103.0, 0.8, 1.0, 1.2]
+    ], columns=["Nama", "STA Awal", "STA Akhir", "Z Awal", "Z Akhir", "Lebar b", "Talud m", "Tinggi H"])
 
-if not df.empty:
-    try:
-        df = df.sort_values(by="STA Awal (m)")
-        segments = df.to_dict('records')
-        dx_step = 2.0 
-        nodes = []
+# Inisialisasi Session State untuk Hasil
+if 'result_df' not in st.session_state:
+    st.session_state.result_df = None
+if 'result_nodes' not in st.session_state:
+    st.session_state.result_nodes = None
+
+tab1, tab2, tab3 = st.tabs(["📝 Input & Edit", "📊 Hasil Analisis Hidrolika", "💾 Ekspor Output"])
+
+with tab1:
+    st.subheader("Edit Geometri Saluran")
+    st.info("💡 Tekan tombol 'JALANKAN SIMULASI' di menu kiri (Sidebar) setelah mengubah data.")
+    edited_df = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
+    # Update df in session state immediately on edit
+    st.session_state.df = edited_df
+
+# --- CALCULATION LOGIC (ONLY RUNS ON BUTTON CLICK) ---
+if run_btn:
+    all_nodes = []
+    # 1. Generate Node dari DataFrame
+    for _, row in st.session_state.df.iterrows():
+        L = row['STA Akhir'] - row['STA Awal']
+        # Perbaikan: Mencegah error jika panjang segmen < 5 meter
+        steps = int(L/5) if L >= 5 else 1 
+        dx = L/steps
+        z_slope = (row['Z Awal'] - row['Z Akhir'])/L
         
-        # --- GENERATE NODES ---
-        for idx, seg in enumerate(segments):
-            L = seg["STA Akhir (m)"] - seg["STA Awal (m)"]
-            if L <= 0: continue
-            n_steps = int(L / dx_step); 
-            if n_steps < 1: n_steps = 1
-            real_dx = L / n_steps
-            z_s, z_e = seg["Elev Awal (m)"], seg["Elev Akhir (m)"]
-            slope = (z_s - z_e) / L
+        for i in range(steps + 1):
+            curr_x = row['STA Awal'] + (i * dx)
+            all_nodes.append({
+                "x": curr_x,
+                "z": row['Z Awal'] - (i * dx * z_slope),
+                "b": row['Lebar b'], "m": row['Talud m'], "h_ch": row['Tinggi H'],
+                "n": m_data['n'], "Q": q_global
+            })
+
+    # Urutkan berdasarkan STA
+    all_nodes = sorted(all_nodes, key=lambda k: k['x'])
+
+    # 2. Run Heavy Calculation
+    if len(all_nodes) > 1:
+        with st.spinner('Sedang menghitung profil muka air...'):
+            try:
+                res_nodes = calculate_profiles(all_nodes, h_hilir, 0, m_data['v_max'])
+                res_df = pd.DataFrame(res_nodes)
+                
+                # Simpan Hasil ke Session State agar tidak hilang saat klik tab lain
+                st.session_state.result_nodes = res_nodes
+                st.session_state.result_df = res_df
+                st.success("✅ Perhitungan Selesai!")
+            except Exception as e:
+                st.error(f"Terjadi kesalahan perhitungan: {e}")
+    else:
+        st.warning("Silakan masukkan data geometri yang valid (Panjang > 0).")
+
+# --- DISPLAY RESULTS (FROM SESSION STATE) ---
+with tab2:
+    if st.session_state.result_df is not None:
+        res_df = st.session_state.result_df
+        
+        col_l, col_r = st.columns([2, 1])
+        
+        with col_l:
+            st.subheader("Profil Memanjang (Long Section)")
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.plot(res_df['x'], res_df['z'], 'brown', lw=3, label='Dasar Saluran')
+            ax.plot(res_df['x'], res_df['ws'], 'blue', lw=2, label='Muka Air')
+            ax.plot(res_df['x'], res_df['bank_elev'], 'black', ls='--', label='Tanggul')
+            ax.fill_between(res_df['x'], res_df['z'], res_df['ws'], color='skyblue', alpha=0.3)
+            ax.set_ylabel("Elevasi (m)")
+            ax.legend()
+            st.pyplot(fig)
             
-            start_i = 1 if idx > 0 else 0
-            for i in range(start_i, n_steps + 1):
-                nodes.append({
-                    "x": seg["STA Awal (m)"] + i * real_dx,
-                    "z": z_s - (i * real_dx * slope),
-                    "b": seg["Lebar b (m)"], "m": seg["Talud m"], "n": seg["Kekasaran n"], "seg": seg["Nama Segmen"]
-                })
+        with col_r:
+            st.subheader("Status KP-03")
+            status_counts = res_df['compliance_status'].value_counts()
+            st.write(status_counts)
+            if "BAHAYA" in status_counts:
+                st.error("⚠️ Ada bagian saluran yang tidak aman!")
+            else:
+                st.success("✅ Seluruh segmen aman.")
+
+        st.dataframe(res_df[['x', 'z', 'ws', 'v', 'fr', 'freeboard', 'compliance_status', 'compliance_msg']].style.highlight_max(axis=0), use_container_width=True)
+    else:
+        st.info("👋 Silakan klik tombol **'JALANKAN SIMULASI'** di menu kiri untuk melihat hasil.")
+
+with tab3:
+    if st.session_state.result_nodes is not None and st.session_state.result_df is not None:
+        st.subheader("📥 Download Hasil Pekerjaan")
+        c1, c2, c3 = st.columns(3)
         
-        # --- RUN SOLVER ---
-        if len(nodes) > 0:
-            nodes = calculate_profiles(nodes, st.session_state['q_pro'], st.session_state['ws_down'], st.session_state['ws_up'], force_super)
+        res_nodes = st.session_state.result_nodes
+        res_df = st.session_state.result_df
+        
+        with c1:
+            scr_long = generate_cad_script(res_nodes, "LONG", v_scale)
+            st.download_button("📐 AutoCAD Long Section (.scr)", scr_long, "LongSection_Design.scr")
+            st.caption("Gunakan perintah 'SCRIPT' di AutoCAD")
             
-            # --- PLOT DATA ---
-            for n in nodes:
-                profile['x'].append(n['x']); profile['z'].append(n['z']); profile['ws'].append(n['ws'])
-                profile['ws_sub'].append(n['ws_sub']); profile['ws_sup'].append(n['ws_sup'])
-                profile['eg'].append(n['eg']); profile['crit'].append(n['crit_ws'])
-                final_data.append(n)
+        with c2:
+            scr_cross = generate_cad_script(res_nodes, "CROSS")
+            st.download_button("📐 AutoCAD Cross Section (.scr)", scr_cross, "CrossSection_Design.scr")
+            
+        with c3:
+            toweb_df = res_df[['x', 'z', 'ws', 'v', 'fr', 'freeboard', 'compliance_status']]
+            st.download_button("📋 Laporan Excel (.csv)", toweb_df.to_csv(index=False), "Laporan_Teknis_Irigasi.csv")
+    else:
+         st.info("👋 Hasil belum tersedia. Klik **'JALANKAN SIMULASI'** terlebih dahulu.")
 
-    except Exception as e: st.error(f"Error Calculation: {e}")
-
-# --- 5. TABS ---
-t1, t2, t3 = st.tabs(["📝 Input", "📈 Profil Hidrolis", "📋 Laporan & Download"])
-
-with t1:
-    st.data_editor(st.session_state['df_pro'], num_rows="dynamic", use_container_width=True)
-
-with t2:
-    if len(profile['x']) > 0:
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(profile['x'], profile['z'], 'k-', lw=2, label='Dasar Saluran')
-        ax.plot(profile['x'], profile['crit'], 'r--', lw=1, alpha=0.5, label='Critical Depth')
-        
-        # Grafik Utama
-        ax.plot(profile['x'], profile['ws'], 'b-', lw=2.5, label='Muka Air (W.S.)')
-        ax.fill_between(profile['x'], profile['z'], profile['ws'], color='#00eaff', alpha=0.4)
-        ax.plot(profile['x'], profile['eg'], 'g--', lw=1, label='Energy Grade Line')
-        
-        ax.set_title(f"Profil Hidrolis - Q = {st.session_state['q_pro']} m³/s")
-        ax.set_xlabel("Station (m)"); ax.set_ylabel("Elevation (m)")
-        ax.legend(loc='best'); ax.grid(True, ls=':', alpha=0.5)
-        st.pyplot(fig)
-        
-        if force_super:
-            st.warning("⚠️ **Mode Force Supercritical Aktif!** Grafik ini menunjukkan kemungkinan kecepatan maksimum. Gunakan untuk desain proteksi gerusan.")
-        else:
-            st.success("✅ **Mode Auto (Momentum Balance).** Grafik menunjukkan profil aliran yang paling stabil secara fisika.")
-    else: st.info("Data kosong.")
-
-with t3:
-    if final_data:
-        res = pd.DataFrame(final_data)[["x", "seg", "z", "ws", "y_final", "fr", "regime"]]
-        res.columns = ["Sta", "Segmen", "Elev Dasar", "W.S.", "Depth", "Froude", "Regime"]
-        st.dataframe(res, use_container_width=True)
-        st.download_button("Download Laporan Lengkap (CSV)", res.to_csv(index=False).encode('utf-8'), "Laporan_Smart_HEC_RAS_Final.csv")
+st.divider()
+st.markdown("💡 **Tips:** Untuk akurasi 100%, pastikan input **STA Hilir** dan **Elevasi Hilir** sesuai dengan data ukur lapangan.")
