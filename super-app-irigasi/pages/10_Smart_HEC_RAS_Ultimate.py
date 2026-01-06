@@ -3,159 +3,197 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import io
+import json
 from scipy.optimize import newton
 from scipy.interpolate import interp1d
 
 # =========================================================
-# 1. KONFIGURASI HALAMAN
+# 1. KONFIGURASI HALAMAN & THEME
 # =========================================================
-st.set_page_config(page_title="Smart HEC-RAS Pro - KP 07 Standard", layout="wide")
+st.set_page_config(page_title="JIAT Smart HEC-RAS Ultimate", layout="wide")
+
+st.markdown("""
+    <style>
+    .report-text { font-family: 'Arial'; font-size: 14px; }
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .stTabs [data-baseweb="tab"] { background-color: #f0f2f6; border-radius: 5px; padding: 10px; }
+    </style>
+    """, unsafe_allow_html=True)
 
 # =========================================================
-# 2. CORE ENGINE: HIDROLIKA
+# 2. FUNGSI STANDARISASI & HIDROLIKA (KP-07)
 # =========================================================
+def clean_df(df):
+    """Membersihkan nama kolom dari spasi dan mengubah ke UPPERCASE agar tidak KeyError."""
+    df.columns = df.columns.str.strip().str.upper()
+    return df
+
 def solve_manning(Q, b, m, n, S):
-    if S <= 1e-6: return np.nan, 0.0, 0.0, "Genangan/Flat"
-    def func_manning(y):
-        if y <= 0: return -Q
+    """Solver Manning untuk mencari Tinggi Air Normal (yn)."""
+    if S <= 0.00001: return np.nan, 0.0, 0.0, "Genangan/Flat"
+    def func(y):
         A = (b + m * y) * y
         P = b + 2 * y * np.sqrt(1 + m**2)
         R = A / P
         return (1/n) * A * (R**(2/3)) * (S**0.5) - Q
     try:
-        yn = newton(func_manning, x0=0.5, maxiter=50)
+        yn = newton(func, x0=0.5, maxiter=100)
         A = (b + m * yn) * yn
         V = Q / A
         T = b + 2 * m * yn
-        D = A / T
-        Fr = V / np.sqrt(9.81 * D)
-        status = "✅ Sub-Kritis"
-        if Fr >= 1.1: status = "⚠️ Super-Kritis"
-        elif 0.9 <= Fr < 1.1: status = "⚡ Kritis"
+        Fr = V / np.sqrt(9.81 * (A/T))
+        status = "✅ Sub-Kritis (Aman)"
+        if Fr >= 1.1: status = "⚠️ Super-Kritis (Bahaya)"
+        elif 0.9 <= Fr < 1.1: status = "⚡ Kritis (Gelombang)"
         return yn, V, Fr, status
     except:
-        return np.nan, np.nan, np.nan, "❌ Error"
+        return np.nan, np.nan, np.nan, "❌ Error Solver"
 
 # =========================================================
-# 3. SIDEBAR: BOUNDARY & PROJECT
+# 3. GENERATOR SKRIP AUTOCAD (BWMS STANDARD)
+# =========================================================
+def generate_scr_long(df, s_hor, s_ver):
+    """Membuat file .scr untuk Profil Memanjang."""
+    scr = "._PLINE\n"
+    for _, row in df.iterrows():
+        x = row['STA']
+        y = row['ELEV_DESAIN'] * (s_hor / s_ver)
+        scr += f"{x},{y}\n"
+    scr += "\n._ZOOM _E\n"
+    return scr
+
+def generate_scr_cross(b, h_total, m, z_dasar, s_hor, s_ver):
+    """Membuat potongan melintang trapesium standar KP-07."""
+    # Koordinat relatif dasar saluran (0,0)
+    # Titik: Kiri Atas -> Kiri Bawah -> Kanan Bawah -> Kanan Atas
+    y_atas = (z_dasar + h_total) * (s_hor / s_ver)
+    y_bawah = z_dasar * (s_hor / s_ver)
+    x_kiri_atas = -(b/2 + m * h_total)
+    x_kiri_bawah = -b/2
+    x_kanan_bawah = b/2
+    x_kanan_atas = (b/2 + m * h_total)
+    
+    scr = "._PLINE\n"
+    scr += f"{x_kiri_atas},{y_atas}\n{x_kiri_bawah},{y_bawah}\n"
+    scr += f"{x_kanan_bawah},{y_bawah}\n{x_kanan_atas},{y_atas}\n\n"
+    return scr
+
+# =========================================================
+# 4. SIDEBAR & BOUNDARY
 # =========================================================
 with st.sidebar:
-    st.header("📂 Project Management")
-    st.button("💾 Save Project")
-    st.button("📂 Open Project")
-
-    st.divider()
-    st.header("⚙️ Boundary Condition")
-    sta_awal = st.number_input("STA Awal (m)", value=0.0)
-    elev_awal = st.number_input("Elev Awal Dasar (m)", value=319.0)
-    sta_akhir = st.number_input("STA Akhir (m)", value=1000.0)
-    elev_akhir = st.number_input("Elev Akhir Dasar (m)", value=315.0) # Permintaan User
-
-    # Hitung Kemiringan Total
-    dist_total = sta_akhir - sta_awal
-    if dist_total > 0:
-        slope_total = (elev_awal - elev_akhir) / dist_total
-        st.info(f"**Target Kemiringan Total:** {slope_total:.6f}")
+    st.header("📂 Project & File")
+    col_f1, col_f2 = st.columns(2)
+    with col_f1: st.button("💾 Save")
+    with col_f2: st.button("📂 Open")
     
     st.divider()
-    st.header("📐 Skala Profil")
-    s_hor = st.select_slider("Horizontal 1:", options=[500, 1000, 2000], value=1000)
-    s_ver = st.select_slider("Vertikal 1:", options=[50, 100, 200], value=100)
+    st.header("⚙️ Boundary Condition")
+    s_awal = st.number_input("STA Awal", value=0.0)
+    e_awal = st.number_input("Elev Awal Dasar", value=320.0)
+    s_akhir = st.number_input("STA Akhir", value=1150.0)
+    e_akhir = st.number_input("Elev Akhir Dasar", value=310.0)
+    
+    # Hitung Target Slope Global
+    L_total = s_akhir - s_awal
+    if L_total > 0:
+        slope_global = (e_awal - e_akhir) / L_total
+        st.info(f"Target I-Global: {slope_global:.6f}")
+
+    st.divider()
+    st.header("📐 Skala Print (PDF/SCR)")
+    scale_h = st.number_input("Skala Horizontal 1:", value=1000)
+    scale_v = st.number_input("Skala Vertikal 1:", value=100)
+    st.button("🖨️ Print Laporan (PDF)")
 
 # =========================================================
-# 4. DATA PROCESSOR
-# =========================================================
-def run_analysis(df_g, df_d, s_start, z_start, s_end, z_end):
-    # Parameter dari baris pertama
-    Q = df_g.iloc[0].get('Debit Q (m3/s)', 0.17)
-    b = df_g.iloc[0].get('Lebar b (m)', 0.6)
-    m = df_g.iloc[0].get('Talud m', 1.0)
-    n = df_g.iloc[0].get('Kekasaran n', 0.017)
-
-    # Interpolasi Tanah
-    pts = []
-    for _, r in df_g.iterrows(): pts.append((r['STA Awal (m)'], r['Elev Awal (m)']))
-    last = df_g.iloc[-1]
-    pts.append((last['STA Akhir (m)'], last['Elev Akhir (m)']))
-    df_pts = pd.DataFrame(pts, columns=['STA', 'Z']).drop_duplicates('STA').sort_values('STA')
-    get_z_ground = interp1d(df_pts['STA'], df_pts['Z'], kind='linear', fill_value="extrapolate")
-
-    # Jalur STA
-    control_stas = sorted(list(set([s_start] + df_d['STA'].tolist() + [s_end])))
-    control_stas = [s for s in control_stas if s_start <= s <= s_end]
-
-    res_seg = []
-    res_det = []
-    curr_z = z_start
-
-    for i in range(len(control_stas) - 1):
-        s1, s2 = control_stas[i], control_stas[i+1]
-        L = s2 - s1
-        
-        # Penentuan slope segmen: menuju target elevasi akhir secara proporsional atau mengikuti profil tanah
-        target_z_end = z_start - ((z_start - z_end) * (s2 - s_start) / (s_end - s_start))
-        slope = (curr_z - target_z_end) / L
-        if slope < 0.0005: slope = 0.0005 # Minimum slope teknis
-
-        yn, V, Fr, status = solve_manning(Q, b, m, n, slope)
-        res_seg.append({'STA_Awal': s1, 'STA_Akhir': s2, 'L': L, 'Slope': slope, 'V': V, 'Fr': Fr, 'Status': status})
-
-        # Detail titik
-        for st in np.linspace(s1, s2, int(L/25)+2):
-            z_d = curr_z - (slope * (st - s1))
-            z_g = get_z_ground(st)
-            res_det.append({'STA': st, 'Elev_Tanah': z_g, 'Elev_Desain': z_d, 'Galian': z_g - z_d})
-
-        # Cek Drop
-        drop = df_d[df_d['STA'] == s2]['TERJUNAN (m)'].sum()
-        curr_z = (curr_z - (slope * L)) - drop
-
-    return pd.DataFrame(res_seg), pd.DataFrame(res_det), Q
-
-# =========================================================
-# 5. MAIN UI
+# 5. MAIN LOGIC
 # =========================================================
 st.title("🌊 JIAT Smart HEC-RAS: Professional Design")
 
-f1 = st.file_uploader("📂 Data Tanah", type=['csv', 'xlsx'])
-f2 = st.file_uploader("📂 Data Terjunan", type=['csv', 'xlsx'])
+f_tanah = st.file_uploader("Upload Data Tanah (STA, Elev)", type=['xlsx', 'csv'])
+f_terjun = st.file_uploader("Upload Data Terjunan (STA, Terjunan)", type=['xlsx', 'csv'])
 
-if f1 and f2:
-    df_g = pd.read_csv(f1) if f1.name.endswith('csv') else pd.read_excel(f1)
-    df_d = pd.read_csv(f2) if f2.name.endswith('csv') else pd.read_excel(f2)
-    
-    df_seg, df_det, Q_val = run_analysis(df_g, df_d, sta_awal, elev_awal, sta_akhir, elev_akhir)
-    st.success("Perhitungan Selesai!")
+if f_tanah and f_terjun:
+    try:
+        # Load & Clean Data
+        df_g = clean_df(pd.read_excel(f_tanah) if f_tanah.name.endswith('xlsx') else pd.read_csv(f_tanah))
+        df_t = clean_df(pd.read_excel(f_terjun) if f_terjun.name.endswith('xlsx') else pd.read_csv(f_terjun))
 
-    t1, t2, t3, t4 = st.tabs(["📊 Grafik", "📑 Data", "💾 Export Data", "🖨️ AutoCAD"])
-
-    with t1:
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ax.plot(df_det['STA'], df_det['Elev_Tanah'], 'brown', label='Tanah')
-        ax.plot(df_det['STA'], df_det['Elev_Desain'], 'blue', label='Desain')
-        ax.legend(); st.pyplot(fig)
-
-    with t2:
-        st.dataframe(df_seg)
-
-    with t3:
-        st.subheader("Download Hasil Analisa")
-        # Perbaikan: Membuat Excel Buffer agar tidak kosong
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            df_seg.to_excel(writer, sheet_name='Analisa_Segmen', index=False)
-            df_det.to_excel(writer, sheet_name='Detail_STA', index=False)
-            # Sheet khusus AutoCAD
-            df_acad = df_det[['STA', 'Elev_Desain']].copy()
-            df_acad.to_excel(writer, sheet_name='DATA_AUTOCAD', index=False)
+        # Analisa Engineering
+        # (Menggunakan parameter dari baris pertama file tanah)
+        Q = df_g.iloc[0].get('DEBIT Q (M3/S)', 0.17)
+        b = df_g.iloc[0].get('LEBAR B (M)', 0.6)
+        m = df_g.iloc[0].get('TALUD M', 1.0)
+        n = df_g.iloc[0].get('KEKASARAN N', 0.017)
         
-        st.download_button(
-            label="📥 Download Excel (.xlsx)",
-            data=buffer.getvalue(),
-            file_name="Hasil_Desain_JIAT.xlsx",
-            mime="application/vnd.ms-excel"
-        )
-        st.write("File Excel berisi detail STA, Analisa Hidrolika, dan Koordinat AutoCAD.")
+        # Interpolasi Tanah
+        df_pts = pd.concat([
+            df_g[['STA AWAL (M)', 'ELEV AWAL (M)']].rename(columns={'STA AWAL (M)':'STA', 'ELEV AWAL (M)':'Z'}),
+            df_g[['STA AKHIR (M)', 'ELEV AKHIR (M)']].rename(columns={'STA AKHIR (M)':'STA', 'ELEV AKHIR (M)':'Z'})
+        ]).drop_duplicates().sort_values('STA')
+        get_z_ground = interp1d(df_pts['STA'], df_pts['Z'], kind='linear', fill_value="extrapolate")
 
-    with t4:
-        st.code(f"Script AutoCAD (PLINE):\n" + "\n".join([f"{r.STA},{r.Elev_Desain*10}" for i, r in df_det.iterrows()]))
+        # Logic Perhitungan Segmen
+        control_stas = sorted(list(set([s_awal] + df_t['STA'].tolist() + [s_akhir])))
+        res_det = []
+        curr_z = e_awal
+
+        for i in range(len(control_stas)-1):
+            s1, s2 = control_stas[i], control_stas[i+1]
+            L = s2 - s1
+            # Distribusi elevasi proporsional menuju e_akhir
+            target_z2 = e_awal - ((e_awal - e_akhir) * (s2 - s_awal) / L_total)
+            slope = (curr_z - target_z2) / L
+            if slope < 0.0005: slope = 0.0005 # Min Slope Teknis
+            
+            yn, V, Fr, status = solve_manning(Q, b, m, n, slope)
+            
+            # Generate points per 25m
+            for st_val in np.linspace(s1, s2, int(L/25)+2):
+                z_d = curr_z - (slope * (st_val - s1))
+                res_det.append({'STA': st_val, 'ELEV_TANAH': float(get_z_ground(st_val)), 
+                                'ELEV_DESAIN': z_d, 'STATUS': status, 'FR': Fr})
+            
+            # Apply Drop di ujung segmen jika ada
+            drop_val = df_t[df_t['STA'] == s2]['TERJUNAN (M)'].sum()
+            curr_z = (curr_z - (slope * L)) - drop_val
+
+        df_final = pd.DataFrame(res_det)
+        st.success("✅ Perhitungan Selesai!")
+
+        # TABS
+        tab_grafik, tab_data, tab_export = st.tabs(["📊 Grafik Profil", "📑 Data Analisa", "💾 Export & AutoCAD"])
+        
+        with tab_grafik:
+            fig, ax = plt.subplots(figsize=(12, 4))
+            ax.plot(df_final['STA'], df_final['ELEV_TANAH'], 'brown', label='Tanah Asli')
+            ax.plot(df_final['STA'], df_final['ELEV_DESAIN'], 'blue', linewidth=2, label='Dasar Saluran')
+            ax.legend(); st.pyplot(fig)
+
+        with tab_data:
+            st.dataframe(df_final)
+            if any(df_final['FR'] >= 0.9):
+                st.warning("⚠️ **Rekomendasi Teknik:** Terdeteksi aliran kritis/superkritis. Perlu penambahan terjunan atau memperlebar dasar saluran (b) untuk menurunkan Froude Number.")
+
+        with tab_export:
+            # AutoCAD Section
+            st.subheader("🚀 AutoCAD Script (BWMS/KP-07)")
+            col_ex1, col_ex2 = st.columns(2)
+            with col_ex1:
+                scr_long = generate_scr_long(df_final, scale_h, scale_v)
+                st.download_button("📥 Download SCR Long Section", scr_long, "Long_Section.scr")
+            with col_ex2:
+                # Contoh Cross Section di STA 0
+                scr_cross = generate_scr_cross(b, 1.5, m, e_awal, scale_h, scale_v)
+                st.download_button("📥 Download SCR Cross (STA 0)", scr_cross, "Cross_Section.scr")
+
+            # Excel Export
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                df_final.to_excel(writer, sheet_name='DATA_DETAIL', index=False)
+            st.download_button("💾 Download Full Data (Excel)", buffer.getvalue(), "Hasil_Desain.xlsx")
+
+    except Exception as e:
+        st.error(f"Terjadi Kesalahan: {e}")
+        st.info("Pastikan nama kolom di file Terjunan adalah 'STA' dan 'TERJUNAN (M)'")
