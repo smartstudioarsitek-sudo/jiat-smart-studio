@@ -5,9 +5,12 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import io
 
-# --- FUNGSI PERHITUNGAN HIDROLIS (MANNING TRAPESIUM) ---
+# ==========================================
+# 1. FUNGSI PERHITUNGAN & VISUALISASI
+# ==========================================
 
 def get_freeboard_kp03(Q):
+    """Standar KP-03"""
     if Q < 0.5: return 0.20
     elif Q < 1.5: return 0.25
     elif Q < 5.0: return 0.30
@@ -16,6 +19,7 @@ def get_freeboard_kp03(Q):
     else: return 0.60
 
 def solve_manning_y(Q, b, m, n, S):
+    """Mencari y (tinggi air) dengan iterasi"""
     if Q <= 0 or b <= 0 or S <= 0: return 0.0
     y = 0.5
     for _ in range(50):
@@ -23,29 +27,32 @@ def solve_manning_y(Q, b, m, n, S):
         P = b + 2 * y * np.sqrt(1 + m**2)
         R = A / P if P > 0 else 0
         Q_calc = (1/n) * A * (R**(2/3)) * (S**0.5)
+        
         if abs(Q_calc - Q) < 0.0001: break
+        
         if Q_calc == 0: y += 0.1
         else: y = y * (Q / Q_calc) ** 0.6
     return y
 
-# --- FUNGSI VISUALISASI PENAMPANG ---
 def gambar_penampang_saluran(row):
+    """Menggambar plot Matplotlib"""
     b, m = row['Lebar (b)'], row['Talud (m)']
     h_total, y_air, w_jagaan = row['Tinggi Total (h)'], row['Tinggi Air (y)'], row['Jagaan (w)']
     nama = row['Nama Saluran']
     
     fig, ax = plt.subplots(figsize=(7, 4))
     
-    # Koordinat Geometri
+    # Geometri
     x_talud_total = m * h_total
     x_talud_air = m * y_air
     
+    # Titik Saluran
     p1 = (0, h_total)
     p2 = (x_talud_total, 0)
     p3 = (x_talud_total + b, 0)
     p4 = (x_talud_total + b + x_talud_total, h_total)
     
-    # Gambar Dinding
+    # Gambar Fisik Saluran
     poly_saluran = patches.Polygon([p1, p2, p3, p4], closed=False, edgecolor='#444444', facecolor='none', linewidth=3)
     ax.add_patch(poly_saluran)
     
@@ -73,68 +80,49 @@ def gambar_penampang_saluran(row):
     ax.set_ylim(-0.5 * h_total, h_total * 1.5)
     return fig
 
-# --- MAIN APP ---
+# ==========================================
+# 2. KONFIGURASI HALAMAN & SIDEBAR
+# ==========================================
+
 st.set_page_config(page_title="Desain Irigasi Pro", layout="wide")
+st.title("Desain Saluran Irigasi (Run Mode)")
 
-st.title("Desain Saluran Irigasi (Input/Output Excel)")
-
-# ---------------------------------------------------------
-# SIDEBAR: MENU FILE (OPEN/SAVE)
-# ---------------------------------------------------------
+# --- SIDEBAR (EXCEL MENU) ---
 with st.sidebar:
     st.header("📂 Menu File")
-    st.write("Kelola data desain Anda di sini.")
     
-    # 1. DOWNLOAD TEMPLATE
-    # Buat template kosong agar user tahu formatnya
+    # A. Download Template
     df_template = pd.DataFrame({
         'Nama Saluran': ['Saluran Contoh'],
-        'Debit (Q)': [1.0],
-        'Lebar (b)': [0.8],
-        'Talud (m)': [1.0],
-        'Slope (S)': [0.0005],
-        'Manning (n)': [0.017]
+        'Debit (Q)': [1.0], 'Lebar (b)': [0.8], 'Talud (m)': [1.0], 
+        'Slope (S)': [0.0005], 'Manning (n)': [0.017]
     })
-    
     buffer_template = io.BytesIO()
     with pd.ExcelWriter(buffer_template, engine='xlsxwriter') as writer:
-        df_template.to_excel(writer, index=False, sheet_name='Input Data')
+        df_template.to_excel(writer, index=False)
         
-    st.download_button(
-        label="📥 Download Template Excel",
-        data=buffer_template.getvalue(),
-        file_name="template_irigasi.xlsx",
-        mime="application/vnd.ms-excel",
-        help="Download file ini untuk melihat format kolom yang benar."
-    )
+    st.download_button("📥 Download Template Excel", data=buffer_template.getvalue(), file_name="template_irigasi.xlsx")
     
     st.divider()
 
-    # 2. UPLOAD FILE (OPEN)
+    # B. Upload File
     uploaded_file = st.file_uploader("Buka File Excel (.xlsx)", type=['xlsx'])
-    
-    # Logika Upload
     if uploaded_file is not None:
         try:
             df_uploaded = pd.read_excel(uploaded_file)
-            # Validasi kolom wajib
-            wajib = ['Nama Saluran', 'Debit (Q)', 'Lebar (b)', 'Talud (m)', 'Slope (S)', 'Manning (n)']
-            if all(col in df_uploaded.columns for col in wajib):
-                st.session_state.df_input = df_uploaded
-                st.success("✅ Data berhasil dimuat!")
-            else:
-                st.error("❌ Format kolom salah! Gunakan template.")
-        except Exception as e:
-            st.error(f"Error membaca file: {e}")
+            st.session_state.df_input = df_uploaded
+            st.success("✅ Data dimuat!")
+        except:
+            st.error("❌ Gagal baca file.")
 
-# ---------------------------------------------------------
-# BODY UTAMA
-# ---------------------------------------------------------
+# ==========================================
+# 3. INPUT DATA (BAGIAN 1)
+# ==========================================
 
-# Inisialisasi Data Default (Jika belum ada upload)
+# Inisialisasi Session State Input
 if 'df_input' not in st.session_state:
     data_awal = {
-        'Nama Saluran': ['Saluran Sekunder 1', 'Saluran Tersier A'],
+        'Nama Saluran': ['Sekunder 1', 'Tersier A'],
         'Debit (Q)': [1.25, 0.45],
         'Lebar (b)': [1.00, 0.60],
         'Talud (m)': [0.0, 1.0],
@@ -143,8 +131,10 @@ if 'df_input' not in st.session_state:
     }
     st.session_state.df_input = pd.DataFrame(data_awal)
 
-# EDITOR DATA
-st.subheader("1. Input Parameter")
+st.subheader("1. Input Parameter Desain")
+st.caption("Silakan edit data di bawah ini. Tekan tombol RUN jika sudah selesai.")
+
+# Tampilkan Editor
 edited_df = st.data_editor(
     st.session_state.df_input,
     num_rows="dynamic",
@@ -155,59 +145,70 @@ edited_df = st.data_editor(
         "Slope (S)": st.column_config.NumberColumn("Slope S", format="%.5f"),
     },
     hide_index=True,
-    key="editor" # Key penting agar sinkron
+    key="editor_utama" 
 )
 
-# Jika user mengedit tabel manual, update session state
+# Update session state jika editor berubah
 if not edited_df.equals(st.session_state.df_input):
     st.session_state.df_input = edited_df
 
-# PROSES HITUNG
-hasil_list = []
-for index, row in edited_df.iterrows():
-    q, b, m, s, n = row['Debit (Q)'], row['Lebar (b)'], row['Talud (m)'], row['Slope (S)'], row['Manning (n)']
+# ==========================================
+# 4. TOMBOL EKSEKUSI (RUNNING)
+# ==========================================
+
+st.write("")
+col_btn1, col_btn2 = st.columns([1, 4])
+with col_btn1:
+    # Tombol Primary agar mencolok
+    tombol_run = st.button("▶️ MULAI PERHITUNGAN (RUN)", type="primary", use_container_width=True)
+
+# Logika Tombol Run
+if tombol_run:
+    with st.spinner('Sedang menghitung hidrolika...'):
+        hasil_list = []
+        # Loop perhitungan
+        for index, row in edited_df.iterrows():
+            q, b, m, s, n = row['Debit (Q)'], row['Lebar (b)'], row['Talud (m)'], row['Slope (S)'], row['Manning (n)']
+            
+            y_calc = solve_manning_y(q, b, m, n, s)
+            w_calc = get_freeboard_kp03(q)
+            h_calc = y_calc + w_calc
+            area = (b + m * y_calc) * y_calc
+            v_calc = q / area if area > 0 else 0
+            tipe = "Kotak" if m == 0 else "Trapesium"
+            
+            hasil_list.append({
+                'Nama Saluran': row['Nama Saluran'],
+                'Tipe': tipe,
+                'Debit (Q)': q, 'Lebar (b)': b, 'Talud (m)': m,
+                'Slope (S)': s, 'Manning (n)': n,
+                'Tinggi Air (y)': round(y_calc, 3),
+                'Jagaan (w)': round(w_calc, 2),
+                'Tinggi Total (h)': round(h_calc, 2),
+                'Kecepatan (V)': round(v_calc, 2)
+            })
+        
+        # SIMPAN HASIL KE SESSION STATE (Supaya tidak hilang saat klik lain)
+        st.session_state.df_hasil = pd.DataFrame(hasil_list)
+        st.success("Perhitungan Selesai! Lihat hasil di bawah.")
+
+# ==========================================
+# 5. OUTPUT DATA (BAGIAN 2 & 3)
+# ==========================================
+
+# Cek apakah sudah ada hasil hitungan di memori
+if 'df_hasil' in st.session_state:
+    df_hasil = st.session_state.df_hasil
     
-    y_calc = solve_manning_y(q, b, m, n, s)
-    w_calc = get_freeboard_kp03(q)
-    h_calc = y_calc + w_calc
-    area = (b + m * y_calc) * y_calc
-    v_calc = q / area if area > 0 else 0
-    tipe = "Kotak" if m == 0 else "Trapesium"
-    
-    hasil_list.append({
-        'Nama Saluran': row['Nama Saluran'],
-        'Tipe': tipe,
-        'Debit (Q)': q,
-        'Lebar (b)': b,
-        'Talud (m)': m,
-        'Slope (S)': s,
-        'Manning (n)': n,
-        'Tinggi Air (y)': round(y_calc, 3),
-        'Jagaan (w)': round(w_calc, 2),
-        'Tinggi Total (h)': round(h_calc, 2),
-        'Kecepatan (V)': round(v_calc, 2)
-    })
-
-df_hasil = pd.DataFrame(hasil_list)
-
-# TAMPILKAN HASIL
-st.subheader("2. Hasil Perhitungan")
-st.dataframe(df_hasil, use_container_width=True, hide_index=True)
-
-# ---------------------------------------------------------
-# LANJUTAN SIDEBAR: TOMBOL SAVE (DOWNLOAD)
-# ---------------------------------------------------------
-# Kita taruh tombol download di sidebar, tapi kodenya di sini
-# karena menunggu df_hasil selesai dihitung dulu.
-
-with st.sidebar:
     st.divider()
-    # 3. DOWNLOAD HASIL (SAVE)
+    st.subheader("2. Hasil Perhitungan")
+    st.dataframe(df_hasil, use_container_width=True, hide_index=True)
+
+    # --- FITUR DOWNLOAD HASIL ---
     buffer_download = io.BytesIO()
     with pd.ExcelWriter(buffer_download, engine='xlsxwriter') as writer:
         df_hasil.to_excel(writer, index=False, sheet_name='Hasil Desain')
-        
-        # Opsional: Auto-adjust column width (Perlu xlsxwriter)
+        # Auto-adjust width column
         worksheet = writer.sheets['Hasil Desain']
         for i, col in enumerate(df_hasil.columns):
             width = max(df_hasil[col].astype(str).map(len).max(), len(col))
@@ -220,16 +221,33 @@ with st.sidebar:
         mime="application/vnd.ms-excel"
     )
 
-# VISUALISASI (Sama seperti sebelumnya)
-st.subheader("3. Visualisasi")
-pilihan = st.selectbox("Pilih Saluran:", df_hasil['Nama Saluran'])
-if pilihan:
-    row_vis = df_hasil[df_hasil['Nama Saluran'] == pilihan].iloc[0]
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        st.pyplot(gambar_penampang_saluran(row_vis))
-    with col2:
-        st.info(f"Kecepatan: {row_vis['Kecepatan (V)']} m/s")
-        if row_vis['Kecepatan (V)'] < 0.3: st.warning("Rawan Endapan (<0.3)")
-        elif row_vis['Kecepatan (V)'] > 2.0: st.warning("Rawan Gerusan (>2.0)")
-        else: st.success("Kecepatan OK")
+    st.divider()
+
+    # --- VISUALISASI ---
+    st.subheader("3. Visualisasi Penampang")
+    
+    # Pilih saluran dari hasil yang sudah dihitung
+    pilihan_saluran = st.selectbox("Pilih Saluran:", df_hasil['Nama Saluran'])
+    
+    if pilihan_saluran:
+        row_vis = df_hasil[df_hasil['Nama Saluran'] == pilihan_saluran].iloc[0]
+        
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            fig = gambar_penampang_saluran(row_vis)
+            st.pyplot(fig)
+            
+        with col2:
+            st.markdown(f"**Info Teknis: {pilihan_saluran}**")
+            st.info(f"Dimensi: {row_vis['Lebar (b)']} x {row_vis['Tinggi Total (h)']} m")
+            
+            v = row_vis['Kecepatan (V)']
+            st.metric("Kecepatan (V)", f"{v} m/s")
+            
+            if v < 0.3: st.error("⚠️ Terlalu Rendah (Endapan)")
+            elif v > 2.0: st.warning("⚠️ Terlalu Tinggi (Gerusan)")
+            else: st.success("✅ Kecepatan Aman")
+
+else:
+    # Jika belum klik Run
+    st.info("👆 Masukkan data di tabel atas, lalu klik tombol 'MULAI PERHITUNGAN (RUN)' untuk melihat hasil.")
