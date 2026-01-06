@@ -265,6 +265,45 @@ if 'result_nodes' not in st.session_state:
 tab1, tab2, tab3 = st.tabs(["📝 Input & Edit", "📊 Hasil Analisis Hidrolika", "💾 Ekspor Output"])
 
 with tab1:
+    st.subheader("Manajemen Data (Excel)")
+    
+    # --- FITUR BARU: EXCEL UPLOAD & DOWNLOAD ---
+    col_up, col_down = st.columns(2)
+    
+    with col_up:
+        uploaded_file = st.file_uploader("📂 Buka File Excel (.xlsx)", type=["xlsx"])
+        if uploaded_file is not None:
+            try:
+                # Membaca file excel
+                df_uploaded = pd.read_excel(uploaded_file)
+                # Validasi kolom agar tidak error
+                required_cols = ["Nama", "STA Awal", "STA Akhir", "Z Awal", "Z Akhir", "Lebar b", "Talud m", "Tinggi H"]
+                if all(col in df_uploaded.columns for col in required_cols):
+                    st.session_state.df = df_uploaded[required_cols] # Ambil kolom yg sesuai saja
+                    st.success("✅ File berhasil dimuat!")
+                else:
+                    st.error(f"❌ Format Kolom Salah! Pastikan kolom: {', '.join(required_cols)}")
+            except Exception as e:
+                st.error(f"Error membaca file: {e}")
+
+    with col_down:
+        # Fungsi convert DF ke Excel Bytes
+        def to_excel(df):
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='Data Saluran')
+            return output.getvalue()
+        
+        excel_data = to_excel(st.session_state.df)
+        st.download_button(
+            label="💾 Simpan Data ke Excel",
+            data=excel_data,
+            file_name="Data_Geometri_Saluran.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+
+    st.divider()
     st.subheader("Edit Geometri Saluran")
     st.info("💡 Tekan tombol 'JALANKAN SIMULASI' di menu kiri (Sidebar) setelah mengubah data.")
     edited_df = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
