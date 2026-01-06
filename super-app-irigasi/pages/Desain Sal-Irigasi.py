@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import io
 
 # --- 1. CONFIG & STYLE ---
-st.set_page_config(page_title="Desain Saluran Irigasi Pro", layout="wide", page_icon="🌊")
+st.set_page_config(page_title="Desain Saluran Irigasi", layout="wide", page_icon="🌊")
 
 st.markdown("""
 <style>
@@ -13,350 +13,225 @@ st.markdown("""
         padding: 15px; background-color: #2c3e50; color: white;
         border-radius: 8px; text-align: center; margin-bottom: 15px;
     }
-    .success-box { padding: 10px; background-color: #d4edda; color: #155724; border-radius: 5px; }
-    .warning-box { padding: 10px; background-color: #fff3cd; color: #856404; border-radius: 5px; }
+    div[data-testid="stMetricValue"] { font-size: 18px; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 2. FUNGSI LOGIKA (CALCULATION) ---
-def hitung_hidrolika_advanced(df):
+def hitung_hidrolika_fixed(df):
     """
-    Menghitung parameter hidrolika berdasarkan data input.
-    Menggunakan Rumus Manning: V = 1/n * R^(2/3) * S^(1/2)
+    Menghitung parameter hidrolika sesuai format input user.
     """
-    # Pastikan tipe data numerik
-    numeric_cols = ['STA Awal', 'STA Akhir', 'Z Awal', 'Z Akhir', 'Lebar b', 'Talud m', 'Tinggi H', 'Kekasaran n', 'Debit Q']
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
-    # Hitung Panjang (L) dan Slope (S) jika Z ada
+    # 1. Pastikan kolom angka terbaca sebagai numerik (handle error input text)
+    cols_num = ['STA Awal', 'STA Akhir', 'Z Awal', 'Z Akhir', 'Lebar b', 'Talud m', 'Tinggi H', 'Debit Q', 'Kekasaran n']
+    for c in cols_num:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            
+    # 2. Hitung Geometri Panjang
     df['Panjang L'] = df['STA Akhir'] - df['STA Awal']
+    df['Beda Tinggi'] = df['Z Awal'] - df['Z Akhir']
     
-    # Logic Slope: Jika Z Awal/Akhir ada, hitung S. Jika tidak, pakai kolom 'Slope S' manual jika ada
-    # Disini kita prioritaskan hitungan dari elevasi (Z) agar akurat sesuai Long Section
-    df['Delta Z'] = df['Z Awal'] - df['Z Akhir']
-    
-    # Hindari pembagian nol
-    df['Slope S'] = df.apply(lambda x: x['Delta Z'] / x['Panjang L'] if x['Panjang L'] > 0 else 0, axis=1)
-    
-    # Calculation Loop
-    results = []
-    for idx, row in df.iterrows():
-        b = row['Lebar b']
-        h = row['Tinggi H'] # Tinggi air rencana
-        m = row['Talud m']
-        n = row.get('Kekasaran n', 0.025) # Default beton kasar/pasangan batu
-        S = row['Slope S']
-        
-        # Geometri Basah
-        A = (b + m * h) * h
-        P = b + 2 * h * np.sqrt(1 + m**2)
-        R = A / P if P > 0 else 0
-        
-        # Manning
-        V = 0
-        Q_cap = 0
-        if S > 0 and n > 0:
-            V = (1/n) * (R**(2/3)) * (S**(0.5))
-            Q_cap = A * V # m3/s
-        
-        # Froude
-        T = b + 2 * m * h # Lebar atas
-        D_hyd = A / T if T > 0 else 0
-        Fr = V / np.sqrt(9.81 * D_hyd) if D_hyd > 0 else 0
-        
-        results.append({
-            'Luas Basah A': round(A, 3),
-            'Keliling P': round(P, 3),
-            'Jari-jari R': round(R, 3),
-            'Kecepatan V': round(V, 3),
-            'Q Kapasitas': round(Q_cap, 3),
-            'Froude Fr': round(Fr, 3),
-            'Status Aliran': 'Superkritis' if Fr > 1 else 'Subkritis'
-        })
-        
-    df_res = pd.concat([df, pd.DataFrame(results)], axis=1)
-    return df_res
+    # 3. Hitung Slope (S)
+    # Jika Panjang > 0, S = Delta Z / L. Jika tidak, anggap 0.
+    df['Slope S'] = df.apply(lambda x: x['Beda Tinggi'] / x['Panjang L'] if x['Panjang L'] > 0 else 0, axis=1)
 
-# --- 3. FUNGSI AUTOCAD SCRIPT (KP-07 STYLE) ---
-def generate_autocad_script(df):
-    """
-    Membuat file teks (.scr) untuk menggambar Long Section dan Cross Section di AutoCAD.
-    """
-    scr = []
-    scr.append("OSMODE 0") # Matikan object snap agar akurat
-    scr.append("LIMITS OFF")
-    scr.append("ZOOM E")
-
-    # --- A. GAMBAR LONG SECTION (Profile) ---
-    # Kita gambar garis tanah dasar (Z Awal ke Z Akhir)
-    scr.append(f"; --- LONG SECTION ---")
-    start_x_long = 0
-    start_y_long = 0 # Offset Y untuk Long Section
-    
-    # Gambar Garis Dasar Saluran
-    scr.append("_PLINE")
-    for idx, row in df.iterrows():
-        # Koordinat X berdasarkan STA, Y berdasarkan Elevasi Z
-        x1 = row['STA Awal']
-        y1 = row['Z Awal']
-        x2 = row['STA Akhir']
-        y2 = row['Z Akhir']
-        
-        if idx == 0:
-            scr.append(f"{x1},{y1}") # Titik pertama
-        scr.append(f"{x2},{y2}") # Titik selanjutnya
-    scr.append("") # Enter untuk selesai command PLINE
-    
-    # Label STA di Long Section
-    for idx, row in df.iterrows():
-        scr.append(f"_TEXT {row['STA Awal']},{row['Z Awal'] - 2} 0.5 90 STA {row['STA Awal']}")
-    # Label STA Akhir terakhir
-    last_row = df.iloc[-1]
-    scr.append(f"_TEXT {last_row['STA Akhir']},{last_row['Z Akhir'] - 2} 0.5 90 STA {last_row['STA Akhir']}")
-
-    # --- B. GAMBAR CROSS SECTION (Per Segmen) ---
-    scr.append(f"; --- CROSS SECTIONS ---")
-    # Digambar terpisah di sebelah kanan grafik Long Section
-    offset_x_cross = df['STA Akhir'].max() + 50 
-    gap_antar_cross = 30 # Jarak antar gambar cross section
-    
-    current_x = offset_x_cross
-    
+    # 4. Loop Perhitungan Manning
+    hasil_list = []
     for idx, row in df.iterrows():
         b = row['Lebar b']
         h = row['Tinggi H']
         m = row['Talud m']
-        z_base = 0 # Kita gambar relatif terhadap 0 lokal
+        n = row.get('Kekasaran n', 0.025) # Default jika kosong
+        S = row['Slope S']
         
-        # Titik Koordinat Trapesium (Lokal)
-        # Kiri Atas -> Kiri Bawah -> Kanan Bawah -> Kanan Atas
-        # Lebar atas total = b + 2mh
-        dx_top = m * h
+        # Luas Basah (A) & Keliling Basah (P)
+        A = (b + m * h) * h
+        P = b + 2 * h * np.sqrt(1 + m**2)
+        R = A / P if P > 0 else 0
         
-        x_bl = current_x # Bottom Left
-        y_bl = z_base
+        # Kecepatan (V) & Debit Kapasitas (Q Cap)
+        V = 0
+        Q_cap = 0
+        if S > 0 and n > 0:
+            V = (1/n) * (R**(2/3)) * (S**(0.5))
+            Q_cap = A * V
+            
+        # Froude Number (Cek Aliran)
+        T = b + 2 * m * h # Lebar atas
+        D_hyd = A / T if T > 0 else 0
+        Fr = V / np.sqrt(9.81 * D_hyd) if D_hyd > 0 else 0
         
-        x_br = current_x + b # Bottom Right
-        y_br = z_base
+        # Status
+        Q_req = row.get('Debit Q', 0)
+        status = "✅ AMAN" if Q_cap >= Q_req else "❌ MELUAP"
         
-        x_tl = current_x - dx_top # Top Left
-        y_tl = z_base + h
+        hasil_list.append({
+            'Luas A': round(A, 3),
+            'Kecepatan V': round(V, 3),
+            'Q Kapasitas': round(Q_cap, 3),
+            'Froude Fr': round(Fr, 3),
+            'Status': status
+        })
         
-        x_tr = current_x + b + dx_top # Top Right
-        y_tr = z_base + h
-        
-        # Gambar Penampang
-        scr.append("_PLINE")
-        scr.append(f"{x_tl},{y_tl}")
-        scr.append(f"{x_bl},{y_bl}")
-        scr.append(f"{x_br},{y_br}")
-        scr.append(f"{x_tr},{y_tr}")
-        scr.append("") # Enter
-        
-        # Label Nama Segmen
-        scr.append(f"_TEXT {current_x + b/2},{y_bl - 2} 0.5 0 {row['Nama']}")
-        
-        # Geser X untuk gambar berikutnya
-        current_x += (b + 2*dx_top + gap_antar_cross)
+    # Gabungkan hasil ke dataframe asli
+    df_hasil = pd.concat([df, pd.DataFrame(hasil_list)], axis=1)
+    return df_hasil
 
+# --- 3. AUTOCAD SCRIPT GENERATOR ---
+def generate_script_fixed(df):
+    """
+    Membuat Script AutoCAD (.scr) untuk Long Section & Cross Section
+    Sesuai format kolom user.
+    """
+    scr = []
+    scr.append("OSMODE 0")
+    scr.append("LIMITS OFF")
+    scr.append("ZOOM E")
+    
+    # --- A. LONG SECTION (Z Awal ke Z Akhir) ---
+    scr.append("; --- LONG SECTION START ---")
+    scr.append("_PLINE") # Mulai garis
+    
+    first = True
+    for idx, row in df.iterrows():
+        x1, z1 = row['STA Awal'], row['Z Awal']
+        x2, z2 = row['STA Akhir'], row['Z Akhir']
+        
+        if first:
+            scr.append(f"{x1},{z1}")
+            first = False
+        scr.append(f"{x2},{z2}")
+    scr.append("") # Enter (Selesai Pline)
+    
+    # Text STA di Long Section
+    for idx, row in df.iterrows():
+        scr.append(f"_TEXT {row['STA Awal']},{row['Z Awal']-1} 0.2 90 {row['STA Awal']}")
+    
+    # --- B. CROSS SECTION ---
+    scr.append("; --- CROSS SECTION START ---")
+    start_x_cross = df['STA Akhir'].max() + 20 # Geser ke kanan gambar
+    gap = 15 # Jarak antar gambar
+    
+    current_x = start_x_cross
+    for idx, row in df.iterrows():
+        b = row['Lebar b']
+        h = row['Tinggi H']
+        m = row['Talud m']
+        
+        # Koordinat lokal trapesium
+        # 1. Kiri Atas -> 2. Kiri Bawah -> 3. Kanan Bawah -> 4. Kanan Atas
+        dx = m * h
+        x1, y1 = current_x - dx, h
+        x2, y2 = current_x, 0
+        x3, y3 = current_x + b, 0
+        x4, y4 = current_x + b + dx, h
+        
+        scr.append("_PLINE")
+        scr.append(f"{x1},{y1}")
+        scr.append(f"{x2},{y2}")
+        scr.append(f"{x3},{y3}")
+        scr.append(f"{x4},{y4}")
+        scr.append("")
+        
+        # Nama Saluran
+        scr.append(f"_TEXT {current_x + b/2},{y2 - 1} 0.3 0 {row['Nama']}")
+        
+        current_x += (b + 2*dx + gap)
+        
     scr.append("ZOOM E")
     return "\n".join(scr)
 
-# --- 4. LAYOUT APLIKASI ---
+# --- 4. UI LAYOUT ---
+st.markdown('<div class="header-box"><h2>🌊 Aplikasi Desain Irigasi (Format User)</h2></div>', unsafe_allow_html=True)
 
-st.markdown('<div class="header-box"><h2>🌊 Aplikasi Desain Irigasi Terpadu (XLSX & AutoCAD)</h2></div>', unsafe_allow_html=True)
-
-# SIDEBAR: DATA HANDLING
+# SIDEBAR
 with st.sidebar:
-    st.header("📂 Menu File")
+    st.header("📂 File Operations")
     
-    # 1. Download Template
-    st.subheader("1. Template Data")
-    # Membuat DataFrame dummy untuk template
-    df_template = pd.DataFrame(columns=[
+    # A. DOWNLOAD TEMPLATE (Sesuai format user)
+    # Kolom: Nama,STA Awal,STA Akhir,Z Awal,Z Akhir,Lebar b,Talud m,Tinggi H,Debit Q,Kekasaran n
+    df_temp = pd.DataFrame(columns=[
         'Nama', 'STA Awal', 'STA Akhir', 'Z Awal', 'Z Akhir', 
-        'Lebar b', 'Talud m', 'Tinggi H', 'Kekasaran n', 'Debit Q'
+        'Lebar b', 'Talud m', 'Tinggi H', 'Debit Q', 'Kekasaran n'
     ])
-    # Isi satu baris contoh
-    df_template.loc[0] = ['Saluran 1', 0, 50, 100.5, 100.0, 1.0, 1.0, 1.2, 0.025, 0.5]
+    # Contoh data dummy 1 baris
+    df_temp.loc[0] = ['S1', 0, 50, 100.5, 100.2, 1.0, 1.0, 1.2, 0.5, 0.025]
     
-    buffer_template = io.BytesIO()
-    with pd.ExcelWriter(buffer_template, engine='xlsxwriter') as writer:
-        df_template.to_excel(writer, index=False, sheet_name='DataSaluran')
-    
-    st.download_button(
-        label="⬇️ Download Template Excel",
-        data=buffer_template.getvalue(),
-        file_name="template_irigasi.xlsx",
-        mime="application/vnd.ms-excel"
-    )
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        df_temp.to_excel(writer, index=False)
+        
+    st.download_button("⬇️ Download Template Excel", buffer.getvalue(), "template_irigasi_user.xlsx", "application/vnd.ms-excel")
     
     st.divider()
     
-    # 2. Upload Data
-    st.subheader("2. Upload & Open")
-    uploaded_file = st.file_uploader("Upload File Excel (.xlsx)", type=['xlsx'])
-    
-    if uploaded_file:
+    # B. UPLOAD
+    uploaded = st.file_uploader("Upload Data (.xlsx)", type=['xlsx'])
+    if uploaded:
         try:
-            df_input = pd.read_excel(uploaded_file)
-            st.session_state['data_irigasi'] = df_input
-            st.success("✅ Data berhasil dimuat!")
-        except Exception as e:
-            st.error(f"Error membaca file: {e}")
-            
-    # Inisialisasi Data Default jika kosong
-    if 'data_irigasi' not in st.session_state:
-        st.session_state['data_irigasi'] = df_template.copy()
+            df_input = pd.read_excel(uploaded)
+            st.session_state['df_main'] = df_input
+            st.success("Data loaded!")
+        except:
+            st.error("Gagal baca file.")
 
-# MAIN CONTENT TABS
-tab_input, tab_calc, tab_long, tab_cross, tab_export = st.tabs([
-    "📝 Input Data", "🧮 Perhitungan", "📈 Long Section", "📐 Cross Section", "🖨️ Export CAD"
-])
+    if 'df_main' not in st.session_state:
+        st.session_state['df_main'] = df_temp.copy()
 
-# --- TAB 1: INPUT DATA ---
-with tab_input:
-    st.subheader("Input Data Geometri & Elevasi")
-    st.markdown("Silakan edit data di bawah ini atau upload Excel di sidebar.")
-    
-    df_edited = st.data_editor(
-        st.session_state['data_irigasi'],
-        num_rows="dynamic",
-        use_container_width=True,
-        key="editor_utama"
-    )
-    # Simpan perubahan
-    st.session_state['data_irigasi'] = df_edited
+# TABS
+t_input, t_hasil, t_long, t_cad = st.tabs(["📝 Input Data", "📊 Hasil Hitungan", "📈 Long Section", "💻 AutoCAD Script"])
 
-# --- TAB 2: PERHITUNGAN ---
-with tab_calc:
-    st.subheader("Analisa Hidrolika (Manning)")
-    if not df_edited.empty:
-        df_hasil = hitung_hidrolika_advanced(df_edited)
-        
-        # Highlight kolom penting
-        tampilan_cols = ['Nama', 'STA Awal', 'STA Akhir', 'Slope S', 'Q Kapasitas', 'Kecepatan V', 'Froude Fr', 'Status Aliran']
+with t_input:
+    st.write("Edit data di bawah ini (Format sesuai Excel Kakak):")
+    df_edited = st.data_editor(st.session_state['df_main'], num_rows="dynamic", use_container_width=True, key='editor_user')
+    st.session_state['df_main'] = df_edited
+
+# Hitung data jika ada
+if not df_edited.empty:
+    df_calc = hitung_hidrolika_fixed(df_edited)
+else:
+    df_calc = pd.DataFrame()
+
+with t_hasil:
+    st.write("Hasil Analisa Hidrolika (Manning):")
+    if not df_calc.empty:
+        # Tampilkan kolom-kolom penting saja agar rapi
+        cols_show = ['Nama', 'STA Awal', 'Q Kapasitas', 'Kecepatan V', 'Froude Fr', 'Status']
         st.dataframe(
-            df_hasil[tampilan_cols].style.format({
-                'Slope S': '{:.5f}',
-                'Q Kapasitas': '{:.3f}',
+            df_calc.style.format({
+                'Q Kapasitas': '{:.3f}', 
                 'Kecepatan V': '{:.2f}',
                 'Froude Fr': '{:.2f}'
-            }).background_gradient(subset=['Kecepatan V'], cmap="Blues"),
+            }).map(lambda x: 'color: red' if x == '❌ MELUAP' else 'color: green', subset=['Status']),
             use_container_width=True
         )
-        st.info("Catatan: Slope (S) dihitung otomatis berdasarkan (Z Awal - Z Akhir) / Panjang.")
-    else:
-        st.warning("Data kosong.")
+        
+        # Save Button
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df_calc.to_excel(writer, index=False)
+        st.download_button("💾 Simpan Hasil ke Excel", output.getvalue(), "hasil_perhitungan.xlsx")
 
-# --- TAB 3: LONG SECTION ---
-with tab_long:
-    st.subheader("Visualisasi Profil Memanjang (Long Section)")
-    if not df_edited.empty:
-        fig_long, ax_long = plt.subplots(figsize=(10, 4))
+with t_long:
+    if not df_calc.empty:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        # Plot garis Z (Dasar Saluran)
+        x_p = []
+        y_p = []
+        for i, r in df_calc.iterrows():
+            x_p.extend([r['STA Awal'], r['STA Akhir']])
+            y_p.extend([r['Z Awal'], r['Z Akhir']])
         
-        # Extract data plotting
-        x_plot = []
-        z_plot = []
-        
-        for idx, row in df_edited.iterrows():
-            # Agar garis nyambung, kita plot titik awal dan akhir setiap segmen
-            x_plot.extend([row['STA Awal'], row['STA Akhir']])
-            z_plot.extend([row['Z Awal'], row['Z Akhir']])
-            
-        ax_long.plot(x_plot, z_plot, marker='o', linestyle='-', color='brown', label='Dasar Saluran (Z)')
-        
-        # Formatting
-        ax_long.set_xlabel('Station (m)')
-        ax_long.set_ylabel('Elevasi (m)')
-        ax_long.set_title('Profil Memanjang Saluran')
-        ax_long.grid(True, linestyle='--', alpha=0.6)
-        ax_long.legend()
-        
-        st.pyplot(fig_long)
-    else:
-        st.warning("Data belum tersedia.")
+        ax.plot(x_p, y_p, marker='.', linestyle='-', color='brown', label='Dasar Saluran')
+        ax.set_title("Long Section (Profil Memanjang)")
+        ax.set_xlabel("Station (m)")
+        ax.set_ylabel("Elevasi (m)")
+        ax.grid(True, alpha=0.3)
+        st.pyplot(fig)
 
-# --- TAB 4: CROSS SECTION ---
-with tab_cross:
-    st.subheader("Visualisasi Potongan Melintang (Cross Section)")
-    
-    if not df_edited.empty:
-        col_sel, col_fig = st.columns([1, 3])
-        
-        with col_sel:
-            pilih_segmen = st.selectbox("Pilih Segmen / Nama Saluran:", df_edited['Nama'].unique())
-            row_cs = df_edited[df_edited['Nama'] == pilih_segmen].iloc[0]
-            
-            st.markdown(f"""
-            **Detail:**
-            - Lebar (b): {row_cs['Lebar b']} m
-            - Tinggi (h): {row_cs['Tinggi H']} m
-            - Talud (m): {row_cs['Talud m']}
-            """)
-            
-        with col_fig:
-            b = row_cs['Lebar b']
-            h = row_cs['Tinggi H']
-            m = row_cs['Talud m']
-            
-            # Plot
-            fig_cs, ax_cs = plt.subplots(figsize=(6, 4))
-            
-            # Koordinat Trapesium (Tanah)
-            x_poly = [-m*h, 0, b, b+m*h]
-            y_poly = [h, 0, 0, h]
-            
-            ax_cs.plot(x_poly, y_poly, 'k-', linewidth=2, color='brown', label='Saluran')
-            
-            # Air (Visualisasi Penuh)
-            ax_cs.fill_between(x_poly, y_poly, h, color='cyan', alpha=0.3, label='Air (Full)')
-            
-            ax_cs.set_aspect('equal')
-            ax_cs.set_title(f"Cross Section: {pilih_segmen}")
-            st.pyplot(fig_cs)
-
-# --- TAB 5: EXPORT & AUTOCAD ---
-with tab_export:
-    st.subheader("Export Data & Drawing")
-    
-    c1, c2 = st.columns(2)
-    
-    with c1:
-        st.markdown("### 1. Simpan Excel")
-        # Fungsi Save to Excel
-        buffer_save = io.BytesIO()
-        with pd.ExcelWriter(buffer_save, engine='xlsxwriter') as writer:
-            df_edited.to_excel(writer, index=False, sheet_name='DataFinal')
-        
-        st.download_button(
-            label="💾 Simpan Data ke Excel (.xlsx)",
-            data=buffer_save.getvalue(),
-            file_name="Data_Saluran_Terupdate.xlsx",
-            mime="application/vnd.ms-excel"
-        )
-        
-    with c2:
-        st.markdown("### 2. Export ke AutoCAD (.scr)")
-        st.markdown("""
-        Fitur ini akan menghasilkan file **Script (.scr)**.
-        **Cara Pakai di AutoCAD:**
-        1. Download file .scr
-        2. Buka AutoCAD -> Ketik command `SCRIPT` -> Enter
-        3. Pilih file .scr yang didownload.
-        4. Gambar Long Section & Cross Section akan otomatis tergambar.
-        """)
-        
-        if not df_edited.empty:
-            script_content = generate_autocad_script(df_edited)
-            st.download_button(
-                label="📐 Download AutoCAD Script (.scr)",
-                data=script_content,
-                file_name="gambar_saluran.scr",
-                mime="text/plain"
-            )
-
-st.divider()
-st.caption("Dikembangkan dengan Python Streamlit untuk Teknik Sipil & Pengairan.")
+with t_cad:
+    st.write("Download script di bawah, lalu ketik command `SCRIPT` di AutoCAD.")
+    if not df_calc.empty:
+        sc = generate_script_fixed(df_calc)
+        st.download_button("📐 Download Script (.scr)", sc, "gambar_irigasi.scr")
