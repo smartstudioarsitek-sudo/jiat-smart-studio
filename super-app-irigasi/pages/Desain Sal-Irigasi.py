@@ -5,10 +5,12 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import io
 
-# --- 1. CONFIG DI PALING ATAS ---
+# ==========================================
+# 1. KONFIGURASI HALAMAN
+# ==========================================
 st.set_page_config(page_title="Desain Irigasi KP-03 & KP-07", layout="wide", page_icon="🌊")
 
-# Coba import library ezdxf
+# Coba import library ezdxf untuk fitur AutoCAD
 try:
     import ezdxf
     from ezdxf.enums import TextEntityAlignment
@@ -22,7 +24,7 @@ except ImportError:
 # ==========================================
 
 def get_freeboard_kp03(Q):
-    # Tabel 2.5 KP-03 (Standar Tinggi Jagaan)
+    """Menghitung Tinggi Jagaan (Fb) berdasarkan Debit (Q) - Tabel 2.5 KP-03"""
     if Q < 0.5: return 0.20
     elif Q < 1.5: return 0.20
     elif Q < 5.0: return 0.25
@@ -31,23 +33,31 @@ def get_freeboard_kp03(Q):
     else: return 0.50
 
 def solve_strickler_y(Q, b, m, k, S):
+    """Mencari tinggi muka air (y) dengan metode iterasi Newton-Raphson"""
     if Q <= 0 or b <= 0 or S <= 0: return 0.0
-    y = 0.5 
-    # Newton-Raphson Iteration approximation
+    y = 0.5 # Tebakan awal
     for _ in range(50):
         A = (b + m * y) * y
         P = b + 2 * y * np.sqrt(1 + m**2)
-        R = A / P if P > 0 else 0
+        if P == 0: break
+        R = A / P
+        # Rumus Manning-Strickler: Q = A * k * R^(2/3) * S^(1/2)
         Q_calc = A * k * (R**(2/3)) * (S**0.5)
+        
         if abs(Q_calc - Q) < 0.0001: break
+        
+        # Adjustment step (Relaxation)
         if Q_calc == 0: y += 0.1
-        else: y = y * (Q / Q_calc) ** 0.6 # Relaxation factor
+        else: y = y * (Q / Q_calc) ** 0.6
     return y
 
 def cek_keamanan_desain(Q, b, m, y, k, S):
+    """Mengecek Froude Number dan Kecepatan Izin"""
     A = (b + m * y) * y
-    V = Q / A if A > 0 else 0
-    T = b + 2 * m * y
+    if A <= 0: return 0, 0, "ERROR", "Dimensi tidak valid"
+    
+    V = Q / A
+    T = b + 2 * m * y # Lebar muka air atas
     D = A / T if T > 0 else 0 
     g = 9.81
     Fr = V / np.sqrt(g * D) if D > 0 else 0
@@ -55,15 +65,16 @@ def cek_keamanan_desain(Q, b, m, y, k, S):
     warnings = []
     status = "AMAN"
     
+    # Cek Froude (Aliran Kritis/Superkritis)
     if Fr >= 1.0:
         warnings.append(f"BAHAYA: Superkritis (Fr={Fr:.2f})")
         status = "KRITIS"
     elif Fr > 0.5:
         warnings.append(f"Info: Mendekati Kritis (Fr={Fr:.2f})")
 
-    # KP-03 Kecepatan Izin
-    v_max = 2.0 if k >= 60 else 0.7 # Asumsi pasangan vs tanah
-    v_min = 0.6 # Agar tidak terjadi endapan
+    # Cek Kecepatan (Erosi vs Endapan)
+    v_max = 2.0 if k >= 60 else 0.7 # Asumsi: Pasangan=2.0 m/s, Tanah=0.7 m/s
+    v_min = 0.6 # Batas endapan lumpur
     
     if V > v_max:
         warnings.append(f"EROSI: V ({V:.2f}) > {v_max}")
@@ -75,28 +86,32 @@ def cek_keamanan_desain(Q, b, m, y, k, S):
     return V, Fr, status, "; ".join(warnings)
 
 # ==========================================
-# 3. FUNGSI GENERATE DXF (KP-07 SMART DATUM)
+# 3. FUNGSI GENERATE DXF (KP-07)
 # ==========================================
 
 def setup_kp07_layers(doc):
-    """Setup standar layer sesuai ketebalan pena umum"""
+    """Setup standar layer AutoCAD sesuai ketebalan pena umum"""
+    # Format: (Nama Layer, Color Index, Linetype)
+    # Color Index: 1=Merah, 2=Kuning, 3=Hijau, 4=Cyan, 5=Biru, 7=Putih, 8=Abu-abu, 9=Abu muda
     layers = [
-        ('KOP_GRID', 8, 'CONTINUOUS'),      # Abu-abu (Tipis)
-        ('KOP_TEXT', 2, 'CONTINUOUS'),      # Kuning (Medium)
-        ('TANAH_ASLI', 9, 'DASHED'),        # Abu-abu putus-putus
-        ('DESAIN_DASAR', 4, 'CONTINUOUS'),  # Cyan (Tebal 0.5)
-        ('DESAIN_AIR', 5, 'DASHDOT'),       # Biru (Medium)
-        ('DESAIN_TANGGUL', 3, 'CONTINUOUS'),# Hijau (Medium)
-        ('DIMENSI', 1, 'CONTINUOUS')        # Merah (Tipis)
+        ('KOP_GRID', 8, 'CONTINUOUS'),      # Grid tabel (Tipis)
+        ('KOP_TEXT', 2, 'CONTINUOUS'),      # Teks tabel (Kuning)
+        ('TANAH_ASLI', 9, 'DASHED'),        # Tanah asli (Putus-putus)
+        ('DESAIN_DASAR', 4, 'CONTINUOUS'),  # Konstruksi dasar (Cyan/Tebal)
+        ('DESAIN_AIR', 5, 'DASHDOT'),       # Muka air (Biru/Garis-Titik)
+        ('DESAIN_TANGGUL', 3, 'CONTINUOUS'),# Tanggul (Hijau)
+        ('DIMENSI', 1, 'CONTINUOUS')        # Dimensi (Merah/Tipis)
     ]
     for name, color, ltype in layers:
         if name not in doc.layers:
             doc.layers.add(name, color=color, linetype=ltype)
     
+    # Setup Text Style
     if 'KP_TEXT_STYLE' not in doc.styles:
         doc.styles.new('KP_TEXT_STYLE', dxfattribs={'font': 'Arial.ttf', 'width': 0.8})
 
 def generate_long_section_dxf(df_hasil):
+    """Membuat Potongan Memanjang (Long Section)"""
     if not EZDXF_AVAILABLE: return None
 
     doc = ezdxf.new('R2010')
@@ -105,13 +120,13 @@ def generate_long_section_dxf(df_hasil):
     msp = doc.modelspace()
 
     SCALE_H = 1.0   
-    SCALE_V = 10.0 # Distorsi Vertikal KP-07
+    SCALE_V = 10.0 # Distorsi Vertikal KP-07 (Standar Irigasi)
 
-    # Algoritma Smart Datum
+    # Menentukan Datum Referensi (agar gambar tidak terlalu tinggi/rendah)
     min_elev_dasar = min(df_hasil['Elv Dasar Awal'].min(), df_hasil['Elv Dasar Akhir'].min())
     datum_reference = np.floor((min_elev_dasar - 2.0) / 5.0) * 5.0
     
-    # Layout Bands
+    # Konfigurasi Kolom Data (Bands) di Bawah Gambar
     H_ROW = 15
     bands = {
         'JARAK':        {'y': -1 * H_ROW, 'label': 'JARAK (m)'},
@@ -124,23 +139,25 @@ def generate_long_section_dxf(df_hasil):
     min_y_band = bands['DIMENSI']['y']
     max_sta = df_hasil['STA Akhir'].max() * SCALE_H
     
-    # Header Bands
+    # Gambar Header Kolom Data
     for key, info in bands.items():
         y_pos = info['y']
         msp.add_line((-40, y_pos), (max_sta, y_pos), dxfattribs={'layer': 'KOP_GRID'})
         msp.add_text(info['label'], dxfattribs={'height': 2.5, 'style': 'KP_TEXT_STYLE', 'layer': 'KOP_TEXT'}).set_placement((-2, y_pos + H_ROW/2), align=TextEntityAlignment.MIDDLE_RIGHT)
 
+    # Garis Datum Utama (Nol Gambar)
     msp.add_line((-40, 0), (max_sta, 0), dxfattribs={'layer': 'KOP_GRID', 'lineweight': 30})
     msp.add_text(f"DATUM: +{datum_reference:.2f}", dxfattribs={'height': 2.5, 'layer': 'KOP_TEXT'}).set_placement((-2, 2), align=TextEntityAlignment.MIDDLE_RIGHT)
 
     prev_x = None
     prev_y_dasar = None
     
+    # Loop Menggambar Profil
     for i, row in df_hasil.iterrows():
         x_awal = row['STA Awal'] * SCALE_H
         x_akhir = row['STA Akhir'] * SCALE_H
         
-        # Koordinat Y (Distorsi)
+        # Konversi Elevasi ke Koordinat Gambar (dikali Scale V)
         y_dasar_awal = (row['Elv Dasar Awal'] - datum_reference) * SCALE_V
         y_dasar_akhir = (row['Elv Dasar Akhir'] - datum_reference) * SCALE_V
         y_air_awal = (row['Elv Dasar Awal'] + row['Tinggi Air (y)'] - datum_reference) * SCALE_V
@@ -148,40 +165,43 @@ def generate_long_section_dxf(df_hasil):
         y_tanggul_awal = (row['Elv Dasar Awal'] + row['Tinggi Total (h)'] - datum_reference) * SCALE_V
         y_tanggul_akhir = (row['Elv Dasar Akhir'] + row['Tinggi Total (h)'] - datum_reference) * SCALE_V
         
-        # Asumsi Tanah Asli = Tanggul + 0.3m (Simulasi)
+        # Asumsi Tanah Asli = Tanggul + 0.3m (Untuk simulasi visual)
         z_tanah_awal = row['Elv Dasar Awal'] + row['Tinggi Total (h)'] + 0.3
         z_tanah_akhir = row['Elv Dasar Akhir'] + row['Tinggi Total (h)'] + 0.3
         y_tanah_awal = (z_tanah_awal - datum_reference) * SCALE_V
         y_tanah_akhir = (z_tanah_akhir - datum_reference) * SCALE_V
 
-        # Gambar Garis Utama
+        # Draw Lines
         msp.add_line((x_awal, y_dasar_awal), (x_akhir, y_dasar_akhir), dxfattribs={'layer': 'DESAIN_DASAR', 'lineweight': 40})
         msp.add_line((x_awal, y_air_awal), (x_akhir, y_air_akhir), dxfattribs={'layer': 'DESAIN_AIR'})
         msp.add_line((x_awal, y_tanggul_awal), (x_akhir, y_tanggul_akhir), dxfattribs={'layer': 'DESAIN_TANGGUL'})
         msp.add_line((x_awal, y_tanah_awal), (x_akhir, y_tanah_akhir), dxfattribs={'layer': 'TANAH_ASLI'})
         
-        # Gambar Garis Vertikal (Drop Structure / Terjunan) jika ada beda tinggi
+        # Logika Bangunan Terjun (Drop Structure): Jika ada beda tinggi vertikal di STA yang sama
         if prev_x is not None and (abs(prev_y_dasar - y_dasar_awal) > 0.001):
              msp.add_line((prev_x, prev_y_dasar), (x_awal, y_dasar_awal), dxfattribs={'layer': 'DESAIN_DASAR'})
 
-        # Grid dan Teks Data
+        # Fungsi Helper untuk Teks Vertikal
         def add_band_text(txt, x_pos, y_bottom):
             msp.add_text(txt, dxfattribs={'height': 1.8, 'rotation': 90, 'style': 'KP_TEXT_STYLE', 'layer': 'KOP_TEXT'}).set_placement((x_pos, y_bottom + H_ROW/2), align=TextEntityAlignment.MIDDLE_CENTER)
 
+        # Garis Grid Vertikal
         msp.add_line((x_awal, min_y_band), (x_awal, max(y_tanah_awal, y_tanggul_awal) + 5), dxfattribs={'layer': 'KOP_GRID', 'linetype': 'DOT'})
 
+        # Isi Teks Kolom Data
         add_band_text(f"{row['STA Awal']:.0f}", x_awal, bands['JARAK']['y'])
         add_band_text(f"{z_tanah_awal:.2f}", x_awal, bands['ELV_TANAH']['y'])
         add_band_text(f"{row['Elv Dasar Awal']:.2f}", x_awal, bands['ELV_DESAIN']['y'])
         add_band_text(f"{(row['Elv Dasar Awal'] + row['Tinggi Air (y)']):.2f}", x_awal, bands['ELV_AIR']['y'])
         
+        # Info Dimensi di tengah ruas
         x_mid = (x_awal + x_akhir) / 2
         msp.add_text(f"b={row['Lebar (b)']}\nh={row['Tinggi Total (h)']}", dxfattribs={'height': 1.5, 'layer': 'KOP_TEXT'}).set_placement((x_mid, bands['DIMENSI']['y'] + H_ROW/2), align=TextEntityAlignment.MIDDLE_CENTER)
 
         prev_x = x_akhir
         prev_y_dasar = y_dasar_akhir
 
-    # Penutup baris terakhir
+    # Penutup baris terakhir (STA Akhir)
     msp.add_line((x_akhir, min_y_band), (x_akhir, max(y_tanah_akhir, y_tanggul_akhir) + 5), dxfattribs={'layer': 'KOP_GRID', 'linetype': 'DOT'})
     add_band_text(f"{row['STA Akhir']:.0f}", x_akhir, bands['JARAK']['y'])
     add_band_text(f"{z_tanah_akhir:.2f}", x_akhir, bands['ELV_TANAH']['y'])
@@ -191,7 +211,7 @@ def generate_long_section_dxf(df_hasil):
     return doc
 
 def generate_cross_section_dxf(df_hasil):
-    """Fungsi baru untuk generate Cross Section Layout"""
+    """Membuat Potongan Melintang (Cross Section) Layout Grid"""
     if not EZDXF_AVAILABLE: return None
     
     doc = ezdxf.new('R2010')
@@ -199,7 +219,7 @@ def generate_cross_section_dxf(df_hasil):
     setup_kp07_layers(doc)
     msp = doc.modelspace()
     
-    # Konfigurasi Grid Layout
+    # Konfigurasi Grid Layout (Susunan Gambar)
     start_x = 0
     start_y = 0
     grid_x_spacing = 50  # Jarak antar gambar horizontal
@@ -208,8 +228,8 @@ def generate_cross_section_dxf(df_hasil):
     
     current_col = 0
     
-    # Loop untuk setiap 'potongan' (disini kita ambil sampel STA Awal setiap segmen)
     for i, row in df_hasil.iterrows():
+        # Posisi Pusat Gambar (Centerline)
         cx = start_x + (current_col * grid_x_spacing)
         cy = start_y
         
@@ -217,10 +237,9 @@ def generate_cross_section_dxf(df_hasil):
         m = row['Talud (m)']
         h = row['Tinggi Total (h)']
         y_air = row['Tinggi Air (y)']
-        w_tanggul = 1.0 # Lebar atas tanggul (asumsi)
+        w_tanggul = 1.0 # Asumsi lebar atas tanggul
         
         # Koordinat Lokal Trapesium (Simetris terhadap As = 0)
-        # Titik dasar kiri, dasar kanan, tanggul kiri atas, tanggul kanan atas
         x_bl = -b/2
         x_br = b/2
         x_tl = -b/2 - (m*h)
@@ -232,8 +251,7 @@ def generate_cross_section_dxf(df_hasil):
         y_top = h
         y_wtr = y_air
         
-        # Transformasi ke Posisi Grid DXF (cx, cy)
-        # Gambar Garis Saluran
+        # 1. Gambar Body Saluran (Polyline)
         points = [
             (cx + x_bank_l, cy + y_top),
             (cx + x_tl, cy + y_top),
@@ -244,18 +262,20 @@ def generate_cross_section_dxf(df_hasil):
         ]
         msp.add_lwpolyline(points, dxfattribs={'layer': 'DESAIN_DASAR'})
         
-        # Gambar Muka Air
+        # 2. Gambar Muka Air
         x_wl = -b/2 - (m*y_air)
         x_wr = b/2 + (m*y_air)
         msp.add_line((cx + x_wl, cy + y_wtr), (cx + x_wr, cy + y_wtr), dxfattribs={'layer': 'DESAIN_AIR'})
         # Simbol Segitiga Air
         msp.add_lwpolyline([(cx, cy+y_wtr), (cx-0.2, cy+y_wtr+0.4), (cx+0.2, cy+y_wtr+0.4), (cx, cy+y_wtr)], close=True, dxfattribs={'layer': 'DESAIN_AIR'})
 
-        # Gambar Garis Tanah (Asumsi Flat untuk demo)
+        # 3. Gambar Tanah Asli (Simulasi)
         msp.add_line((cx + x_bank_l - 2, cy + y_top), (cx + x_bank_r + 2, cy + y_top), dxfattribs={'layer': 'TANAH_ASLI'})
         
-        # Anotasi Dimensi
+        # 4. Anotasi Dimensi
         msp.add_dim_linear((cx + x_bl, cy - 1), (cx + x_br, cy - 1), dxfattribs={'layer': 'DIMENSI'}, text="b = <>")
+        
+        # Info Teks
         msp.add_text(f"STA: {row['STA Awal']}", dxfattribs={'height': 1.0, 'layer': 'KOP_TEXT'}).set_placement((cx, cy - 3), align=TextEntityAlignment.MIDDLE_CENTER)
         msp.add_text(f"Elv. Dasar: {row['Elv Dasar Awal']:.2f}", dxfattribs={'height': 0.8, 'layer': 'KOP_TEXT'}).set_placement((cx, cy - 4.5), align=TextEntityAlignment.MIDDLE_CENTER)
 
@@ -268,13 +288,14 @@ def generate_cross_section_dxf(df_hasil):
     return doc
 
 # ==========================================
-# 4. HALAMAN UTAMA & SIDEBAR
+# 4. USER INTERFACE (STREAMLIT)
 # ==========================================
 
 st.title("🛠️ Desain Irigasi: Standar KP-03 & KP-07")
-st.markdown("Aplikasi perhitungan hidrolis dan *drawing automation*.")
+st.markdown("Aplikasi perhitungan hidrolis dan otomatisasi gambar teknik.")
 st.markdown("---")
 
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("1. Konfigurasi Trase")
     start_sta = st.number_input("STA Awal (m)", value=0.0)
@@ -282,13 +303,20 @@ with st.sidebar:
     
     st.divider()
     st.info("💡 **Tips KP-03**: Gunakan Strickler k=60 untuk pasangan batu, k=40 untuk saluran tanah bersih.")
+    
+    st.divider()
+    if EZDXF_AVAILABLE:
+        st.success("✅ Library 'ezdxf' aktif.")
+    else:
+        st.warning("⚠️ Library 'ezdxf' belum terinstall. Fitur Download DXF dimatikan.")
 
-# Data Editor dengan Default Value yang Masuk Akal
+# --- DATA EDITOR (INPUT) ---
 if 'df_input' not in st.session_state:
+    # Default Data
     data_awal = {
         'Nama Saluran': ['Saluran Induk 1', 'Saluran Induk 2'],
         'Panjang (m)': [50.0, 50.0],
-        'Offset (m)': [0.00, -0.50], # Offset vertikal (misal terjunan)
+        'Offset (m)': [0.00, -0.50], # Untuk terjunan
         'Debit (Q)': [2.50, 2.50],
         'Lebar (b)': [1.50, 1.50],
         'Talud (m)': [1.0, 1.0],
@@ -300,6 +328,7 @@ if 'df_input' not in st.session_state:
 st.subheader("1. Input Data Desain")
 edited_df = st.data_editor(st.session_state.df_input, num_rows="dynamic", hide_index=True, use_container_width=True)
 
+# --- TOMBOL PROSES (MAIN LOGIC) ---
 if st.button("▶️ HITUNG & VERIFIKASI (RUN)", type="primary", use_container_width=True):
     hasil_list = []
     curr_sta = start_sta
@@ -307,98 +336,124 @@ if st.button("▶️ HITUNG & VERIFIKASI (RUN)", type="primary", use_container_w
     
     for idx, row in edited_df.iterrows():
         try:
-            L, Q, b, m = float(row['Panjang (m)']), float(row['Debit (Q)']), float(row['Lebar (b)']), float(row['Talud (m)'])
-            S, k, offset = float(row['Slope (S)']), float(row['Strickler (k)']), float(row['Offset (m)'])
-        except:
-            st.error(f"Data baris ke-{idx+1} error. Pastikan semua kolom terisi angka.")
+            # Parsing input
+            L = float(row['Panjang (m)'])
+            Q = float(row['Debit (Q)'])
+            b = float(row['Lebar (b)'])
+            m = float(row['Talud (m)'])
+            S = float(row['Slope (S)'])
+            k = float(row['Strickler (k)'])
+            offset = float(row['Offset (m)'])
+        except Exception as e:
+            st.error(f"Data baris ke-{idx+1} error. Pastikan angka valid. ({e})")
             continue
             
+        # Kalkulasi
         y_calc = solve_strickler_y(Q, b, m, k, S)
         w_calc = get_freeboard_kp03(Q)
         h_calc = y_calc + w_calc
         V_calc, Fr_calc, status, pesan = cek_keamanan_desain(Q, b, m, y_calc, k, S)
         
+        # Elevasi
         elv_awal = curr_elv
         elv_akhir = elv_awal - (L * S)
         
+        # PENTING: Simpan semua data termasuk Debit (Q) agar tidak KeyError di visualisasi
         hasil_list.append({
             'Nama Saluran': row['Nama Saluran'],
-            'Status': status, 'Peringatan': pesan,
-            'STA Awal': round(curr_sta, 1), 'STA Akhir': round(curr_sta + L, 1),
-            'Elv Dasar Awal': round(elv_awal, 3), 'Elv Dasar Akhir': round(elv_akhir, 3),
-            'Tinggi Air (y)': round(y_calc, 3), 'Tinggi Total (h)': round(h_calc, 2),
-            'Kecepatan (V)': round(V_calc, 2), 'Froude (Fr)': round(Fr_calc, 2),
-            'Strickler (k)': k, 'Lebar (b)': b, 'Talud (m)': m,
-            'Slope (S)': S, 'Debit (Q)': Q
+            'Status': status, 
+            'Peringatan': pesan,
+            'STA Awal': round(curr_sta, 1), 
+            'STA Akhir': round(curr_sta + L, 1),
+            'Elv Dasar Awal': round(elv_awal, 3), 
+            'Elv Dasar Akhir': round(elv_akhir, 3),
+            'Tinggi Air (y)': round(y_calc, 3), 
+            'Tinggi Total (h)': round(h_calc, 2),
+            'Kecepatan (V)': round(V_calc, 2), 
+            'Froude (Fr)': round(Fr_calc, 2),
+            'Strickler (k)': k, 
+            'Lebar (b)': b, 
+            'Talud (m)': m,
+            'Slope (S)': S, 
+            'Debit (Q)': Q  # <--- Field Kritis
         })
         curr_sta += L
-        curr_elv = elv_akhir + offset # Terapkan terjunan jika ada
+        curr_elv = elv_akhir + offset # Update untuk segmen berikutnya
 
     st.session_state.df_hasil = pd.DataFrame(hasil_list)
-    st.success("✅ Perhitungan Selesai. Silakan cek hasil di bawah.")
+    st.success("✅ Perhitungan Selesai! Gulir ke bawah untuk melihat hasil.")
 
+# --- OUTPUT SECTION ---
 if 'df_hasil' in st.session_state:
     df_res = st.session_state.df_hasil
     
-    # --- VISUALISASI ---
     st.divider()
     st.subheader("2. Hasil Analisis")
     
-    # Tabulasi
+    # 1. Tabel Hasil (Highlight jika Tidak Aman)
     st.dataframe(df_res.style.apply(lambda x: ['background-color: #ffcccc' if v == 'TIDAK AMAN' else '' for v in x], subset=['Status']), use_container_width=True, hide_index=True)
 
     col_g1, col_g2 = st.columns([2, 1])
     
-    # Plot Long Section
+    # 2. Grafik Long Section (Matplotlib)
     with col_g1:
         st.markdown("##### Profil Memanjang")
         fig, ax = plt.subplots(figsize=(10, 4))
         stas, elvs_dasar, elvs_air, elvs_tanggul = [], [], [], []
+        
         for i, row in df_res.iterrows():
             stas.extend([row['STA Awal'], row['STA Akhir']])
             elvs_dasar.extend([row['Elv Dasar Awal'], row['Elv Dasar Akhir']])
             elvs_air.extend([row['Elv Dasar Awal'] + row['Tinggi Air (y)'], row['Elv Dasar Akhir'] + row['Tinggi Air (y)']])
             elvs_tanggul.extend([row['Elv Dasar Awal'] + row['Tinggi Total (h)'], row['Elv Dasar Akhir'] + row['Tinggi Total (h)']])
 
-        ax.plot(stas, elvs_tanggul, 'g-', label='Tanggul (Bank)', linewidth=1.5)
-        ax.plot(stas, elvs_dasar, 'k-', linewidth=2, label='Dasar (Bed)')
-        ax.plot(stas, elvs_air, 'b-.', linewidth=1, label='Muka Air (W.L)')
+        ax.plot(stas, elvs_tanggul, 'g-', label='Tanggul', linewidth=1.5)
+        ax.plot(stas, elvs_dasar, 'k-', linewidth=2, label='Dasar')
+        ax.plot(stas, elvs_air, 'b-.', linewidth=1, label='Muka Air')
         
-        # Fill
+        # Fill colors
         ax.fill_between(stas, elvs_dasar, elvs_air, color='#00BFFF', alpha=0.2)
-        ax.fill_between(stas, elvs_dasar, [y-2 for y in elvs_dasar], color='#8B4513', alpha=0.3) # Tanah bawah
+        ax.fill_between(stas, elvs_dasar, [y-2 for y in elvs_dasar], color='#8B4513', alpha=0.3)
         
         ax.set_xlabel("Stationing (m)"); ax.set_ylabel("Elevasi (+m)")
         ax.legend(); ax.grid(True, linestyle=':', alpha=0.6)
         st.pyplot(fig)
 
-    # Plot Cross Section Preview
+    # 3. Preview Cross Section (Matplotlib) - SAFE MODE
     with col_g2:
         st.markdown("##### Preview Penampang")
         pilih_sal = st.selectbox("Pilih Ruas:", df_res['Nama Saluran'])
         if pilih_sal:
-            row = df_res[df_res['Nama Saluran'] == pilih_sal].iloc[0]
-            b, m, h, y = row['Lebar (b)'], row['Talud (m)'], row['Tinggi Total (h)'], row['Tinggi Air (y)']
-            
-            fig2, ax2 = plt.subplots(figsize=(5, 3))
-            # Koordinat Trapesium
-            x = [-b/2 - m*h, -b/2, b/2, b/2 + m*h]
-            y_pts = [h, 0, 0, h]
-            
-            # Tanah/Saluran
-            ax2.plot(x, y_pts, 'k-', linewidth=2)
-            # Air
-            x_air = [-b/2 - m*y, b/2 + m*y]
-            y_air = [y, y]
-            ax2.fill_between([-b/2 - m*y, -b/2, b/2, b/2 + m*y], [y, 0, 0, y], color='#00BFFF', alpha=0.5)
-            ax2.plot(x_air, y_air, 'b-.')
-            
-            ax2.text(0, y/2, f"Q={row['Debit (Q)']} m3/s\nV={row['Kecepatan (V)']}", ha='center', fontsize=8)
-            ax2.set_title(f"Cross Section: {pilih_sal}")
-            ax2.set_aspect('equal')
-            st.pyplot(fig2)
+            try:
+                row = df_res[df_res['Nama Saluran'] == pilih_sal].iloc[0]
+                b, m, h, y = row['Lebar (b)'], row['Talud (m)'], row['Tinggi Total (h)'], row['Tinggi Air (y)']
+                
+                # Gunakan .get() untuk menghindari KeyError jika data lama masih di cache
+                q_val = row.get('Debit (Q)', 0)
+                v_val = row.get('Kecepatan (V)', 0)
+                
+                fig2, ax2 = plt.subplots(figsize=(5, 3))
+                
+                # Koordinat Trapesium
+                x_trap = [-b/2 - m*h, -b/2, b/2, b/2 + m*h]
+                y_trap = [h, 0, 0, h]
+                
+                # Plot
+                ax2.plot(x_trap, y_trap, 'k-', linewidth=2)
+                # Air
+                ax2.fill_between([-b/2 - m*y, -b/2, b/2, b/2 + m*y], [y, 0, 0, y], color='#00BFFF', alpha=0.5)
+                ax2.plot([-b/2 - m*y, b/2 + m*y], [y, y], 'b-.')
+                
+                # Teks Info
+                ax2.text(0, y/2, f"Q={q_val} m³/s\nV={v_val} m/s", ha='center', fontsize=9, fontweight='bold', color='white', bbox=dict(facecolor='black', alpha=0.5))
+                
+                ax2.set_title(f"Cross Section: {pilih_sal}")
+                ax2.set_aspect('equal')
+                st.pyplot(fig2)
+            except Exception as e:
+                st.warning(f"Gagal menampilkan preview: {e}")
 
-    # --- DOWNLOAD SECTION ---
+    # --- DOWNLOAD AREA ---
     st.subheader("5. Ekspor Data & Gambar")
     col_d1, col_d2, col_d3 = st.columns(3)
     
@@ -410,16 +465,24 @@ if 'df_hasil' in st.session_state:
 
     with col_d2:
         if EZDXF_AVAILABLE:
-            doc_long = generate_long_section_dxf(df_res)
-            out_long = io.StringIO()
-            doc_long.write(out_long)
-            st.download_button("📐 2. Download Long Section (.dxf)", out_long.getvalue().encode('utf-8'), "LongSection_KP07.dxf", "application/dxf", type="primary", use_container_width=True)
+            try:
+                doc_long = generate_long_section_dxf(df_res)
+                out_long = io.StringIO()
+                doc_long.write(out_long)
+                st.download_button("📐 2. Download Long Section (.dxf)", out_long.getvalue().encode('utf-8'), "LongSection_KP07.dxf", "application/dxf", type="primary", use_container_width=True)
+            except Exception as e:
+                st.error(f"Error Gen DXF: {e}")
         else:
-            st.warning("Ezdxf tidak terinstall")
+            st.warning("Library 'ezdxf' tidak tersedia.")
 
     with col_d3:
         if EZDXF_AVAILABLE:
-            doc_cross = generate_cross_section_dxf(df_res)
-            out_cross = io.StringIO()
-            doc_cross.write(out_cross)
-            st.download_button("📐 3. Download Cross Section (.dxf)", out_cross.getvalue().encode('utf-8'), "CrossSection_KP07.dxf", "application/dxf", type="primary", use_container_width=True)
+            try:
+                doc_cross = generate_cross_section_dxf(df_res)
+                out_cross = io.StringIO()
+                doc_cross.write(out_cross)
+                st.download_button("📐 3. Download Cross Section (.dxf)", out_cross.getvalue().encode('utf-8'), "CrossSection_KP07.dxf", "application/dxf", type="primary", use_container_width=True)
+            except Exception as e:
+                st.error(f"Error Gen DXF: {e}")
+        else:
+            st.warning("Library 'ezdxf' tidak tersedia.")
