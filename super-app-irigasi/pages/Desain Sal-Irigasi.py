@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import io
 
-# Coba import ezdxf, jika belum diinstall beri peringatan nanti
+# Coba import ezdxf untuk fitur CAD
 try:
     import ezdxf
     from ezdxf.enums import TextEntityAlignment
@@ -35,6 +35,8 @@ def solve_strickler_y(Q, b, m, k, S):
         A = (b + m * y) * y
         P = b + 2 * y * np.sqrt(1 + m**2)
         R = A / P if P > 0 else 0
+        
+        # Rumus Strickler Q = A * k * R^(2/3) * S^(1/2)
         Q_calc = A * k * (R**(2/3)) * (S**0.5)
         
         if abs(Q_calc - Q) < 0.0001: break
@@ -149,7 +151,7 @@ def generate_dxf_kp07(df_hasil):
     doc = ezdxf.new('R2010')
     msp = doc.modelspace()
     
-    # Layers
+    # Setup Layers
     doc.layers.add(name='GRID', color=8, linetype='DOT')
     doc.layers.add(name='TANAH_ASLI', color=3, linetype='DASHED') 
     doc.layers.add(name='DESAIN_SALURAN', color=4) 
@@ -159,14 +161,14 @@ def generate_dxf_kp07(df_hasil):
 
     SCALE_X, SCALE_Y = 1.0, 10.0
     
-    # Posisi Band
+    # Posisi Band (Tabel di bawah grafik)
     Y_BAND_STA = -20
     Y_BAND_ELV_TANAH = -30
     Y_BAND_ELV_DESAIN = -40
     Y_BAND_ELV_AIR = -50
     Y_BAND_DIMENSI = -60
     
-    # Garis Tabel
+    # Garis Tabel Horizontal
     max_x = df_hasil['STA Akhir'].max() * SCALE_X
     for y in [Y_BAND_STA, Y_BAND_ELV_TANAH, Y_BAND_ELV_DESAIN, Y_BAND_ELV_AIR, Y_BAND_DIMENSI]:
         msp.add_line((0, y), (max_x, y), dxfattribs={'layer': 'KOP_TABEL'})
@@ -189,23 +191,24 @@ def generate_dxf_kp07(df_hasil):
         y_air_awal = (row['Elv Dasar Awal'] + row['Tinggi Air (y)']) * SCALE_Y
         y_air_akhir = (row['Elv Dasar Akhir'] + row['Tinggi Air (y)']) * SCALE_Y
         
-        # Asumsi Tanah
+        # Asumsi Tanah (Simulasi: Tanggul + 0.2m)
         elv_tanah_awal = row['Elv Dasar Awal'] + row['Tinggi Total (h)'] + 0.2
         elv_tanah_akhir = row['Elv Dasar Akhir'] + row['Tinggi Total (h)'] + 0.2
         y_tanah_awal = elv_tanah_awal * SCALE_Y
         y_tanah_akhir = elv_tanah_akhir * SCALE_Y
         
-        # Gambar Garis
-        msp.add_line((x_awal, y_dasar_awal), (x_akhir, y_dasar_akhir), dxfattribs={'layer': 'DESAIN_SALURAN', 'lw': 50})
+        # Gambar Garis Utama
+        # FIX ERROR: Mengganti 'lw' menjadi 'lineweight'
+        msp.add_line((x_awal, y_dasar_awal), (x_akhir, y_dasar_akhir), dxfattribs={'layer': 'DESAIN_SALURAN', 'lineweight': 50})
         msp.add_line((x_awal, y_air_awal), (x_akhir, y_air_akhir), dxfattribs={'layer': 'MUKA_AIR'})
         msp.add_line((x_awal, y_tanah_awal), (x_akhir, y_tanah_akhir), dxfattribs={'layer': 'TANAH_ASLI'})
         
-        # Drop Structure (Terjunan)
+        # Drop Structure (Terjunan Vertikal)
         if prev_x is not None:
              msp.add_line((prev_x, prev_y_dasar), (x_awal, y_dasar_awal), dxfattribs={'layer': 'DESAIN_SALURAN'})
              msp.add_line((prev_x, prev_y_tanah), (x_awal, y_tanah_awal), dxfattribs={'layer': 'TANAH_ASLI'})
         
-        # Teks Data
+        # Teks Data Vertikal
         def add_text(txt, x, y):
             msp.add_text(txt, height=1.5, rotation=90).set_placement((x, y+1), align=TextEntityAlignment.MIDDLE_CENTER)
 
@@ -213,15 +216,18 @@ def generate_dxf_kp07(df_hasil):
         add_text(f"{elv_tanah_awal:.2f}", x_awal, Y_BAND_ELV_TANAH)
         add_text(f"{row['Elv Dasar Awal']:.2f}", x_awal, Y_BAND_ELV_DESAIN)
         
+        # Garis Grid Vertikal
         msp.add_line((x_awal, Y_BAND_DIMENSI), (x_awal, max(y_tanah_awal, y_tanah_akhir)), dxfattribs={'layer': 'GRID'})
 
         prev_x = x_akhir
         prev_y_dasar = y_dasar_akhir
         prev_y_tanah = y_tanah_akhir
 
-    # Akhiran
+    # Akhiran Trase
     msp.add_line((x_akhir, Y_BAND_DIMENSI), (x_akhir, max(y_tanah_awal, y_tanah_akhir)), dxfattribs={'layer': 'GRID'})
     add_text(f"{row['STA Akhir']:.1f}", x_akhir, Y_BAND_STA)
+    add_text(f"{elv_tanah_akhir:.2f}", x_akhir, Y_BAND_ELV_TANAH)
+    add_text(f"{row['Elv Dasar Akhir']:.2f}", x_akhir, Y_BAND_ELV_DESAIN)
     
     return doc
 
@@ -241,7 +247,7 @@ with st.sidebar:
     st.divider()
     st.header("📂 Menu File")
     
-    # Template
+    # Template Download
     df_template = pd.DataFrame({
         'Nama Saluran': ['Saluran 1', 'Saluran 2'],
         'Panjang (m)': [50.0, 50.0],
@@ -257,7 +263,7 @@ with st.sidebar:
     with pd.ExcelWriter(buffer) as writer: df_template.to_excel(writer, index=False)
     st.download_button("📥 Download Template Excel", buffer.getvalue(), "template_irigasi_kp03.xlsx")
     
-    # Upload
+    # Upload Excel
     uploaded_file = st.file_uploader("Upload Data Excel", type=['xlsx'])
     if uploaded_file:
         try:
@@ -311,11 +317,13 @@ if btn_run:
         L, Q, b, m = row['Panjang (m)'], row['Debit (Q)'], row['Lebar (b)'], row['Talud (m)']
         S, k, offset = row['Slope (S)'], row['Strickler (k)'], row['Offset (m)']
         
+        # Hitung
         y_calc = solve_strickler_y(Q, b, m, k, S)
         w_calc = get_freeboard_kp03(Q)
         h_calc = y_calc + w_calc
         V_calc, Fr_calc, status, pesan = cek_keamanan_desain(Q, b, m, y_calc, k, S)
         
+        # Elevasi
         elv_awal = curr_elv
         elv_akhir = elv_awal - (L * S)
         
@@ -353,14 +361,14 @@ if 'df_hasil' in st.session_state:
     st.divider()
     st.subheader("2. Hasil Analisis Hidrolis")
     
-    # Tabel
+    # Styling Tabel
     def highlight_status(val):
         color = 'red' if val == 'KRITIS' else 'orange' if val == 'TIDAK AMAN' else 'green'
         return f'color: {color}; font-weight: bold'
 
     st.dataframe(df_res.style.map(highlight_status, subset=['Status']), use_container_width=True, hide_index=True)
     
-    # Grafik (Kolom 1 & 2)
+    # Grafik (Grid Layout)
     col_g1, col_g2 = st.columns([2, 1])
     
     with col_g1:
