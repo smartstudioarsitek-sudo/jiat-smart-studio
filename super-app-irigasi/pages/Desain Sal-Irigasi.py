@@ -197,8 +197,7 @@ def generate_dxf_kp07(df_hasil):
         y_tanah_awal = elv_tanah_awal * SCALE_Y
         y_tanah_akhir = elv_tanah_akhir * SCALE_Y
         
-        # Gambar Garis Utama
-        # FIX ERROR: Mengganti 'lw' menjadi 'lineweight'
+        # Gambar Garis Utama (Menggunakan 'lineweight' bukan 'lw')
         msp.add_line((x_awal, y_dasar_awal), (x_akhir, y_dasar_akhir), dxfattribs={'layer': 'DESAIN_SALURAN', 'lineweight': 50})
         msp.add_line((x_awal, y_air_awal), (x_akhir, y_air_akhir), dxfattribs={'layer': 'MUKA_AIR'})
         msp.add_line((x_awal, y_tanah_awal), (x_akhir, y_tanah_akhir), dxfattribs={'layer': 'TANAH_ASLI'})
@@ -402,9 +401,14 @@ if 'df_hasil' in st.session_state:
             try:
                 doc_dxf = generate_dxf_kp07(df_res)
                 if doc_dxf:
-                    output_dxf = io.BytesIO()
+                    # FIX: Gunakan StringIO agar kompatibel dengan ezdxf.write
+                    output_dxf = io.StringIO()
                     doc_dxf.write(output_dxf)
-                    st.download_button("📐 Download CAD (.dxf)", output_dxf.getvalue(), "LongSection_KP07.dxf", "application/dxf", type="primary", use_container_width=True)
+                    
+                    # Konversi string buffer ke bytes untuk download button
+                    dxf_bytes = output_dxf.getvalue().encode('utf-8')
+                    
+                    st.download_button("📐 Download CAD (.dxf)", dxf_bytes, "LongSection_KP07.dxf", "application/dxf", type="primary", use_container_width=True)
             except Exception as e:
                 st.error(f"Error DXF: {e}")
         else:
