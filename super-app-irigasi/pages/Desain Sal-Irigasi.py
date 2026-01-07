@@ -5,10 +5,11 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import io
 
-# Coba import ezdxf untuk fitur CAD
+# Coba import library ezdxf untuk fitur CAD
 try:
     import ezdxf
     from ezdxf.enums import TextEntityAlignment
+    from ezdxf.tools.standards import setup_linetypes # PENTING: Agar garis putus-putus terbaca AutoCAD
     EZDXF_AVAILABLE = True
 except ImportError:
     EZDXF_AVAILABLE = False
@@ -18,7 +19,7 @@ except ImportError:
 # ==========================================
 
 def get_freeboard_kp03(Q):
-    """Menghitung Tinggi Jagaan sesuai KP-03"""
+    """Menghitung Tinggi Jagaan sesuai Tabel KP-03"""
     if Q < 0.5: return 0.20
     elif Q < 1.5: return 0.20
     elif Q < 5.0: return 0.25
@@ -30,13 +31,13 @@ def solve_strickler_y(Q, b, m, k, S):
     """Menghitung tinggi muka air (y) dengan Rumus STRICKLER"""
     if Q <= 0 or b <= 0 or S <= 0: return 0.0
     
-    y = 0.5 
+    y = 0.5 # Tebakan awal
     for _ in range(50):
         A = (b + m * y) * y
         P = b + 2 * y * np.sqrt(1 + m**2)
         R = A / P if P > 0 else 0
         
-        # Rumus Strickler Q = A * k * R^(2/3) * S^(1/2)
+        # Rumus Strickler: Q = A * k * R^(2/3) * S^(1/2)
         Q_calc = A * k * (R**(2/3)) * (S**0.5)
         
         if abs(Q_calc - Q) < 0.0001: break
@@ -50,6 +51,7 @@ def cek_keamanan_desain(Q, b, m, y, k, S):
     A = (b + m * y) * y
     V = Q / A if A > 0 else 0
     
+    # Hitung Lebar Muka Air Atas (T)
     T = b + 2 * m * y
     D = A / T if T > 0 else 0 
     g = 9.81
@@ -58,14 +60,14 @@ def cek_keamanan_desain(Q, b, m, y, k, S):
     warnings = []
     status = "AMAN"
     
-    # Cek Froude
+    # Cek 1: Froude (Stabilitas)
     if Fr >= 1.0:
         warnings.append(f"BAHAYA: Superkritis (Fr={Fr:.2f})")
         status = "KRITIS"
     elif Fr > 0.5:
         warnings.append(f"Info: Mendekati Kritis (Fr={Fr:.2f})")
 
-    # Cek Kecepatan
+    # Cek 2: Kecepatan (Erosi/Endapan)
     v_max = 2.0 if k >= 60 else 0.7
     v_min = 0.6
     
@@ -102,7 +104,7 @@ def gambar_penampang_saluran(row):
     color_wall = 'red' if row['Status'] == 'KRITIS' else '#333'
     ax.add_patch(patches.Polygon([p1, p2, p3, p4], closed=False, edgecolor=color_wall, facecolor='none', linewidth=3))
     
-    # Air
+    # Gambar Air
     wa1 = (x_talud_total - x_talud_air, y_air)
     wa2 = (x_talud_total, 0)
     wa3 = (x_talud_total + b, 0)
@@ -144,14 +146,20 @@ def gambar_profil_memanjang(df_hasil):
     return fig
 
 def generate_dxf_kp07(df_hasil):
-    """Generate File DXF sesuai KP-07"""
-    if not EZDXF_AVAILABLE:
-        return None
+    """
+    Generate File DXF sesuai KP-07.
+    FIX: Menggunakan setup_linetypes agar file bisa dibuka di AutoCAD.
+    """
+    if not EZDXF_AVAILABLE: return None
 
     doc = ezdxf.new('R2010')
+    
+    # PERBAIKAN UTAMA: Load definisi garis putus-putus standar
+    setup_linetypes(doc) 
+
     msp = doc.modelspace()
     
-    # Setup Layers
+    # Setup Layers dengan linetype yang sudah di-load
     doc.layers.add(name='GRID', color=8, linetype='DOT')
     doc.layers.add(name='TANAH_ASLI', color=3, linetype='DASHED') 
     doc.layers.add(name='DESAIN_SALURAN', color=4) 
@@ -161,19 +169,19 @@ def generate_dxf_kp07(df_hasil):
 
     SCALE_X, SCALE_Y = 1.0, 10.0
     
-    # Posisi Band (Tabel di bawah grafik)
+    # Koordinat Vertikal Tabel (Bands)
     Y_BAND_STA = -20
     Y_BAND_ELV_TANAH = -30
     Y_BAND_ELV_DESAIN = -40
     Y_BAND_ELV_AIR = -50
     Y_BAND_DIMENSI = -60
     
-    # Garis Tabel Horizontal
+    # Garis Horizontal Tabel
     max_x = df_hasil['STA Akhir'].max() * SCALE_X
     for y in [Y_BAND_STA, Y_BAND_ELV_TANAH, Y_BAND_ELV_DESAIN, Y_BAND_ELV_AIR, Y_BAND_DIMENSI]:
         msp.add_line((0, y), (max_x, y), dxfattribs={'layer': 'KOP_TABEL'})
         
-    # Label Kiri
+    # Label Judul Kiri
     msp.add_text("STATION", height=2).set_placement((-2, Y_BAND_STA + 2), align=TextEntityAlignment.MIDDLE_RIGHT)
     msp.add_text("ELV. TANAH", height=2).set_placement((-2, Y_BAND_ELV_TANAH + 2), align=TextEntityAlignment.MIDDLE_RIGHT)
     msp.add_text("ELV. DESAIN", height=2).set_placement((-2, Y_BAND_ELV_DESAIN + 2), align=TextEntityAlignment.MIDDLE_RIGHT)
@@ -191,18 +199,18 @@ def generate_dxf_kp07(df_hasil):
         y_air_awal = (row['Elv Dasar Awal'] + row['Tinggi Air (y)']) * SCALE_Y
         y_air_akhir = (row['Elv Dasar Akhir'] + row['Tinggi Air (y)']) * SCALE_Y
         
-        # Asumsi Tanah (Simulasi: Tanggul + 0.2m)
+        # Asumsi Tanah (Simulasi)
         elv_tanah_awal = row['Elv Dasar Awal'] + row['Tinggi Total (h)'] + 0.2
         elv_tanah_akhir = row['Elv Dasar Akhir'] + row['Tinggi Total (h)'] + 0.2
         y_tanah_awal = elv_tanah_awal * SCALE_Y
         y_tanah_akhir = elv_tanah_akhir * SCALE_Y
         
-        # Gambar Garis Utama (Menggunakan 'lineweight' bukan 'lw')
+        # Gambar Garis Utama (Gunakan lineweight, bukan lw)
         msp.add_line((x_awal, y_dasar_awal), (x_akhir, y_dasar_akhir), dxfattribs={'layer': 'DESAIN_SALURAN', 'lineweight': 50})
         msp.add_line((x_awal, y_air_awal), (x_akhir, y_air_akhir), dxfattribs={'layer': 'MUKA_AIR'})
         msp.add_line((x_awal, y_tanah_awal), (x_akhir, y_tanah_akhir), dxfattribs={'layer': 'TANAH_ASLI'})
         
-        # Drop Structure (Terjunan Vertikal)
+        # Drop Structure (Jika ada terjunan vertikal)
         if prev_x is not None:
              msp.add_line((prev_x, prev_y_dasar), (x_awal, y_dasar_awal), dxfattribs={'layer': 'DESAIN_SALURAN'})
              msp.add_line((prev_x, prev_y_tanah), (x_awal, y_tanah_awal), dxfattribs={'layer': 'TANAH_ASLI'})
@@ -367,7 +375,7 @@ if 'df_hasil' in st.session_state:
 
     st.dataframe(df_res.style.map(highlight_status, subset=['Status']), use_container_width=True, hide_index=True)
     
-    # Grafik (Grid Layout)
+    # Grafik (Grid Layout diperbaiki agar Cross Section muncul)
     col_g1, col_g2 = st.columns([2, 1])
     
     with col_g1:
