@@ -338,6 +338,124 @@ if 'df_hasil' in st.session_state:
     with col_g1:
         st.subheader("3. Profil Memanjang")
         st.pyplot(gambar_profil_memanjang(df_res))
+        import ezdxf
+from ezdxf.enums import TextEntityAlignment
+
+def generate_dxf_kp07(df_hasil):
+    """
+    Menggenerate file DXF sesuai standar KP-07 (Bab V Laporan).
+    Fitur:
+    1. Layers (Grid, Tanah, Desain, Air, Teks)
+    2. Profil Memanjang (Long Section) dengan Skala Distorsi Vertikal 10x
+    3. Kop Tabel Data (Bands) di bawah grafik
+    """
+    # 1. Inisialisasi Canvas (Bab 5.2)
+    doc = ezdxf.new('R2010') # Versi CAD yang umum
+    msp = doc.modelspace()
+    
+    # Setup Layers Sesuai KP-07
+    # Warna: 1=Red, 2=Yellow, 3=Green, 4=Cyan, 5=Blue, 7=White/Black, 8=Gray
+    doc.layers.add(name='GRID', color=8, linetype='DOT')
+    doc.layers.add(name='TANAH_ASLI', color=3, linetype='DASHED') 
+    doc.layers.add(name='DESAIN_SALURAN', color=4) # Cyan (Continuous)
+    doc.layers.add(name='MUKA_AIR', color=5, linetype='DASHDOT') 
+    doc.layers.add(name='TEKS', color=7)
+    doc.layers.add(name='KOP_TABEL', color=7)
+
+    # Konfigurasi Skala & Layout
+    SCALE_X = 1.0    # 1:1000 atau 1:2000 horizontal
+    SCALE_Y = 10.0   # Distorsi Vertikal 10x (Standar Irigasi)
+    DATUM_Y = 0.0    # Titik 0,0 grafik
+    
+    # Posisi Baris Tabel (Bands) di bawah grafik (koordinat Y negatif)
+    Y_BAND_STA = -20
+    Y_BAND_ELV_TANAH = -30
+    Y_BAND_ELV_DESAIN = -40
+    Y_BAND_ELV_AIR = -50
+    Y_BAND_DIMENSI = -60
+    
+    # Buat Garis Grid Horizontal untuk Tabel
+    for y in [Y_BAND_STA, Y_BAND_ELV_TANAH, Y_BAND_ELV_DESAIN, Y_BAND_ELV_AIR, Y_BAND_DIMENSI]:
+        msp.add_line((0, y), (df_hasil['STA Akhir'].max() * SCALE_X, y), dxfattribs={'layer': 'KOP_TABEL'})
+        
+    # Label Judul Baris (Kiri)
+    msp.add_text("STATION", height=2).set_placement((-2, Y_BAND_STA + 2), align=TextEntityAlignment.MIDDLE_RIGHT)
+    msp.add_text("ELV. TANAH", height=2).set_placement((-2, Y_BAND_ELV_TANAH + 2), align=TextEntityAlignment.MIDDLE_RIGHT)
+    msp.add_text("ELV. DESAIN", height=2).set_placement((-2, Y_BAND_ELV_DESAIN + 2), align=TextEntityAlignment.MIDDLE_RIGHT)
+    msp.add_text("MUKA AIR", height=2).set_placement((-2, Y_BAND_ELV_AIR + 2), align=TextEntityAlignment.MIDDLE_RIGHT)
+
+    # === LOOPING DATA STASIUN (Bab 5.2) ===
+    prev_x = None
+    prev_y_dasar = None
+    prev_y_air = None
+    prev_y_tanah = None
+    
+    for i, row in df_hasil.iterrows():
+        # Koordinat X
+        x_awal = row['STA Awal'] * SCALE_X
+        x_akhir = row['STA Akhir'] * SCALE_X
+        
+        # Koordinat Y (Elevasi * Distorsi)
+        y_dasar_awal = row['Elv Dasar Awal'] * SCALE_Y
+        y_dasar_akhir = row['Elv Dasar Akhir'] * SCALE_Y
+        
+        y_air_awal = (row['Elv Dasar Awal'] + row['Tinggi Air (y)']) * SCALE_Y
+        y_air_akhir = (row['Elv Dasar Akhir'] + row['Tinggi Air (y)']) * SCALE_Y
+        
+        # Asumsi Tanah Asli (Karena input terbatas, kita simulasikan Tanah = Tanggul + 0.2m)
+        elv_tanah_awal = row['Elv Dasar Awal'] + row['Tinggi Total (h)'] + 0.2
+        elv_tanah_akhir = row['Elv Dasar Akhir'] + row['Tinggi Total (h)'] + 0.2
+        y_tanah_awal = elv_tanah_awal * SCALE_Y
+        y_tanah_akhir = elv_tanah_akhir * SCALE_Y
+        
+        # 1. GAMBAR GARIS PROFIL
+        # Garis Dasar (Cyan)
+        msp.add_line((x_awal, y_dasar_awal), (x_akhir, y_dasar_akhir), dxfattribs={'layer': 'DESAIN_SALURAN', 'lw': 50})
+        # Garis Air (Biru Dashdot)
+        msp.add_line((x_awal, y_air_awal), (x_akhir, y_air_akhir), dxfattribs={'layer': 'MUKA_AIR'})
+        # Garis Tanah (Hijau Dashed)
+        msp.add_line((x_awal, y_tanah_awal), (x_akhir, y_tanah_akhir), dxfattribs={'layer': 'TANAH_ASLI'})
+        
+        # Hubungkan segmen putus (Vertical Drop jika ada terjunan)
+        if prev_x is not None:
+             msp.add_line((prev_x, prev_y_dasar), (x_awal, y_dasar_awal), dxfattribs={'layer': 'DESAIN_SALURAN'}) # Drop Walls
+             msp.add_line((prev_x, prev_y_tanah), (x_awal, y_tanah_awal), dxfattribs={'layer': 'TANAH_ASLI'})
+        
+        # 2. GENERASI KOLOM DATA (TEXT VERTIKAL)
+        # Fungsi helper untuk nulis teks vertikal di kolom
+        def add_band_text(text, x_pos, y_base):
+            msp.add_text(text, height=1.5, rotation=90).set_placement(
+                (x_pos, y_base + 1), align=TextEntityAlignment.MIDDLE_CENTER
+            )
+
+        # Tulis data di Titik Awal segmen
+        add_band_text(f"{row['STA Awal']:.1f}", x_awal, Y_BAND_STA)
+        add_band_text(f"{elv_tanah_awal:.2f}", x_awal, Y_BAND_ELV_TANAH)
+        add_band_text(f"{row['Elv Dasar Awal']:.2f}", x_awal, Y_BAND_ELV_DESAIN)
+        add_band_text(f"{(row['Elv Dasar Awal']+row['Tinggi Air (y)']):.2f}", x_awal, Y_BAND_ELV_AIR)
+        
+        # Garis Grid Vertikal
+        msp.add_line((x_awal, Y_BAND_DIMENSI), (x_awal, max(y_tanah_awal, y_tanah_akhir)), dxfattribs={'layer': 'GRID'})
+
+        # Update Previous Points
+        prev_x = x_akhir
+        prev_y_dasar = y_dasar_akhir
+        prev_y_air = y_air_akhir
+        prev_y_tanah = y_tanah_akhir
+
+    # Tulis data titik terakhir
+    msp.add_line((x_akhir, Y_BAND_DIMENSI), (x_akhir, max(y_tanah_awal, y_tanah_akhir)), dxfattribs={'layer': 'GRID'})
+    add_band_text(f"{row['STA Akhir']:.1f}", x_akhir, Y_BAND_STA)
+    add_band_text(f"{elv_tanah_akhir:.2f}", x_akhir, Y_BAND_ELV_TANAH)
+    add_band_text(f"{row['Elv Dasar Akhir']:.2f}", x_akhir, Y_BAND_ELV_DESAIN)
+    add_band_text(f"{(row['Elv Dasar Akhir']+row['Tinggi Air (y)']):.2f}", x_akhir, Y_BAND_ELV_AIR)
+
+    # Info Dimensi (Horizontal Text di tengah segmen)
+    msp.add_text(f"b={row['Lebar (b)']} m\nh={row['Tinggi Total (h)']} m", height=1.5).set_placement(
+        ((x_awal+x_akhir)/2, Y_BAND_DIMENSI + 4), align=TextEntityAlignment.MIDDLE_CENTER
+    )
+
+    return doc
         
     with col_g2:
         st.subheader("4. Detail Penampang")
@@ -373,3 +491,4 @@ if 'df_hasil' in st.session_state:
         type="primary", 
         use_container_width=True
     )
+
