@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 import io
 
 # ==========================================
@@ -41,12 +40,10 @@ def solve_strickler_y(Q, b, m, k, S):
         P = b + 2 * y * np.sqrt(1 + m**2)
         if P == 0: break
         R = A / P
-        # Rumus Manning-Strickler
         Q_calc = A * k * (R**(2/3)) * (S**0.5)
         
         if abs(Q_calc - Q) < 0.0001: break
         
-        # Adjustment step
         if Q_calc == 0: y += 0.1
         else: y = y * (Q / Q_calc) ** 0.6
     return y
@@ -132,15 +129,15 @@ def generate_long_section_dxf(df_hasil):
     min_y_band = bands['DIMENSI']['y']
     max_sta = df_hasil['STA Akhir'].max() * SCALE_H
     
-    # --- UPDATE FONT SIZE: HEADER KOLOM (DIPERBESAR) ---
+    # --- [UPDATE FONT 1] LONG SECTION HEADER (DIPERBESAR) ---
     for key, info in bands.items():
         y_pos = info['y']
         msp.add_line((-40, y_pos), (max_sta, y_pos), dxfattribs={'layer': 'KOP_GRID'})
-        # Ubah height dari 2.5 jadi 3.5
-        msp.add_text(info['label'], dxfattribs={'height': 3.5, 'style': 'KP_TEXT_STYLE', 'layer': 'KOP_TEXT'}).set_placement((-2, y_pos + H_ROW/2), align=TextEntityAlignment.MIDDLE_RIGHT)
+        # Height diperbesar jadi 4.0 (sebelumnya 2.5/3.5)
+        msp.add_text(info['label'], dxfattribs={'height': 4.0, 'style': 'KP_TEXT_STYLE', 'layer': 'KOP_TEXT'}).set_placement((-2, y_pos + H_ROW/2), align=TextEntityAlignment.MIDDLE_RIGHT)
 
     msp.add_line((-40, 0), (max_sta, 0), dxfattribs={'layer': 'KOP_GRID', 'lineweight': 30})
-    msp.add_text(f"DATUM: +{datum_reference:.2f}", dxfattribs={'height': 3.5, 'layer': 'KOP_TEXT'}).set_placement((-2, 2), align=TextEntityAlignment.MIDDLE_RIGHT)
+    msp.add_text(f"DATUM: +{datum_reference:.2f}", dxfattribs={'height': 4.0, 'layer': 'KOP_TEXT'}).set_placement((-2, 2), align=TextEntityAlignment.MIDDLE_RIGHT)
 
     prev_x = None
     prev_y_dasar = None
@@ -169,10 +166,10 @@ def generate_long_section_dxf(df_hasil):
         if prev_x is not None and (abs(prev_y_dasar - y_dasar_awal) > 0.001):
              msp.add_line((prev_x, prev_y_dasar), (x_awal, y_dasar_awal), dxfattribs={'layer': 'DESAIN_DASAR'})
 
-        # --- UPDATE FONT SIZE: ISI DATA TABEL (DIPERBESAR) ---
+        # --- [UPDATE FONT 2] LONG SECTION DATA (DIPERBESAR) ---
         def add_band_text(txt, x_pos, y_bottom):
-            # Ubah height dari 1.8 jadi 2.5
-            msp.add_text(txt, dxfattribs={'height': 2.5, 'rotation': 90, 'style': 'KP_TEXT_STYLE', 'layer': 'KOP_TEXT'}).set_placement((x_pos, y_bottom + H_ROW/2), align=TextEntityAlignment.MIDDLE_CENTER)
+            # Height diperbesar jadi 3.0 (sebelumnya 1.8/2.5)
+            msp.add_text(txt, dxfattribs={'height': 3.0, 'rotation': 90, 'style': 'KP_TEXT_STYLE', 'layer': 'KOP_TEXT'}).set_placement((x_pos, y_bottom + H_ROW/2), align=TextEntityAlignment.MIDDLE_CENTER)
 
         msp.add_line((x_awal, min_y_band), (x_awal, max(y_tanah_awal, y_tanggul_awal) + 5), dxfattribs={'layer': 'KOP_GRID', 'linetype': 'DOT'})
 
@@ -182,7 +179,8 @@ def generate_long_section_dxf(df_hasil):
         add_band_text(f"{(row['Elv Dasar Awal'] + row['Tinggi Air (y)']):.2f}", x_awal, bands['ELV_AIR']['y'])
         
         x_mid = (x_awal + x_akhir) / 2
-        msp.add_text(f"b={row['Lebar (b)']}\nh={row['Tinggi Total (h)']}", dxfattribs={'height': 2.5, 'layer': 'KOP_TEXT'}).set_placement((x_mid, bands['DIMENSI']['y'] + H_ROW/2), align=TextEntityAlignment.MIDDLE_CENTER)
+        # Font Dimensi Tengah juga diperbesar jadi 3.0
+        msp.add_text(f"b={row['Lebar (b)']}\nh={row['Tinggi Total (h)']}", dxfattribs={'height': 3.0, 'layer': 'KOP_TEXT'}).set_placement((x_mid, bands['DIMENSI']['y'] + H_ROW/2), align=TextEntityAlignment.MIDDLE_CENTER)
 
         prev_x = x_akhir
         prev_y_dasar = y_dasar_akhir
@@ -250,7 +248,8 @@ def generate_cross_section_dxf(df_hasil):
 
         msp.add_line((cx + x_bank_l - 2, cy + y_top), (cx + x_bank_r + 2, cy + y_top), dxfattribs={'layer': 'TANAH_ASLI'})
         
-        # --- UPDATE FONT SIZE: DIMENSI CROSS (DIPERKECIL) ---
+        # --- [UPDATE FONT 3] CROSS SECTION DIMENSI (DIPERKECIL) ---
+        # Height diperkecil jadi 0.35 (sebelumnya 0.5)
         try:
             msp.add_linear_dim(
                 base=(cx, cy - 1.5),           
@@ -258,17 +257,16 @@ def generate_cross_section_dxf(df_hasil):
                 p2=(cx + x_br, cy + y_btm),    
                 dxfattribs={'layer': 'DIMENSI'},
                 text=f"b={b:.2f}",
-                override={'dimtxt': 0.5, 'dimtsz': 0.1} # Override tinggi teks dimensi (0.5)
+                override={'dimtxt': 0.35, 'dimtsz': 0.1} 
             )
         except:
             msp.add_line((cx + x_bl, cy - 1.5), (cx + x_br, cy - 1.5), dxfattribs={'layer': 'DIMENSI'})
-            # Font manual diperkecil jadi 0.5
-            msp.add_text(f"b = {b:.2f}", dxfattribs={'height': 0.5, 'layer': 'DIMENSI'}).set_placement((cx, cy - 1.2), align=TextEntityAlignment.MIDDLE_CENTER)
+            msp.add_text(f"b = {b:.2f}", dxfattribs={'height': 0.35, 'layer': 'DIMENSI'}).set_placement((cx, cy - 1.2), align=TextEntityAlignment.MIDDLE_CENTER)
 
-        # --- UPDATE FONT SIZE: LABEL CROSS (DIPERKECIL) ---
-        # Height diperkecil jadi 0.6
-        msp.add_text(f"STA: {row['STA Awal']}", dxfattribs={'height': 0.6, 'layer': 'KOP_TEXT'}).set_placement((cx, cy - 3), align=TextEntityAlignment.MIDDLE_CENTER)
-        msp.add_text(f"Elv. Dasar: {row['Elv Dasar Awal']:.2f}", dxfattribs={'height': 0.5, 'layer': 'KOP_TEXT'}).set_placement((cx, cy - 4.0), align=TextEntityAlignment.MIDDLE_CENTER)
+        # --- [UPDATE FONT 4] CROSS SECTION LABEL (DIPERKECIL) ---
+        # Height diperkecil jadi 0.35
+        msp.add_text(f"STA: {row['STA Awal']}", dxfattribs={'height': 0.35, 'layer': 'KOP_TEXT'}).set_placement((cx, cy - 3), align=TextEntityAlignment.MIDDLE_CENTER)
+        msp.add_text(f"Elv. Dasar: {row['Elv Dasar Awal']:.2f}", dxfattribs={'height': 0.35, 'layer': 'KOP_TEXT'}).set_placement((cx, cy - 3.8), align=TextEntityAlignment.MIDDLE_CENTER)
 
         current_col += 1
         if current_col >= col_limit:
@@ -278,8 +276,9 @@ def generate_cross_section_dxf(df_hasil):
     return doc
 
 # ==========================================
-# 4. USER INTERFACE (STREAMLIT)
+# 4. USER INTERFACE (TAMPILAN)
 # ==========================================
+# Pastikan baris di bawah ini RATA KIRI (tidak ada spasi di depan)
 
 st.title("🛠️ Desain Irigasi: Standar KP-03 & KP-07")
 st.markdown("Aplikasi perhitungan hidrolis dan otomatisasi gambar teknik.")
@@ -301,7 +300,6 @@ with st.sidebar:
         st.warning("⚠️ Library 'ezdxf' belum terinstall. Fitur Download DXF dimatikan.")
 
 # --- DATA EDITOR (INPUT) ---
-# PERBAIKAN: Input Editor diletakkan DILUAR tombol agar selalu muncul
 if 'df_input' not in st.session_state:
     data_awal = {
         'Nama Saluran': ['Saluran Induk 1', 'Saluran Induk 2'],
@@ -318,7 +316,7 @@ if 'df_input' not in st.session_state:
 st.subheader("1. Input Data Desain")
 edited_df = st.data_editor(st.session_state.df_input, num_rows="dynamic", hide_index=True, use_container_width=True)
 
-# --- TOMBOL PROSES (LOGIKA UTAMA) ---
+# --- TOMBOL PROSES ---
 if st.button("▶️ HITUNG & VERIFIKASI (RUN)", type="primary", use_container_width=True):
     hasil_list = []
     curr_sta = start_sta
@@ -421,7 +419,7 @@ if 'df_hasil' in st.session_state:
                 ax2.fill_between([-b/2 - m*y, -b/2, b/2, b/2 + m*y], [y, 0, 0, y], color='#00BFFF', alpha=0.5)
                 ax2.plot([-b/2 - m*y, b/2 + m*y], [y, y], 'b-.')
                 
-                # Font Preview Matplotlib juga disesuaikan sedikit
+                # Preview Info Text
                 ax2.text(0, y/2, f"Q={q_val} m³/s\nV={v_val} m/s", ha='center', fontsize=8, fontweight='bold', color='white', bbox=dict(facecolor='black', alpha=0.5))
                 
                 ax2.set_title(f"Cross Section: {pilih_sal}")
