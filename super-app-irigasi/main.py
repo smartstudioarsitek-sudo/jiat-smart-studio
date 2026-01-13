@@ -5,34 +5,34 @@ import json
 # --- CONFIG ---
 st.set_page_config(page_title="Hydro Planner", page_icon="💧", layout="wide")
 
-# --- CSS PREMUIUM (GOOGLE FONTS & LAYOUT) ---
+# --- CSS PREMIUM (GOOGLE FONTS & LAYOUT) ---
 st.markdown("""
 <style>
     /* Import Font */
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;700;800&family=Pacifico&display=swap');
 
-    /* Container Judul agar bisa di-center */
+    /* Container for Centered Title */
     .title-container {
         text-align: center;
-        margin-bottom: 20px;
-        margin-top: 10px;
+        margin-bottom: 40px;
+        margin-top: 20px;
     }
 
-    /* Wrapper judul agar posisi signature bisa relatif terhadap teks ini */
+    /* Wrapper to position signature relative to text */
     .title-wrapper {
         display: inline-block;
         position: relative;
     }
 
-    /* Judul Utama */
+    /* Main Title Styling */
     .main-title {
         font-family: 'Poppins', sans-serif;
-        font-size: 60px; /* Sedikit diperbesar biar gagah */
+        font-size: 60px;
         font-weight: 800;
-        background: -webkit-linear-gradient(45deg, #0984e3, #00cec9); /* Gradasi Laut */
+        background: -webkit-linear-gradient(45deg, #0984e3, #00cec9); /* Ocean Gradient */
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        line-height: 1; /* Rapat biar signature pas */
+        line-height: 1;
         margin: 0;
         padding: 0;
     }
@@ -40,65 +40,75 @@ st.markdown("""
     /* Signature "by Smart Studio" */
     .branding-tag {
         font-family: 'Pacifico', cursive;
-        font-size: 14px; /* Lebih kecil & manis */
-        color: #ff7675; /* Warna Salmon */
+        font-size: 16px;
+        color: #ff7675; /* Salmon Color */
         position: absolute;
-        bottom: -8px; /* Tempel di bawah */
-        right: 0; /* Tempel di kanan akhir huruf R */
-        text-shadow: 1px 1px 0px #fff; /* Outline tipis biar baca */
-        white-space: nowrap;
+        bottom: -15px;
+        right: -10px;
+        text-shadow: 1px 1px 0px #fff;
+        transform: rotate(-5deg); /* Slight tilt for handwriting effect */
     }
 
-    /* Sub-Judul */
+    /* Sub-Title */
     .sub-title {
         font-family: 'Poppins', sans-serif;
         font-size: 16px;
         color: #636e72;
         text-align: center;
         font-weight: 400;
-        letter-spacing: 2px; /* Spasi antar huruf biar modern */
-        margin-top: 15px;
+        letter-spacing: 3px;
+        margin-top: 20px;
         text-transform: uppercase;
     }
 
-    /* Card Project */
+    /* Project Card Styling */
     .project-card {
         padding: 25px; 
         background-color: #ffffff; 
         border-radius: 12px; 
-        box-shadow: 0 4px 20px rgba(0,0,0,0.08); 
+        box-shadow: 0 4px 20px rgba(0,0,0,0.05); 
         border: 1px solid #f1f2f6; 
         margin-bottom: 20px;
     }
     
-    .stButton button {
+    /* Button Styling */
+    div.stButton > button {
         width: 100%; 
         border-radius: 8px; 
-        font-weight: bold; 
+        font-weight: 600; 
         height: 50px;
         border: none;
         transition: 0.3s;
     }
+    
+    /* Success/Info Box Styling adjustments */
+    .stSuccess, .stInfo {
+        border-radius: 8px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNGSI SAVE/LOAD ---
+# --- SAVE/LOAD FUNCTIONS ---
 def serialize_session():
-    """Mengubah memori aplikasi jadi JSON"""
+    """Convert session state to JSON string"""
     export = {}
     for k, v in st.session_state.items():
-        if k.startswith(("Form", "editor", "uploaded")): continue
+        # Exclude UI form triggers
+        if k.startswith(("Form", "editor", "uploaded", "btn")): continue
+        
+        # Handle DataFrames
         if isinstance(v, pd.DataFrame):
             export[k] = {'__type__': 'df', 'data': v.to_dict(orient='records')}
         else:
             try:
+                # Ensure it's serializable
                 json.dumps(v)
                 export[k] = v
             except: pass
     return json.dumps(export, indent=2)
 
 def load_session(json_file):
-    """Mengembalikan JSON ke memori aplikasi"""
+    """Load JSON back into session state"""
     try:
         data = json.load(json_file)
         count = 0
@@ -112,12 +122,12 @@ def load_session(json_file):
     except Exception as e: return False, str(e)
 
 # --- INIT STATE ---
-if 'nama_proyek' not in st.session_state: st.session_state['nama_proyek'] = "Proyek Baru"
+if 'nama_proyek' not in st.session_state: st.session_state['nama_proyek'] = "New Project"
 if 'lokasi' not in st.session_state: st.session_state['lokasi'] = "-"
 if 'tahun' not in st.session_state: st.session_state['tahun'] = 2026
 
 # ==========================================
-# TAMPILAN HEADER BARU (LAYOUT PREMUIUM)
+# HEADER DISPLAY (PREMIUM LAYOUT)
 # ==========================================
 
 st.markdown("""
@@ -130,39 +140,40 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- BAGIAN 1: IDENTITAS PROYEK ---
-st.markdown("### 1️⃣ Identitas Proyek")
+# --- PART 1: PROJECT IDENTITY ---
+st.markdown("### 1️⃣ Project Identity")
 with st.container():
+    # Using the CSS class defined above
     st.markdown('<div class="project-card">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns([2, 2, 1])
-    with c1: st.session_state['nama_proyek'] = st.text_input("Nama Pekerjaan", value=st.session_state['nama_proyek'])
-    with c2: st.session_state['lokasi'] = st.text_input("Lokasi / Desa", value=st.session_state['lokasi'])
-    with c3: st.session_state['tahun'] = st.number_input("Tahun Anggaran", value=st.session_state['tahun'])
+    with c1: st.session_state['nama_proyek'] = st.text_input("Project Name", value=st.session_state['nama_proyek'])
+    with c2: st.session_state['lokasi'] = st.text_input("Location / Village", value=st.session_state['lokasi'])
+    with c3: st.session_state['tahun'] = st.number_input("Fiscal Year", value=st.session_state['tahun'])
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.divider()
 
-# --- BAGIAN 2: MANAJEMEN DATA ---
+# --- PART 2: DATA MANAGEMENT ---
 c_left, c_right = st.columns(2)
 
-# LOAD
+# LOAD SECTION
 with c_left:
-    st.markdown("### 📂 Buka File Lama")
-    uploaded = st.file_uploader("Upload file .json", type=['json'])
+    st.markdown("### 📂 Load Existing Project")
+    uploaded = st.file_uploader("Upload .json file", type=['json'])
     if uploaded:
-        if st.button("📂 Load Project"):
+        if st.button("📂 Load Project Data", type="secondary"):
             ok, msg = load_session(uploaded)
             if ok: 
-                st.success(f"✅ Berhasil memuat {msg} data! Cek halaman lain.")
-                st.rerun()
-            else: st.error(f"Gagal: {msg}")
+                st.success(f"✅ Successfully loaded {msg} data points!")
+                # Optional: st.rerun() if using new streamlit
+            else: st.error(f"Failed: {msg}")
 
-# SAVE
+# SAVE SECTION
 with c_right:
-    st.markdown("### 💾 Simpan Proyek (Save All)")
-    st.info("Tombol ini akan menyimpan SELURUH DATA dari semua halaman.")
+    st.markdown("### 💾 Save Project")
+    st.info("This will export **ALL DATA** from every module to your local drive.")
     
-    file_label = f"{st.session_state['nama_proyek'].replace(' ', '_')}.json"
+    file_label = f"{str(st.session_state['nama_proyek']).replace(' ', '_')}_Backup.json"
     json_str = serialize_session()
     
     st.download_button(
@@ -173,19 +184,25 @@ with c_right:
         type="primary"
     )
 
-# STATUS DATA
+# --- PART 3: DATA STATUS ---
 st.divider()
-st.caption("Status Data di Memori (RAM):")
-cols = st.columns(5)
+st.subheader("📊 Module Status Check")
+st.caption("Checks active data in Random Access Memory (RAM)")
+
+# Define modules to check
 modules = [
-    ('df_iklim_24', 'Klimatologi'), 
-    ('data_nfr_manual', 'Pola Tanam'), 
-    ('df_mock_input', 'Ketersediaan Air'),
-    ('hujan_rancangan', 'Analisa Banjir'),
-    ('df_pipa', 'Desain Pipa')
+    ('df_iklim_24', 'Climatology'), 
+    ('data_nfr_manual', 'Cropping Pattern'), 
+    ('df_mock_input', 'Water Availability'),
+    ('hujan_rancangan', 'Flood Analysis'),
+    ('df_pipa', 'Pipe Design')
 ]
 
+# Create a clean grid for status
+cols = st.columns(5)
 for i, (key, label) in enumerate(modules):
     with cols[i]:
-        if key in st.session_state: st.success(f"✅ {label}")
-        else: st.markdown(f"⬜ {label}")
+        if key in st.session_state:
+            st.success(f"**{label}**\n\n✅ Ready")
+        else:
+            st.warning(f"**{label}**\n\n⬜ Empty")
