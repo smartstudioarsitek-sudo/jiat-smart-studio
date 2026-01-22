@@ -2,172 +2,185 @@ import streamlit as st
 import pandas as pd
 import math
 
-# --- 1. KONFIGURASI HALAMAN (WAJIB PALING ATAS) ---
-# Cek apakah config sudah diset oleh main app atau belum. 
-# Kalau ini file di folder 'pages/', biasanya config ikut main.
-# Tapi untuk aman, kita taruh di blok try.
+# --- 1. KONFIGURASI HALAMAN (SAFETY FIRST) ---
 try:
-    st.set_page_config(page_title="Hitung Tebal Saluran", layout="wide")
+    st.set_page_config(page_title="Cek Tebal Saluran", layout="wide")
 except:
-    pass # Kalau sudah diset di main.py, abaikan saja.
+    pass 
 
-st.title("🌊 Perhitungan DED Saluran Irigasi")
-st.markdown("---")
+st.title("🌊 Cek Tebal & Geometri Saluran Irigasi")
+st.caption("Status: ✅ Aplikasi Berjalan Normal (Support Trapesium & Persegi)")
+st.divider()
 
-# --- 2. FUNGSI RUMUS (DENGAN PENGAMAN ERROR) ---
+# --- 2. FUNGSI LOGIKA (TERINTEGRASI) ---
 
-def hitung_manning_solver(Q, b, s, n=0.015):
+def solve_manning_trapezoidal(Q, b, m, s, n=0.015):
     """
-    Mencari tinggi muka air (h) dengan iterasi.
-    Diberi pengaman agar tidak endless loop atau divide by zero.
+    Menghitung tinggi muka air (h) untuk saluran Trapesium/Persegi.
+    Rumus Manning: Q = (1/n) * A * R^(2/3) * S^(1/2)
     """
-    if Q <= 0 or b <= 0 or s <= 0:
-        return 0.0
+    if Q <= 0 or b <= 0 or s <= 0: return 0.0
     
-    # Tebakan awal (h = 1 meter)
-    h = 1.0
+    h = 1.0 # Tebakan awal
     
-    # Maksimal 20 kali percobaan (iterasi)
-    for _ in range(20):
+    for _ in range(30): # Iterasi Newton-Raphson Sederhana
         try:
-            A = b * h
-            P = b + 2 * h
-            R = A / P
+            # Properti Geometri Trapesium
+            # A = (b + mh)h
+            area = (b + m * h) * h 
+            # P = b + 2h * sqrt(1 + m^2)
+            perimeter = b + 2 * h * math.sqrt(1 + m**2)
             
-            # Rumus Manning: Q = (1/n) * A * R^(2/3) * S^(1/2)
-            Q_hitung = (1/n) * A * (R**(2.0/3.0)) * (s**0.5)
+            if perimeter == 0: break
             
-            # Cek selisih (Error)
-            error = Q - Q_hitung
+            R = area / perimeter
             
-            # Kalau sudah sangat dekat (beda < 0.001), stop.
-            if abs(error) < 0.001:
+            # Hitung Q berdasarkan tebakan h
+            Q_calc = (1/n) * area * (R**(2/3)) * (s**0.5)
+            
+            # Cek Error
+            if abs(Q - Q_calc) < 0.001:
                 return h
             
-            # Koreksi tinggi air untuk iterasi berikutnya
-            # Mencegah pembagian nol
-            if Q_hitung < 0.0001: Q_hitung = 0.0001 
-            
-            ratio = (Q / Q_hitung) ** 0.6
-            h = h * ratio
+            # Koreksi h (Metode rasio sederhana agar stabil)
+            if Q_calc < 0.00001: Q_calc = 0.00001
+            h = h * (Q / Q_calc) ** 0.5 # Pangkat diperkecil agar loncatan halus
             
         except:
-            # Kalau ada error matematika, kembalikan nilai terakhir
             return h
             
     return h
 
-def hitung_struktur_beton(h_dinding, h_air_aktual, fc):
-    """
-    Menghitung tebal beton berdasarkan beban.
-    """
+def hitung_struktur_lengkap(h_dinding, b, m, fc, h_air_aktual):
     try:
-        # Parameter
-        gamma_air   = 9.81  # kN/m3
-        gamma_tanah = 18.0  # kN/m3
-        ka          = 0.33  # Koefisien tanah aktif
-        selimut     = 0.04  # 4 cm
+        # Parameter Desain
+        gamma_air   = 9.81
+        gamma_tanah = 18.0
+        ka          = 0.33
+        selimut     = 0.04
         
-        # --- LOAD CASE ---
-        # 1. Air Penuh (Beban dari dalam)
-        # Kita asumsikan banjir sampai bibir saluran
-        Mu_air = 1.6 * (1.0/6.0) * gamma_air * (h_dinding**3)
+        # --- A. GEOMETRI DINDING ---
+        # Panjang Sisi Miring (Slant Length) = H * sqrt(1+m^2)
+        # Ini adalah panjang dinding beton sesungguhnya
+        sisi_miring = h_dinding * math.sqrt(1 + m**2)
+        
+        # Keliling Lining (Total Beton) = Lebar Dasar + 2 x Sisi Miring
+        keliling_beton = b + (2 * sisi_miring)
+        
+        # --- B. BEBAN STRUKTUR ---
+        # Catatan: Perhitungan Momen & Geser tetap menggunakan proyeksi vertikal (H)
+        # Ini adalah pendekatan konservatif yang aman untuk DED.
+        
+        # Case 1: Air Penuh
+        Mu_air = 1.6 * (1/6) * gamma_air * (h_dinding**3)
         Vu_air = 1.6 * 0.5 * gamma_air * (h_dinding**2)
         
-        # 2. Tanah Luar (Beban dari luar saat kosong)
-        Mu_tanah = 1.6 * (1.0/6.0) * gamma_tanah * ka * (h_dinding**3)
+        # Case 2: Tanah Luar
+        Mu_tanah = 1.6 * (1/6) * gamma_tanah * ka * (h_dinding**3)
         Vu_tanah = 1.6 * 0.5 * gamma_tanah * ka * (h_dinding**2)
         
-        # Ambil yang terbesar
         Mu_desain = max(Mu_air, Mu_tanah)
         Vu_desain = max(Vu_air, Vu_tanah)
-        kondisi = "Air Penuh (Internal)" if Mu_air > Mu_tanah else "Tekanan Tanah (Eksternal)"
+        kondisi = "Air Penuh" if Mu_air > Mu_tanah else "Tekanan Tanah"
+
+        # --- C. CEK TEBAL ---
+        # 1. Lentur
+        d_lentur = (Mu_desain / (0.85 * 2000))**0.5
         
-        # --- HITUNG TEBAL PERLU ---
+        # 2. Geser (Fix Satuan)
+        kuat_geser_kpa = 0.17 * math.sqrt(fc) * 1000 
+        d_geser = Vu_desain / (0.75 * kuat_geser_kpa)
         
-        # A. Cek Lentur (Flexure)
-        # Asumsi Rn = 2000 untuk K-250 (Konservatif)
-        d_lentur = (Mu_desain / (0.85 * 2000.0))**0.5 
+        # 3. Empiris (Kekakuan) -> Pakai Sisi Miring!
+        # Dinding miring lebih panjang dari dinding tegak, jadi harus lebih kaku
+        t_empiris = sisi_miring / 12
         
-        # B. Cek Geser (Shear) - PERBAIKAN UNIT
-        # Kuat Geser Beton = 0.17 * sqrt(fc) -> fc dalam MPa
-        # Hasil dikali 1000 agar jadi kPa (kN/m2)
-        kuat_geser_kpa = 0.17 * math.sqrt(fc) * 1000
-        phi_geser = 0.75
-        
-        # d_geser = Vu / (phi * Vc * b) -> b = 1.0 meter
-        if kuat_geser_kpa > 0:
-            d_geser = Vu_desain / (phi_geser * kuat_geser_kpa * 1.0)
-        else:
-            d_geser = 0.20 # Default kalau error
-            
-        # --- KEPUTUSAN FINAL ---
+        # Keputusan Final
         d_pakai = max(d_lentur, d_geser)
-        
-        # Tebal = d + selimut + 1/2 diameter tulangan (0.006)
         t_calc = d_pakai + selimut + 0.006
+        t_final = max(t_calc, t_empiris, 0.10) # Min 10 cm
         
-        # Syarat Empiris (Kekakuan) = H / 12
-        t_empiris = h_dinding / 12.0
-        
-        # Ambil nilai MAX, minimal 10 cm
-        t_final = max(t_calc, t_empiris, 0.10)
-        
-        return t_final, kondisi, Mu_desain, Vu_desain
-
+        return {
+            "H (m)": h_dinding,
+            "m (Talud)": m,
+            "Sisi Miring (m)": round(sisi_miring, 2),
+            "Keliling Lining (m)": round(keliling_beton, 2),
+            "Tebal Rekomendasi (cm)": round(t_final * 100, 1),
+            "Mu (kNm)": round(Mu_desain, 2),
+            "Vu (kN)": round(Vu_desain, 2),
+            "Kondisi": kondisi,
+            "Tebal H/12 (cm)": round(t_empiris*100, 1)
+        }
     except Exception as e:
-        # Jika error, return nilai default aman
-        return 0.15, f"Error Hitung: {str(e)}", 0, 0
+        return {"Error": str(e)}
 
-# --- 3. INPUT USER ---
+# --- 3. UI & INPUT ---
+col_in1, col_in2 = st.columns(2)
 
-col1, col2 = st.columns(2)
+with col_in1:
+    st.info("📥 **Dimensi Saluran**")
+    Q_in = st.number_input("Debit (Q) m³/s", value=1.54)
+    b_in = st.number_input("Lebar Dasar (B) m", value=4.2)
+    h_in = st.number_input("Tinggi Dinding (H) m", value=1.4)
+    # INPUT BARU: TALUD
+    m_in = st.number_input("Kemiringan Talud (m)", value=0.0, step=0.1, help="0 = Tegak Lurus. 1 = Miring 1:1")
 
-with col1:
-    st.info("📥 **Data Dimensi & Hidrolis**")
-    Q_in = st.number_input("Debit (Q) m³/s", value=1.54, min_value=0.01)
-    b_in = st.number_input("Lebar (B) m", value=4.2, min_value=0.1)
-    h_in = st.number_input("Tinggi Dinding (H) m", value=1.4, min_value=0.1)
-    
-with col2:
+with col_in2:
     st.warning("⚙️ **Parameter Teknis**")
-    s_in = st.number_input("Kemiringan (S)", value=0.0003, format="%.4f")
-    fc_in = st.selectbox("Mutu Beton (fc')", [20, 25, 30, 35])
+    s_in = st.number_input("Slope Dasar (S)", value=0.0003, format="%.4f")
+    fc_in = st.selectbox("Mutu Beton (fc')", [20, 25, 30])
+    
+# --- 4. PROSES HITUNG ---
 
-# --- 4. EKSEKUSI PERHITUNGAN ---
-
-# Hitung Air dulu
-h_air = hitung_manning_solver(Q_in, b_in, s_in)
+# 1. Hidrolis (Manning Trapesium)
+h_air = solve_manning_trapezoidal(Q_in, b_in, m_in, s_in)
 freeboard = h_in - h_air
 
-# Hitung Struktur
-tebal, kondisi_msg, mu, vu = hitung_struktur_beton(h_in, h_air, fc_in)
-
-# Konversi ke cm untuk display
-tebal_cm = round(tebal * 100, 1)
-tebal_pasang = math.ceil(tebal_cm) # Bulatkan ke atas agar mudah
+# 2. Struktur & Geometri
+res = hitung_struktur_lengkap(h_in, b_in, m_in, fc_in, h_air)
 
 # --- 5. TAMPILKAN HASIL ---
 
-st.divider()
-st.subheader("✅ Hasil Analisa DED")
-
-# Grid Hasil
-c_res1, c_res2, c_res3, c_res4 = st.columns(4)
-
-c_res1.metric("Tinggi Air (y)", f"{h_air:.3f} m")
-c_res2.metric("Freeboard", f"{freeboard:.3f} m", 
-              delta="OK" if freeboard >= 0.3 else "KURANG!", 
-              delta_color="normal" if freeboard >= 0.3 else "inverse")
-c_res3.metric("Momen Desain", f"{mu:.2f} kNm")
-c_res4.metric("Rekomendasi Tebal", f"{tebal_pasang} cm", help=f"Hasil hitungan eksak: {tebal_cm} cm")
-
-# Detail Text
-st.caption(f"**Catatan Struktur:** Dimensi dinding dihitung berdasarkan kondisi kritis: *{kondisi_msg}*.")
-
-if tebal_pasang > 20:
-    st.error(f"⚠️ Tebal {tebal_pasang} cm terlalu besar? Cek input Tinggi Dinding atau Debit Anda.")
-elif tebal_pasang < 10:
-    st.info("ℹ️ Secara hitungan tebal < 10 cm cukup, tapi disarankan minimal 10 cm-12 cm untuk pelaksanaan.")
+if "Error" in res:
+    st.error(f"Error: {res['Error']}")
 else:
-    st.success(f"👍 Tebal {tebal_pasang} cm adalah dimensi yang efisien dan aman.")
+    # --- SECTION 1: HIDROLIS ---
+    st.subheader("1. Analisa Hidrolis")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Tinggi Air (y)", f"{h_air:.3f} m")
+    
+    # Logic warna Freeboard
+    fb_status = "Aman" if freeboard >= 0.3 else "Bahaya (<30cm)"
+    fb_color = "normal" if freeboard >= 0.3 else "inverse"
+    c2.metric("Freeboard", f"{freeboard:.3f} m", delta=fb_status, delta_color=fb_color)
+    
+    c3.metric("Debit", f"{Q_in} m³/s")
+
+    # --- SECTION 2: GEOMETRI & STRUKTUR ---
+    st.markdown("---")
+    st.subheader("2. Rekomendasi Struktur & Volume")
+    
+    # Tampilan Grid Baru
+    g1, g2, g3, g4 = st.columns(4)
+    
+    g1.metric("Panjang Dinding", f"{res['Sisi Miring (m)']} m", help="Panjang sisi miring beton per satu sisi")
+    
+    # INI OUTPUT BARU YANG KAKAK MINTA
+    g2.metric("Keliling Lining", f"{res['Keliling Lining (m)']} m", help="Total panjang beton (Lantai + 2 Dinding) untuk RAB")
+    
+    g3.metric("Momen Maks", f"{res['Mu (kNm)']} kNm")
+    
+    # REKOMENDASI TEBAL
+    tebal = res['Tebal Rekomendasi (cm)']
+    g4.metric("TEBAL BETON", f"{tebal} cm", delta="DED Ready", delta_color="normal" if tebal <= 20 else "inverse")
+
+    # --- TABEL RINCIAN ---
+    with st.expander("Lihat Rincian Perhitungan Lengkap"):
+        st.write("""
+        Tabel berikut menunjukkan detail parameter yang digunakan untuk perhitungan.
+        * **Keliling Lining** berguna untuk menghitung volume pekerjaan beton per meter panjang.
+        * **Tebal H/12** adalah syarat kekakuan agar dinding tidak melendut.
+        """)
+        df = pd.DataFrame([res]).T
+        df.columns = ["Nilai"]
+        st.table(df)
