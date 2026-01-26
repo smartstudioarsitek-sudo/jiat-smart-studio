@@ -86,15 +86,15 @@ st.header("💰 Estimasi Biaya & AHSP")
 with st.expander("📝 Update Harga Satuan Dasar (HSD)"):
     c_upah, c_mat = st.columns(2)
     with c_upah:
-        u_pekerja = st.number_input("Pekerja (Rp/OH)", value=110000)
-        u_tukang = st.number_input("Tukang (Rp/OH)", value=135000)
-        u_mandor = st.number_input("Mandor (Rp/OH)", value=150000)
+        u_pekerja = st.number_input("Pekerja (Rp/OH)", value=125000)
+        u_tukang = st.number_input("Tukang (Rp/OH)", value=175000)
+        u_mandor = st.number_input("Mandor (Rp/OH)", value=200000)
     with c_mat:
-        p_besi = st.number_input("Harga Besi (Rp/kg)", value=14500)
-        p_semen = st.number_input("Semen (Rp/kg)", value=1600)
-        p_pasir = st.number_input("Pasir (Rp/m3)", value=250000)
-        p_split = st.number_input("Split (Rp/m3)", value=350000)
-        p_kayu = st.number_input("Kayu Kls III (Rp/m3)", value=2800000)
+        p_besi = st.number_input("Harga Besi (Rp/kg)", value=15000)
+        p_semen = st.number_input("Semen (Rp/kg)", value=1190)
+        p_pasir = st.number_input("Pasir (Rp/m3)", value=389000)
+        p_split = st.number_input("Split (Rp/m3)", value=460000)
+        p_kayu = st.number_input("Kayu Kls III (Rp/m3)", value=2600000)
 
 # Perhitungan Harga Satuan Pekerjaan (HSP) + Overhead 10%
 # 1. Beton (A.4.1.1.8)
@@ -123,3 +123,4 @@ df_rab = pd.DataFrame({
 st.table(df_rab.style.format({"Total (Rp)": "{:,.0f}"}))
 
 st.success(f"### Total RAB Proyek (100m): Rp {( (res['vol_beton']*hsp_beton + res['berat_besi']*hsp_besi + res['bekisting']*hsp_bekisting) * 100):,.0f}")
+
