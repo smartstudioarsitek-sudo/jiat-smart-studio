@@ -5,25 +5,23 @@ import json
 from io import BytesIO
 
 # --- 1. CONFIGURASI & STATE MANAGEMENT ---
-st.set_page_config(page_title="Pro QS: Unlocked Version", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="Pro QS: Smart Safety V.9", layout="wide", page_icon="🏗️")
 
 if 'data_proyek' not in st.session_state:
     st.session_state['data_proyek'] = []
 
-# --- 2. LIBRARY PERHITUNGAN (ENGINEERING CORE - TETAP 100%) ---
+# --- 2. LIBRARY PERHITUNGAN (CORE ENGINEERING) ---
 class Calculator:
     
-    # 2.1 SALURAN BETON (Linear)
+    # --- MODUL 1: SALURAN BETON (TETAP 100%) ---
     @staticmethod
     def hitung_beton_struktur(h, b, m, panjang, t_cm, dia, jarak, lapis, waste, fc, fy, is_rehab):
-        # Mencegah error jika input 0 atau negatif ekstrem
         if h <= 0 or panjang <= 0: return {"vol_beton": 0, "rho_data": {"status": "DATA KOSONG"}}
         
         gamma_air = 9.81
         selimut = 40
         t_mm = t_cm * 10
         d_eff = t_mm - selimut - (dia/2)
-        # Safety: d_eff tidak boleh <= 0
         if d_eff <= 0: d_eff = 1.0 
 
         Mu = 1.6 * (1/6) * gamma_air * (h**3)
@@ -67,7 +65,7 @@ class Calculator:
             "vol_bongkaran": vol_bongkaran
         }
 
-    # 2.2 SALURAN BATU (Linear)
+    # --- MODUL 2: SALURAN BATU (TETAP 100%) ---
     @staticmethod
     def hitung_pasangan_batu(h, b, m, panjang, l_atas, l_bawah, t_lantai, is_rehab):
         area_dinding = ((l_atas + l_bawah) / 2) * h
@@ -86,7 +84,7 @@ class Calculator:
             "luas_plester": luas_plester, "luas_siaran": luas_siaran, "vol_bongkaran": vol_bongkaran
         }
 
-    # 2.3 BOX CULVERT (Struktur Check)
+    # --- MODUL 3: BOX CULVERT (TETAP 100%) ---
     @staticmethod
     def hitung_gorong_box_struktur(w, h, p, t_cm, dia, jarak, fc, fy, is_rehab):
         if w <= 0 or h <= 0 or p <= 0: return {"vol_beton": 0, "t_rekom": 0, "rho_data": {"status": "DATA 0"}}
@@ -131,61 +129,84 @@ class Calculator:
             "berat_besi": berat_besi, "luas_bekisting": luas_bekisting, "vol_bongkaran": vol_bongkaran
         }
 
-    # 2.4 TERJUNAN FULL BETON (Reinforced Concrete)
+    # --- MODUL 4: TERJUNAN FULL BETON (SMART CHECK V.9) ---
     @staticmethod
-    def hitung_terjunan_full_beton(H_total, H_step, B, t_lantai_beton, t_dinding_beton, is_rehab):
-        # Safety check division by zero
-        if H_step <= 0: H_step = 0.1 
+    def hitung_terjunan_smart(H_total, H_step, B, t_lantai, t_dinding, is_rehab):
+        # 1. Handling Input 0
+        if H_step <= 0: H_step = 0.1
+        if B <= 0: B = 0.1
         
-        # 1. Geometri Multi-Step
+        # 2. Geometri Dasar
         n_steps = math.ceil(H_total / H_step)
-        H_real = H_total / n_steps 
+        H_real = H_total / n_steps # Tinggi jatuh per trap aktual
         
-        # Panjang Hidrolis
+        # Panjang Hidrolis (USBR Simplified)
+        # L_drop approx 2.5H + L_kolam approx 2H + Safety 1m
         L_per_step = (2.5 * H_real) + (2.0 * H_real) + 1.0 
         L_total_structure = n_steps * L_per_step
         
-        # 2. Volume Beton (ALL REINFORCED)
-        # A. Lantai Dasar
-        vol_lantai = L_total_structure * B * t_lantai_beton
+        # Tinggi Dinding Efektif (H_trap + Freeboard 0.6m)
+        h_dinding_eff = H_real + 0.6 
         
-        # B. Trap/Mercu
-        vol_mercu = n_steps * (B * H_real * 0.30) 
+        # --- 3. SAFETY CHECK ENGINE (NEW V.9) ---
+        status_dinding = "AMAN"
+        status_lantai = "AMAN"
+        ratio_besi = 120.0 # Default Standard (kg/m3)
         
-        # C. Dinding Sayap (Wing Walls - Left & Right)
-        h_dinding_avg = H_real + 0.6 
-        vol_dinding = 2 * (L_total_structure * h_dinding_avg * t_dinding_beton)
+        # A. Cek Kekakuan Dinding (Cantilever Wall Rule of Thumb: H/12)
+        t_min_dinding = h_dinding_eff / 12
+        if t_dinding < t_min_dinding:
+            status_dinding = "⚠️ KRITIS (Terlalu Tipis)"
+            ratio_besi += 30.0 # Tambah tulangan ekstra untuk kompensasi tipis
+        elif t_dinding > (h_dinding_eff / 5):
+            status_dinding = "⚠️ BOROS (Mass Concrete)"
+            ratio_besi -= 20.0 # Kurangi tulangan karena beton tebal (gravity)
+            
+        # B. Cek Impact Lantai (H_jatuh/8 atau min 20cm)
+        t_min_lantai = max(0.20, H_real / 8)
+        if t_lantai < t_min_lantai:
+            status_lantai = "⚠️ RISIKO RETAK (Impact)"
+            ratio_besi += 20.0 # Butuh wiremesh/tulangan rangkap ekstra
+        
+        # 4. Hitung Volume
+        # A. Lantai
+        vol_lantai = L_total_structure * B * t_lantai
+        # B. Mercu/Trap
+        vol_mercu = n_steps * (B * H_real * 0.30)
+        # C. Dinding Sayap
+        vol_dinding = 2 * (L_total_structure * h_dinding_eff * t_dinding)
         
         vol_beton_total = vol_lantai + vol_mercu + vol_dinding
         
-        # 3. Galian & Timbunan
+        # 5. Galian & Timbunan
         vol_galian = vol_beton_total * 1.3
         vol_timbunan = vol_galian * 0.3
         
-        # 4. Finishing
-        luas_plester = (2 * L_total_structure * h_dinding_avg)
-        luas_siaran = 0 
-        
-        # 5. Besi (Reinforcement)
-        ratio_besi = 120.0 # kg/m3 beton
+        # 6. Besi & Bekisting
         berat_besi = vol_beton_total * ratio_besi
         
-        # 6. Bekisting
-        luas_bekisting_dinding = (2 * L_total_structure * h_dinding_avg)
+        luas_bekisting_dinding = (2 * L_total_structure * h_dinding_eff)
         luas_bekisting_mercu = (n_steps * B * H_real)
-        luas_bekisting_lantai = (2 * L_total_structure * t_lantai_beton)
+        luas_bekisting_lantai = (2 * L_total_structure * t_lantai)
         luas_bekisting_total = luas_bekisting_dinding + luas_bekisting_mercu + luas_bekisting_lantai
         
         vol_bongkaran = vol_beton_total if is_rehab else 0
 
         return {
-            "mu": 0, "t_rekom": 0, "rho_data": None,
-            "info_struktur": f"FULL BETON: {n_steps} Trap x {H_real:.2f}m",
+            "info_struktur": f"{n_steps} Trap @{H_real:.2f}m",
+            "safety_check": {
+                "dinding": status_dinding,
+                "min_dinding": t_min_dinding,
+                "lantai": status_lantai,
+                "min_lantai": t_min_lantai,
+                "ratio_besi": ratio_besi
+            },
             "vol_beton": vol_beton_total, 
             "vol_batu": 0, 
             "vol_galian": vol_galian, "vol_timbunan": vol_timbunan,
             "berat_besi": berat_besi, "luas_bekisting": luas_bekisting_total,
-            "luas_plester": luas_plester, "luas_siaran": luas_siaran,
+            "luas_plester": (2 * L_total_structure * h_dinding_eff),
+            "luas_siaran": 0,
             "vol_bongkaran": vol_bongkaran
         }
 
@@ -203,13 +224,12 @@ with st.sidebar:
     st.markdown("---")
     st.header("💰 Harga Satuan")
     
-    # INPUT HARGA (TANPA KUNCI)
     with st.expander("Upah & Material", expanded=False):
         u_pekerja = st.number_input("Pekerja", value=110000.0)
         u_tukang = st.number_input("Tukang", value=135000.0)
         u_k_tukang = st.number_input("K. Tukang", value=150000.0)
         u_mandor = st.number_input("Mandor", value=170000.0)
-        overhead = st.number_input("Overhead %", value=10.0) # Slider diganti number agar bebas
+        overhead = st.number_input("Overhead %", value=10.0)
         
         p_semen = st.number_input("Semen (kg)", value=1600.0)
         p_pasir = st.number_input("Pasir (m3)", value=250000.0)
@@ -231,8 +251,8 @@ with st.sidebar:
     hsp_siaran = ((3*p_semen + 0.01*p_pasir) + (0.15*u_pekerja + 0.075*u_tukang + 0.0075*u_k_tukang + 0.004*u_mandor)) * oh
 
 # --- 4. MAIN UI ---
-st.title("🏗️ Pro QS: Unlocked & Full Beton (V.8)")
-st.caption("Status: ✅ Semua Input Bebas Edit (Tidak Dikunci) | ✅ Full Beton Upgrade Active")
+st.title("🏗️ Pro QS: Smart Check & Safety V.9")
+st.caption("Status: ✅ Safety Verification Active (Terjunan) | ✅ All Inputs Unlocked")
 
 tab1, tab2, tab3 = st.tabs(["➕ Input", "📋 List", "📊 RAB Detail"])
 
@@ -250,7 +270,6 @@ with tab1:
         # --- SALURAN ---
         if kategori == "Saluran (Linear)":
             tipe_kons = st.selectbox("Konstruksi", ["Beton Bertulang", "Pasangan Batu"])
-            # UNLOCKED: Tidak ada min_value
             panjang = st.number_input("Panjang (m')", value=50.0)
             
             if tipe_kons == "Beton Bertulang":
@@ -275,11 +294,10 @@ with tab1:
 
         # --- BANGUNAN (GORONG & TERJUNAN) ---
         else:
-            jenis_bang = st.selectbox("Jenis", ["Gorong-Gorong Box (Cek Struktur)", "Terjunan Bertingkat (Full Beton)"])
+            jenis_bang = st.selectbox("Jenis", ["Gorong-Gorong Box (Cek Struktur)", "Terjunan Bertingkat (Smart Check)"])
             
             if "Gorong" in jenis_bang:
                 st.info("📦 Box Culvert (Input Bebas)")
-                # UNLOCKED: Hapus min_value
                 w = st.number_input("Lebar (m)", value=1.0)
                 h_box = st.number_input("Tinggi (m)", value=1.0)
                 p_box = st.number_input("Panjang (m)", value=6.0)
@@ -294,7 +312,7 @@ with tab1:
                 
                 calc = Calculator.hitung_gorong_box_struktur(w, h_box, p_box, t_cm, dia, jarak, fc, fy, is_rehab)
                 
-                # Report
+                # Report Box
                 st.markdown("---")
                 c_r1, c_r2 = st.columns(2)
                 if t_cm < calc['t_rekom']: c_r1.error(f"❌ Tebal Kurang (Min {calc['t_rekom']:.1f}cm)")
@@ -303,20 +321,38 @@ with tab1:
                 if "AMAN" in calc['rho_data']['status']: c_r2.success(f"✅ {calc['rho_data']['status']}")
                 else: c_r2.warning(f"⚠️ {calc['rho_data']['status']}")
                 
-            else: # Terjunan FULL BETON (UNLOCKED)
-                st.info("🌊 Terjunan Multi-Step (Full Beton) - Unlocked")
-                # UNLOCKED: Tidak ada min_value=1.5 lagi
-                H_total = st.number_input("Total Tinggi Jatuh (m)", value=3.0)
-                H_step = st.number_input("Max Tinggi per Trap (m)", value=1.5, help="Bisa diisi angka desimal kecil")
-                B_terjun = st.number_input("Lebar Saluran (m)", value=1.5, help="Bebas, tidak dikunci 1.5m")
+            else: # Terjunan SMART CHECK (V.9)
+                st.info("🌊 Terjunan Multi-Step (Smart Safety Check)")
                 
-                st.markdown("**Dimensi Struktur Beton:**")
+                H_total = st.number_input("Total Tinggi Jatuh (m)", value=3.0)
+                H_step = st.number_input("Max Tinggi per Trap (m)", value=1.5)
+                B_terjun = st.number_input("Lebar Saluran (m)", value=1.5)
+                
+                st.markdown("**Dimensi Struktur (Verifikasi Otomatis):**")
                 c_m1, c_m2 = st.columns(2)
                 t_lantai_beton = c_m1.number_input("Tebal Lantai (m)", value=0.25)
                 t_dinding_beton = c_m2.number_input("Tebal Dinding (m)", value=0.25)
                 
-                calc = Calculator.hitung_terjunan_full_beton(H_total, H_step, B_terjun, t_lantai_beton, t_dinding_beton, is_rehab)
-                st.success(f"ℹ️ Desain: {calc['info_struktur']}")
+                calc = Calculator.hitung_terjunan_smart(H_total, H_step, B_terjun, t_lantai_beton, t_dinding_beton, is_rehab)
+                
+                # --- HASIL VERIFIKASI (SMART OUTPUT) ---
+                st.divider()
+                st.caption(f"ℹ️ Layout: {calc['info_struktur']}")
+                
+                # Report Dinding
+                status_d = calc['safety_check']['dinding']
+                min_d = calc['safety_check']['min_dinding']
+                if "KRITIS" in status_d: st.error(f"❌ Dinding: {status_d} (Min: {min_d:.2f}m)")
+                elif "BOROS" in status_d: st.warning(f"⚠️ Dinding: {status_d}")
+                else: st.success(f"✅ Dinding: AMAN (Sesuai SNI)")
+                
+                # Report Lantai
+                status_l = calc['safety_check']['lantai']
+                min_l = calc['safety_check']['min_lantai']
+                if "RISIKO" in status_l: st.error(f"❌ Lantai: {status_l} (Min: {min_l:.2f}m)")
+                else: st.success(f"✅ Lantai: AMAN")
+                
+                st.info(f"🧬 Besi Terpakai: {calc['safety_check']['ratio_besi']} kg/m3 (Auto-Adjusted)")
 
     if st.button("Simpan Item", type="primary"):
         if not nama_item: st.warning("Isi Nama!")
@@ -324,13 +360,12 @@ with tab1:
             tipe_final = jenis_bang if kategori != "Saluran (Linear)" else ("Saluran Beton" if tipe_kons == "Beton Bertulang" else "Saluran Batu")
             if is_rehab: nama_item += " (REHAB)"
             
-            # Save data
             item_data = {"nama": nama_item, "tipe": tipe_final, "panjang": 0, "vol": calc}
             if kategori == "Saluran (Linear)": item_data["panjang"] = panjang
             st.session_state['data_proyek'].append(item_data)
             st.success("Tersimpan!")
 
-# === TAB 2 & 3 (TETAP SAMA 100%) ===
+# === TAB 2 & 3 (STANDARD EXPORT) ===
 with tab2:
     if st.session_state['data_proyek']:
         st.dataframe(pd.DataFrame(st.session_state['data_proyek'])[["nama", "tipe"]])
@@ -383,4 +418,4 @@ with tab3:
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 pd.DataFrame(excel_rows).to_excel(writer, index=False, sheet_name='RAB Detail')
             return output.getvalue()
-        st.download_button("📥 Download RAB Excel", generate_excel(), "RAB_V8_Unlocked.xlsx")
+        st.download_button("📥 Download RAB Excel", generate_excel(), "RAB_V9_SmartSafety.xlsx")
