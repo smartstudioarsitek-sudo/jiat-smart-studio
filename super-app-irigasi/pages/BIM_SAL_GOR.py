@@ -7,7 +7,7 @@ from io import BytesIO
 # ==========================================
 # 1. KONFIGURASI & ENGINE HARGA (AHSP)
 # ==========================================
-st.set_page_config(page_title="Pro QS: Ultimate V.9", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="Pro QS: Ultimate Flexible V.10", layout="wide", page_icon="🏗️")
 
 if 'data_proyek' not in st.session_state:
     st.session_state['data_proyek'] = []
@@ -191,7 +191,7 @@ class Calculator:
             "vol_bongkaran": vol_bongkaran
         }
 
-    # --- MODUL 4: TERJUNAN V.9 FLEXIBLE (Hybrid + Smart Hydraulic + Manual Wall) ---
+    # --- MODUL 4: TERJUNAN FLEXIBLE (PILIHAN MATERIAL BEBAS) ---
     @staticmethod
     def hitung_terjunan_flexible(Q, H_total, H_step_max, B, mat_lantai, t_lantai_cm, mat_dinding, t_dinding_cm, h_dinding_input, is_rehab):
         g = 9.81
@@ -200,7 +200,7 @@ class Calculator:
         n_steps = math.ceil(H_total / H_step_max)
         H_real = H_total / n_steps
         
-        # 2. Analisa Hidrolis (Smart Hydraulic V.8)
+        # 2. Analisa Hidrolis (Smart Hydraulic)
         q = Q / B
         drop_number = (q**2) / (g * H_real**3)
         L_drop = 4.30 * H_real * (drop_number ** 0.27)
@@ -214,34 +214,32 @@ class Calculator:
         L_per_step = L_drop + L_kolam + 0.5
         L_total = n_steps * L_per_step
         
-        # 3. Safety Check (Warning System V.9)
+        # 3. Safety Check
         warnings = []
-        # Cek Tinggi Dinding (Harus > Tinggi Air + Freeboard)
         h_min_req = H_real + y2 + 0.4 
         if h_dinding_input < h_min_req:
             warnings.append(f"❌ Tinggi Dinding Kurang! (Input: {h_dinding_input}m < Min: {h_min_req:.2f}m)")
         
-        # Cek Tebal Lantai
         t_min_lantai = 20.0 if mat_lantai == "Beton" else 30.0
         if t_lantai_cm < t_min_lantai:
              warnings.append(f"❌ Tebal Lantai Riskan! (Input: {t_lantai_cm}cm < Saran: {t_min_lantai}cm)")
 
-        # 4. Volume Calculation (Material Choice)
+        # 4. Volume Calculation (LOGIKA HYBRID)
         vol_beton = 0
         vol_batu = 0
         t_lantai_m = t_lantai_cm / 100
         t_dinding_m = t_dinding_cm / 100
         
-        # Lantai
+        # -- LANTAI --
         v_lantai = L_total * B * t_lantai_m
         if mat_lantai == "Beton": vol_beton += v_lantai
         else: vol_batu += v_lantai
         
-        # Mercu (Selalu Beton agar presisi)
+        # -- MERCU (Selalu Beton agar awet) --
         v_mercu = n_steps * (B * H_real * 0.30)
         vol_beton += v_mercu 
         
-        # Dinding (Kiri + Kanan) pakai tinggi input user
+        # -- DINDING --
         v_dinding = 2 * (L_total * h_dinding_input * t_dinding_m)
         if mat_dinding == "Beton": vol_beton += v_dinding
         else: vol_batu += v_dinding
@@ -316,8 +314,8 @@ with st.sidebar:
         overhead
     )
 
-st.title("🏗️ Pro QS: Ultimate Edition (V.9)")
-st.caption("Fitur Lengkap: Saluran (Beton/Batu), Box Culvert (Struktur), Terjunan Flexible, Rehab")
+st.title("🏗️ Pro QS: Ultimate Edition (V.10)")
+st.caption("Fitur Lengkap: Saluran, Box Culvert, Terjunan Flexible (Pilih Material), Rehab")
 
 tab1, tab2, tab3 = st.tabs(["➕ Input Data", "📋 List", "📊 RAB Detail"])
 
@@ -365,7 +363,7 @@ with tab1:
 
         # --- B. BANGUNAN ---
         else:
-            jenis_bang = st.selectbox("Jenis", ["Box Culvert (Struktur)", "Terjunan Flexible (V.9)"])
+            jenis_bang = st.selectbox("Jenis", ["Box Culvert (Struktur)", "Terjunan Flexible (Pilih Material)"])
             
             if "Box" in jenis_bang:
                 w = st.number_input("Lebar", 1.0); h = st.number_input("Tinggi", 1.0); p = st.number_input("Panjang", 6.0)
@@ -379,8 +377,8 @@ with tab1:
                 else: st.success("✅ Tebal Aman")
                 vol_final = calc
                 
-            else: # TERJUNAN V.9
-                st.info("🌊 Desain Terjunan: User Control (V.9)")
+            else: # TERJUNAN FLEXIBLE
+                st.info("🌊 Desain Terjunan: User Control (V.10)")
                 
                 # 1. Hidrolis
                 c_h1, c_h2 = st.columns(2)
@@ -392,20 +390,25 @@ with tab1:
                 # 2. Material & Dimensi Manual
                 st.write("**🔧 Spesifikasi Material & Dimensi**")
                 
-                c_mat1, c_dim1 = st.columns(2)
-                mat_lantai = c_mat1.selectbox("Material Dasar/Lantai", ["Beton", "Batu"])
-                t_lantai = c_dim1.number_input("Tebal Lantai (cm)", value=30.0, step=5.0)
+                # KOLOM 1: LANTAI
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.caption("Bagian Dasar / Lantai")
+                    mat_lantai = st.selectbox("Material Lantai", ["Beton", "Batu"])
+                    t_lantai = st.number_input(f"Tebal Lantai {mat_lantai} (cm)", value=30.0, step=5.0)
                 
-                c_mat2, c_dim2 = st.columns(2)
-                mat_dinding = c_mat2.selectbox("Material Dinding", ["Batu", "Beton"], index=0)
-                t_dinding = c_dim2.number_input("Tebal Dinding (cm)", value=40.0, step=5.0)
+                # KOLOM 2: DINDING
+                with c2:
+                    st.caption("Bagian Dinding Sayap")
+                    mat_dinding = st.selectbox("Material Dinding", ["Batu", "Beton"], index=0)
+                    t_dinding = st.number_input(f"Tebal Dinding {mat_dinding} (cm)", value=40.0, step=5.0)
                 
                 h_dinding_manual = st.number_input("Tinggi Dinding (m)", value=2.0, step=0.1)
                 
                 # Calculate
                 res = Calculator.hitung_terjunan_flexible(Q, H_tot, 1.5, B, mat_lantai, t_lantai, mat_dinding, t_dinding, h_dinding_manual, is_rehab)
                 
-                # Warning System V.9
+                # Warning System
                 if res['warnings']:
                     for w in res['warnings']: st.error(w)
                 else:
@@ -461,6 +464,6 @@ with tab3:
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     df_rab.to_excel(writer, index=False, sheet_name='RAB Detail')
                 return output.getvalue()
-            st.download_button("📥 Download Excel", generate_excel(), "RAB_V9_Full.xlsx")
+            st.download_button("📥 Download Excel", generate_excel(), "RAB_V10_Flexible.xlsx")
         else:
             st.info("Belum ada volume pekerjaan.")
